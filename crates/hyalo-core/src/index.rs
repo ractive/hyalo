@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
+use crate::bm25::{Bm25InvertedIndex, DocTokens, resolve_language};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
@@ -64,11 +64,13 @@ pub struct IndexEntry {
     /// by older hyalo versions keep loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub self_anchors: Vec<SelfAnchor>,
-    /// Pre-tokenized BM25 tokens (body + title, stemmed). Populated by `create-index`
-    /// when `scan_body` is `true`. `None` when the index was created before BM25
-    /// support or with `scan_body = false`.
+    /// Pre-tokenized, field-aware BM25 tokens (title + body stream, heading
+    /// runs, tag tokens; DEC-337). Populated by `create-index` and by
+    /// incremental re-scans of a snapshot that carries a BM25 index. Stripped
+    /// from the persisted entries when the inverted index is saved beside
+    /// them (the postings reconstruct it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bm25_tokens: Option<Vec<String>>,
+    pub bm25_tokens: Option<DocTokens>,
     /// Stemming language used when producing [`bm25_tokens`]. Matches the
     /// `language` frontmatter property of this document (or `"english"` as the
     /// default). Retained when tokens are stored only in the inverted index;
@@ -215,6 +217,20 @@ impl ScannedIndex {
         options: &ScanOptions<'_>,
         case_insensitive: bool,
     ) -> Result<ScannedIndexBuild> {
+        Self::build_reusing(files, site_prefix, options, case_insensitive, &|_, _| None)
+    }
+
+    /// [`Self::build_with_case_policy`], taking each file's entry from
+    /// `reuse` when it returns one instead of scanning the file (incremental
+    /// `create-index`, DEC-339). A reused entry contributes its stored links
+    /// to the graph exactly as a fresh scan would.
+    pub fn build_reusing(
+        files: &[(PathBuf, String)],
+        site_prefix: Option<&str>,
+        options: &ScanOptions<'_>,
+        case_insensitive: bool,
+        reuse: &(dyn Fn(&Path, &str) -> Option<IndexEntry> + Sync),
+    ) -> Result<ScannedIndexBuild> {
         let mut entries = Vec::with_capacity(files.len());
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
@@ -225,6 +241,14 @@ impl ScannedIndex {
         let fm_link_props: Option<Vec<String>> =
             options.frontmatter_link_props.map(<[String]>::to_vec);
         let scan = |(full_path, rel_path): &(std::path::PathBuf, String)| {
+            if let Some(entry) = reuse(full_path, rel_path) {
+                let links = options.scan_body.then(|| FileLinks {
+                    source: PathBuf::from(rel_path),
+                    links: entry.links.clone(),
+                    self_anchors: entry.self_anchors.clone(),
+                });
+                return Ok((entry, links));
+            }
             scan_one_file(
                 full_path,
                 rel_path,
@@ -249,7 +273,10 @@ impl ScannedIndex {
                     // the index as a note but out of the search corpus, exactly
                     // as the disk scan has it. Report it so `create-index`
                     // `warnings` accounts for the difference.
-                    if options.bm25_tokenize && entry.bm25_tokens.is_none() {
+                    if options.bm25_tokenize
+                        && entry.bm25_tokens.is_none()
+                        && entry.bm25_tokenizer_version.is_none()
+                    {
                         warnings.push(IndexWarning {
                             rel_path: entry.rel_path.clone(),
                             message: INVALID_UTF8_INDEX_MESSAGE.to_owned(),
@@ -365,7 +392,9 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | scan reported 1 (Hub) and 28 (kepano) |
 /// | 3 | iter-297 | balanced parentheses in parsed Markdown destinations;
 /// |   |          | older entries retain truncated link targets |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 3;
+/// | 4 | iter-304 | tokenizer v4 (folding, identifier parts, code-block
+/// |   |          | setting) and BM25F per-field postings (DEC-336/337) |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 4;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -797,6 +826,22 @@ impl Bm25Section {
         }
     }
 
+    /// Decode (if deferred) and move the index out, leaving the section
+    /// [`Bm25Section::Absent`]. The caller puts an updated index back.
+    fn take(&mut self) -> Option<Box<Bm25InvertedIndex>> {
+        match std::mem::replace(self, Self::Absent) {
+            Self::Absent | Self::Refused => None,
+            Self::Loaded(bm25) => Some(bm25),
+            deferred @ Self::Deferred { .. } => {
+                deferred.get()?;
+                match deferred {
+                    Self::Deferred { decoded, .. } => decoded.into_inner().flatten(),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// Whether the snapshot carries a BM25 section, *without* decoding it.
     ///
     /// Used on hot paths that only need the yes/no answer (deciding whether an
@@ -952,79 +997,83 @@ impl SnapshotIndex {
         )
     }
 
-    /// Rebuild the persisted BM25 inverted index from the current entries
-    /// (BUG-4, iter-244). No-op when this snapshot has no BM25 index.
+    /// Bring the persisted BM25 inverted index up to date with the current
+    /// entries (BUG-4, iter-244; incremental since iter-304, DEC-339). No-op
+    /// when this snapshot has no BM25 index.
     ///
-    /// Entries mutated since load carry fresh `bm25_tokens` (incremental
-    /// re-scans tokenize when a BM25 index is present). Entries the mutation
-    /// wave never touched had their tokens stripped at snapshot-write time —
-    /// their tokens are reconstructed from the *old* inverted index's
-    /// postings, which is exactly what a no-change rebuild would produce.
+    /// Entries re-scanned since load carry fresh `bm25_tokens`; every other
+    /// entry's document is already in the postings. The update removes the
+    /// postings of re-scanned, removed and no-longer-tokenizable documents
+    /// and adds the fresh ones ([`Bm25InvertedIndex::apply_updates`]) — the
+    /// same corpus statistics (N, df, avgdl, lengths) a fresh `create-index`
+    /// would produce, without reconstructing or re-adding untouched
+    /// documents.
     ///
-    /// Call once after a mutation wave, before [`Self::save_to`], so corpus
-    /// statistics (N, per-term df, avgdl, doc lengths) match a fresh
-    /// `create-index` build and `find --index` scores stay byte-identical to
-    /// a disk scan without an intervening rebuild.
+    /// Call once after a mutation wave, before [`Self::save_to`].
     pub fn rebuild_bm25_index(&mut self) {
-        // Forces a deferred section: a rebuild needs the old postings to
-        // reconstruct tokens for entries the mutation wave never touched.
-        let Some(old) = self.bm25.get() else {
+        // Forces a deferred section.
+        let Some(mut bm25) = self.bm25.take() else {
             return;
         };
-        // Do not label legacy or ambiguous validity metadata as current by
-        // reconstructing it with today's builder. Absence invokes the normal
-        // disk fallback, including untouched documents in the scoped corpus.
-        let uncertain: std::collections::HashSet<&str> = self
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.bm25_tokens.is_none()
-                    && entry.bm25_tokenizer_version != Some(crate::bm25::TOKENIZER_VERSION)
-            })
-            .map(|entry| entry.rel_path.as_str())
-            .collect();
-        if old.tokenizer_version() != crate::bm25::TOKENIZER_VERSION
-            || old.document_paths().any(|path| uncertain.contains(path))
-        {
-            self.bm25 = Bm25Section::Absent;
+        if !bm25.is_current() {
             return;
         }
-        let missing: std::collections::HashSet<&str> = self
+        let live: std::collections::HashMap<&str, &IndexEntry> = self
             .entries
             .iter()
-            .filter(|entry| entry.bm25_tokens.is_none())
-            .map(|entry| entry.rel_path.as_str())
+            .map(|e| (e.rel_path.as_str(), e))
             .collect();
-        let reconstructed = match old.reconstruct_selected_tokens(&missing) {
-            Ok(tokens) => tokens,
-            Err(error) => {
-                eprintln!(
-                    "warning: {error}; refreshed metadata is retained without BM25 postings; ranked queries will read notes from disk"
-                );
-                self.bm25 = Bm25Section::Absent;
-                return;
-            }
-        };
-        self.live.work.search_rebuilds += 1;
-        let docs: Vec<crate::bm25::PreTokenizedInput> = self
+        // Legacy or ambiguous validity metadata must not be relabelled as
+        // current: an untouched entry whose document the postings hold must
+        // carry the current tokenizer stamp.
+        let uncertain = bm25.document_paths().any(|path| {
+            live.get(path).is_some_and(|e| {
+                e.bm25_tokens.is_none()
+                    && e.bm25_tokenizer_version != Some(crate::bm25::TOKENIZER_VERSION)
+            })
+        });
+        if uncertain {
+            return;
+        }
+        let remove: std::collections::HashSet<&str> = bm25
+            .document_paths()
+            .filter(|path| live.get(path).is_none_or(|e| e.bm25_tokens.is_some()))
+            .collect();
+        let indexed: std::collections::HashSet<&str> = bm25.document_paths().collect();
+        // An entry with neither fresh tokens nor a document in the postings
+        // (an untokenizable file, or one absent from the corpus) stays out.
+        let add: Vec<crate::bm25::PreTokenizedInput> = self
             .entries
             .iter()
             .filter_map(|e| {
-                let tokens = e.bm25_tokens.clone().or_else(|| {
-                    e.bm25_tokenizer_version
-                        .and_then(|_| reconstructed.get(e.rel_path.as_str()).cloned())
-                })?;
-                Some(crate::bm25::PreTokenizedInput {
-                    rel_path: e.rel_path.clone(),
-                    tokens,
-                })
+                e.bm25_tokens
+                    .as_ref()
+                    .map(|tokens| crate::bm25::PreTokenizedInput {
+                        rel_path: e.rel_path.clone(),
+                        tokens: tokens.clone(),
+                    })
             })
             .collect();
-        // Replacing the section with the rebuilt index also drops the retained
-        // snapshot bytes the deferred variant was holding.
-        self.bm25 = Bm25Section::Loaded(Box::new(
-            crate::bm25::Bm25InvertedIndex::build_from_tokens(docs),
-        ));
+        let remove: std::collections::HashSet<String> =
+            remove.into_iter().map(str::to_owned).collect();
+        let missing = self.entries.iter().any(|e| {
+            e.bm25_tokens.is_none()
+                && e.bm25_tokenizer_version.is_some()
+                && !indexed.contains(e.rel_path.as_str())
+        });
+        drop(indexed);
+        drop(live);
+        if missing {
+            // An entry claims tokens the postings never held: rebuilding
+            // from stale metadata would be a guess, so drop the section and
+            // let ranked reads go to disk.
+            return;
+        }
+        let remove_refs: std::collections::HashSet<&str> =
+            remove.iter().map(String::as_str).collect();
+        bm25.apply_updates(&remove_refs, add);
+        self.live.work.search_rebuilds += 1;
+        self.bm25 = Bm25Section::Loaded(bm25);
     }
 
     /// Re-scan a single file and replace its index entry.
@@ -1162,12 +1211,10 @@ impl SnapshotIndex {
             !self.bm25.is_present() || self.bm25.get().is_some(),
             "snapshot BM25 data is invalid; rebuild the index before modifying notes"
         );
-        if let Some(bm25) = self.bm25.get() {
-            anyhow::ensure!(
-                bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES),
-                "snapshot BM25 token reconstruction exceeds its expansion budget; compact indexed scoring is available, but run mutations without --index/--index-file and recreate the snapshot afterward"
-            );
-        }
+        // No expansion-budget check: since iter-304 (DEC-339) a refresh patches
+        // the postings in place and never reconstructs untouched documents'
+        // tokens, so a large vault (MDN exceeds the 256 MiB reconstruction
+        // budget) can still be refreshed and mutated under --index.
         Ok(())
     }
 
@@ -1434,6 +1481,13 @@ impl SnapshotIndex {
     ///
     /// Returns `Ok(Some(index))` on success, `Ok(None)` on schema mismatch.
     fn load_inner(bytes: Vec<u8>, warn: bool) -> Option<Self> {
+        Self::load_inner_with(bytes, warn, true)
+    }
+
+    /// [`Self::load_inner`]; `replay = false` loads for reuse only: no
+    /// process-global skip/exclusion counters are replayed and the link
+    /// graph is not re-resolved (`create-index` rebuilds both itself).
+    fn load_inner_with(bytes: Vec<u8>, warn: bool, replay: bool) -> Option<Self> {
         use serde::de::DeserializeSeed as _;
 
         // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
@@ -1596,7 +1650,7 @@ impl SnapshotIndex {
         // excluded sources are dropped from the link graph too, so a note that
         // only an excluded template links to is still an orphan.
         let mut graph = graph;
-        if crate::discovery::scan_exclude().is_some() {
+        if replay && crate::discovery::scan_exclude().is_some() {
             let mut removed = 0usize;
             entries.retain(|e| {
                 if crate::discovery::is_scan_excluded(&e.rel_path) {
@@ -1618,7 +1672,8 @@ impl SnapshotIndex {
         // without it `summary --index` reported `excluded: 0` for a vault the
         // disk scan reports 52 excluded files for. Trusted only while the
         // configured patterns still match the ones that produced it.
-        if !header.scan_exclude.is_empty()
+        if replay
+            && !header.scan_exclude.is_empty()
             && header.scan_exclude == crate::discovery::scan_exclude_patterns()
         {
             crate::discovery::note_scan_excluded(
@@ -1631,7 +1686,7 @@ impl SnapshotIndex {
         // carried in the snapshot (it would bloat every index for a message
         // `lint` prints better), so the replayed reason points at the rule
         // that explains it.
-        for path in &header.skipped {
+        for path in header.skipped.iter().filter(|_| replay) {
             crate::warn::record_skip(
                 path.clone(),
                 "unparsable frontmatter (recorded when the index was built — \
@@ -1663,7 +1718,9 @@ impl SnapshotIndex {
             },
         };
         // Persisted graphs from older binaries are derived data, never resolution authority.
-        snapshot.rebuild_graph();
+        if replay {
+            snapshot.rebuild_graph();
+        }
         Some(snapshot)
     }
 
@@ -1689,6 +1746,24 @@ impl SnapshotIndex {
             return Ok(None);
         };
         Ok(Self::load_inner(bytes, false))
+    }
+
+    /// Load a snapshot only to reuse its entries and BM25 postings
+    /// (incremental `create-index`, DEC-339): silent, no replay of the
+    /// build-time skip/exclusion counters, no graph resolution. `None` for a
+    /// missing, unreadable or older-format snapshot.
+    pub fn load_for_reuse(path: &Path) -> Option<Self> {
+        let bytes = read_index_bytes(path, false).ok()??;
+        Self::load_inner_with(bytes, false, false).filter(Self::format_is_current)
+    }
+
+    /// Take the BM25 postings out of a snapshot loaded for reuse, decoding a
+    /// deferred section; `None` when absent, refused or not current.
+    pub fn take_bm25_index(&mut self) -> Option<Bm25InvertedIndex> {
+        self.bm25
+            .take()
+            .filter(|bm25| bm25.is_current())
+            .map(|bm25| *bm25)
     }
 
     /// Check whether this snapshot's header matches the expected vault settings.
@@ -1966,7 +2041,9 @@ fn write_snapshot_with_session(
                 metadata.is_file() && !metadata.file_type().is_symlink(),
                 "index destination is not a regular file"
             );
-            root.capture(&name)?
+            // A snapshot of a large vault exceeds the 100 MiB note cap
+            // (MDN: ~120 MiB); replacing it is bounded by the index cap.
+            root.capture_with_limit(&name, MAX_INDEX_FILE_SIZE)?
                 .prepare(&bytes, &session)?
                 .commit(&mut session)?
         }
@@ -2300,6 +2377,40 @@ fn entry_is_stale_on_disk(entry: &IndexEntry, dir: &Path) -> bool {
     disk.as_secs() > indexed.saturating_add(STALENESS_TOLERANCE_SECS)
 }
 
+/// Vault-relative paths whose snapshot entry no longer describes disk
+/// (DEC-339): indexed files whose size changed or whose mtime moved past the
+/// staleness tolerance, indexed files that are gone, and — only when the
+/// directory-mtime probe says the tree changed — discovered notes the
+/// snapshot never saw (files recorded as unparsable at build time excluded).
+/// Sorted and deduplicated, ready for [`SnapshotIndex::apply_changes`].
+#[must_use]
+pub fn snapshot_drift(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = index
+        .entries()
+        .iter()
+        .filter(|e| match std::fs::metadata(dir.join(&e.rel_path)) {
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+            Ok(meta) => (e.size != 0 && meta.len() != e.size) || entry_is_stale_on_disk(e, dir),
+        })
+        .map(|e| e.rel_path.clone())
+        .collect();
+    let (_, _, created_at, _) = index.header_info();
+    let tree_moved = newest_dir_mtime(dir)
+        .is_some_and(|newest| newest > created_at.saturating_add(STALENESS_TOLERANCE_SECS));
+    if tree_moved {
+        let skipped: std::collections::HashSet<&str> =
+            index.header.skipped.iter().map(String::as_str).collect();
+        out.extend(
+            files_missing_from_snapshot(index, dir)
+                .into_iter()
+                .filter(|rel| !skipped.contains(rel.as_str())),
+        );
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Bring one named file's index entry up to date with disk, if it drifted.
 ///
 /// UX-7 (iter-265, DEC-280): the stale-index policy is "refresh what you are
@@ -2424,6 +2535,59 @@ mod iso_tests {
         std::fs::write(&file, "---\ntitle: a\n---\n\nbody v3\n").unwrap();
         let stale = files_modified_since_snapshot(&index, dir.path());
         assert_eq!(stale, vec!["a.md".to_owned()]);
+    }
+
+    /// DEC-339: a size change (even within the mtime tolerance) and a deleted
+    /// file are drift; repairing them in memory leaves the BM25 postings
+    /// scoring exactly like a fresh build of the vault as it now is.
+    #[test]
+    fn stale_entries_repair_in_memory_to_fresh_build_scores() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, body: &str| std::fs::write(dir.path().join(rel), body).unwrap();
+        write("a.md", "# A\nkiwi alpha\n");
+        write("b.md", "# B\nkiwi beta\n");
+        write("c.md", "# C\ngamma\n");
+        let options = ScanOptions {
+            scan_body: true,
+            bm25_tokenize: true,
+            default_language: None,
+            frontmatter_link_props: None,
+        };
+        let pairs = |names: &[&str]| -> Vec<(PathBuf, String)> {
+            names
+                .iter()
+                .map(|n| (dir.path().join(n), (*n).to_owned()))
+                .collect()
+        };
+        let build = ScannedIndex::build(&pairs(&["a.md", "b.md", "c.md"]), None, &options).unwrap();
+        let bm25 = Bm25InvertedIndex::build_from_entries(build.index.entries());
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap, &vault, None, bm25.as_ref()).unwrap();
+
+        write("a.md", "# A\nkiwi kiwi alpha extra words\n");
+        std::fs::remove_file(dir.path().join("c.md")).unwrap();
+        let mut index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        let drift = snapshot_drift(&index, dir.path());
+        assert_eq!(drift, vec!["a.md".to_owned(), "c.md".to_owned()]);
+        index.apply_changes(dir.path(), &drift).unwrap();
+        assert_eq!(snapshot_drift(&index, dir.path()), Vec::<String>::new());
+
+        let fresh = ScannedIndex::build(&pairs(&["a.md", "b.md"]), None, &options).unwrap();
+        let fresh_bm25 = Bm25InvertedIndex::build_from_entries(fresh.index.entries()).unwrap();
+        let repaired = index.bm25_index().unwrap();
+        assert_eq!(repaired.doc_count(), 2);
+        let query = crate::bm25::CompiledQuery::new("kiwi", crate::bm25::StemLanguage::English);
+        let scores = |b: &Bm25InvertedIndex| -> Vec<(String, u64)> {
+            b.score_compiled(&query)
+                .into_iter()
+                .map(|m| (m.rel_path, m.score.to_bits()))
+                .collect()
+        };
+        assert_eq!(scores(repaired), scores(&fresh_bm25));
+        // The snapshot file itself was not rewritten.
+        let on_disk = SnapshotIndex::load(&snap).unwrap().unwrap();
+        assert_eq!(on_disk.bm25_index().unwrap().doc_count(), 3);
     }
 
     /// UX-1 (iter-249 dogfood): the pre-fix `newest_shallow_dir_mtime` only
@@ -2582,18 +2746,29 @@ pub(crate) fn scan_one_file(
     // out of the corpus here and let `ScannedIndex::build` report it.
     let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize && stats.valid_utf8
     {
-        let body = body_collector.into_body();
-
         // Resolve title: frontmatter property > first H1 heading.
         let title = crate::bm25::document_title(&props, &sections);
 
         // Resolve stemming language: frontmatter > config default > English.
         let fm_lang = props.get("language").and_then(|v| v.as_str());
         let lang = resolve_language(fm_lang, None, default_language);
-
-        let combined = format!("{title} {body}");
         let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
-        let tokens = tokenize(&combined, &stemmer);
+
+        // BM25F fields (DEC-337): outline heading lines are the headings
+        // field, tags plus aliases the tags field.
+        let mut heading_lines: Vec<usize> = sections
+            .iter()
+            .filter(|s| s.heading.is_some())
+            .map(|s| s.line)
+            .collect();
+        heading_lines.sort_unstable();
+        let aliases = crate::filter::extract_aliases(&props);
+        let tokens = body_collector.into_tokens(
+            title,
+            &heading_lines,
+            tags.iter().chain(&aliases).map(String::as_str),
+            &stemmer,
+        );
 
         (
             Some(tokens),
@@ -2749,6 +2924,8 @@ impl SectionBuilder {
 struct BodyCollector {
     active: bool,
     buf: String,
+    /// File line number (1-based) of each collected line, in order.
+    line_nums: Vec<usize>,
 }
 
 impl BodyCollector {
@@ -2756,12 +2933,31 @@ impl BodyCollector {
         Self {
             active,
             buf: String::new(),
+            line_nums: Vec::new(),
         }
     }
 
-    /// Consume the collector and return the accumulated body text.
-    fn into_body(self) -> String {
-        self.buf
+    /// Consume the collector and tokenize the accumulated body exactly as
+    /// the disk path does ([`crate::bm25::tokenize_document_text`]): the
+    /// same lines, the same heading flags, the same code-block setting.
+    fn into_tokens<'t>(
+        self,
+        title: &str,
+        heading_lines: &[usize],
+        tags: impl IntoIterator<Item = &'t str>,
+        stemmer: &rust_stemmers::Stemmer,
+    ) -> DocTokens {
+        let mut builder = crate::bm25::DocTokenBuilder::new(
+            stemmer,
+            crate::bm25::search_settings().skip_code_blocks,
+            title,
+        );
+        if !self.line_nums.is_empty() {
+            for (line, num) in self.buf.split('\n').zip(&self.line_nums) {
+                builder.line(line, heading_lines.binary_search(num).is_ok());
+            }
+        }
+        builder.finish(tags)
     }
 }
 
@@ -2779,11 +2975,12 @@ impl FileVisitor for BodyCollector {
     /// `on_body_line`/`on_code_block_line` callbacks silently dropped the
     /// fence delimiters and comment lines, drifting avgdl/df between the
     /// `--index` and disk paths (dogfood v0.20.0 BUG-4).
-    fn on_raw_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
-        if !self.buf.is_empty() {
+    fn on_raw_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+        if !self.line_nums.is_empty() {
             self.buf.push('\n');
         }
         self.buf.push_str(raw);
+        self.line_nums.push(line_num);
         ScanAction::Continue
     }
 }
@@ -3040,11 +3237,14 @@ Plain prose ends here.
             .map(str::to_owned)
             .unwrap_or_default();
         let body = crate::frontmatter::body_only(content).to_owned();
+        let fm_lines = content[..content.len() - body.len()].lines().count();
         let disk = crate::bm25::tokenize_document(crate::bm25::DocumentInput {
             rel_path: rel.to_owned(),
             title,
             body,
             language: crate::bm25::resolve_language(None, None, None),
+            heading_lines: crate::bm25::heading_body_lines(&entry.sections, fm_lines + 1),
+            tags: entry.tags.clone(),
         })
         .tokens;
 
@@ -3142,7 +3342,7 @@ title: CJK
             .as_ref()
             .expect("bm25_tokens should be populated");
         assert!(
-            tokens.contains(&"日本".to_owned()),
+            tokens.tokens.contains(&"日本".to_owned()),
             "expected a CJK bigram token, got {tokens:?}"
         );
     }
@@ -3632,6 +3832,7 @@ Content.
                 doc_id: 999, // out-of-bounds: only 1 doc exists
                 term_freq: 1,
                 positions: vec![0],
+                ..Default::default()
             }],
         );
         let bad_bm25 = Bm25InvertedIndex::new_for_test(
@@ -3657,6 +3858,7 @@ Content.
                 doc_id: 0,
                 term_freq: 1,
                 positions: vec![0],
+                ..Default::default()
             }],
         );
         let bad_bm25 = Bm25InvertedIndex::new_for_test(
@@ -3673,7 +3875,7 @@ Content.
     fn load_refuses_invalid_compact_scoring_structure_and_accepts_empty_corpus() {
         let valid = Bm25InvertedIndex::build_from_tokens(vec![crate::bm25::PreTokenizedInput {
             rel_path: "doc.md".into(),
-            tokens: vec!["one".into(), "one".into()],
+            tokens: vec!["one".into(), "one".into()].into(),
         }]);
         let original = serde_json::to_value(&valid).unwrap();
         for (field, value) in [
@@ -3713,6 +3915,7 @@ Content.
                         doc_id: 0,
                         term_freq: 2,
                         positions: vec![0, 1],
+                        ..Default::default()
                     }],
                 )]),
                 vec![2],
@@ -3745,6 +3948,7 @@ Content.
                 doc_id: 0,
                 term_freq: 2,
                 positions: vec![0, 4],
+                ..Default::default()
             }],
         );
         postings.insert(
@@ -3753,6 +3957,7 @@ Content.
                 doc_id: 0,
                 term_freq: 1,
                 positions: vec![2],
+                ..Default::default()
             }],
         );
         Bm25InvertedIndex::new_for_test(postings, vec![5], vec!["doc.md".to_owned()], 5.0)

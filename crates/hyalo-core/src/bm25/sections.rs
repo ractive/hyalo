@@ -102,6 +102,8 @@ struct SectionStat {
     span: SectionSpan,
     token_count: usize,
     term_tf: Vec<u32>,
+    /// Occurrences on the section's heading line (BM25F headings field).
+    heading_tf: Vec<u32>,
     alt_hit: Vec<bool>,
     matches: Vec<ContentMatch>,
 }
@@ -149,6 +151,7 @@ struct Pruner<'a> {
     fields: &'a dyn FieldSource,
     term_index: HashMap<String, usize>,
     alt_specs: Vec<Vec<String>>,
+    alt_slops: Vec<u32>,
     alt_term_ids: Vec<Vec<usize>>,
     phrase_alt_groups: Vec<Vec<usize>>,
     consts: Vec<ConstLeaf>,
@@ -212,7 +215,7 @@ impl Pruner<'_> {
                     .collect();
                 Some(PrunedNode::Terms(ids))
             }
-            query::Node::Phrase(alternatives) => {
+            query::Node::Phrase(alternatives, slop) => {
                 self.has_text = true;
                 let leaf_idx = self.phrase_alt_groups.len();
                 let mut group = Vec::with_capacity(alternatives.len());
@@ -223,6 +226,7 @@ impl Pruner<'_> {
                         .collect();
                     group.push(self.alt_specs.len());
                     self.alt_specs.push(seq.clone());
+                    self.alt_slops.push(*slop);
                     self.alt_term_ids.push(ids);
                 }
                 self.phrase_alt_groups.push(group);
@@ -249,13 +253,30 @@ fn tfnorm(tf: f64, dl: f64, avgdl: f64) -> f64 {
     (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * dl / avgdl.max(f64::MIN_POSITIVE)))
 }
 
-/// `true` when `window`'s trailing `seq.len()` tokens equal `seq`.
-fn window_ends_with(window: &VecDeque<String>, seq: &[String]) -> bool {
+/// `true` when `seq` occurs in `window` ending at its newest token, in
+/// order, with at most `slop` extra tokens (0 = the trailing tokens equal
+/// `seq`). Matching backwards and taking the latest earlier occurrence of
+/// each token yields the shortest span for that end.
+fn window_ends_with(window: &VecDeque<String>, seq: &[String], slop: u32) -> bool {
     let len = seq.len();
     if len == 0 || window.len() < len {
         return false;
     }
-    window.iter().skip(window.len() - len).eq(seq.iter())
+    if slop == 0 {
+        return window.iter().skip(window.len() - len).eq(seq.iter());
+    }
+    let last = window.len() - 1;
+    if window[last] != seq[len - 1] {
+        return false;
+    }
+    let mut idx = last;
+    for token in seq[..len - 1].iter().rev() {
+        let Some(found) = (0..idx).rev().find(|&i| &window[i] == token) else {
+            return false;
+        };
+        idx = found;
+    }
+    ((last - idx + 1) - len) as u64 <= u64::from(slop)
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +298,8 @@ pub struct SectionScorer {
     /// Per phrase-alternative token sequence, used to detect occurrences
     /// while streaming (the sliding window compares against these).
     alt_specs: Vec<Vec<String>>,
+    /// Per phrase-alternative slop, parallel to `alt_specs`.
+    alt_slops: Vec<u32>,
     /// Per phrase-alternative term ids, parallel to `alt_specs`.
     alt_term_ids: Vec<Vec<usize>>,
     /// Per `Phrase` leaf (indexed by the `usize` a [`PrunedNode::Phrase`]
@@ -290,6 +313,10 @@ pub struct SectionScorer {
     doc_ids: HashMap<String, u32>,
     /// `true` when the section tree has a positive text leaf.
     has_text: bool,
+    /// Field weights from the compiled query (headings and body apply).
+    weights: super::FieldWeights,
+    /// `[search] code_blocks = "skip"` in effect.
+    skip_code: bool,
 }
 
 impl Bm25InvertedIndex {
@@ -303,6 +330,7 @@ impl Bm25InvertedIndex {
             fields,
             term_index: HashMap::new(),
             alt_specs: Vec::new(),
+            alt_slops: Vec::new(),
             alt_term_ids: Vec::new(),
             phrase_alt_groups: Vec::new(),
             consts: Vec::new(),
@@ -312,6 +340,7 @@ impl Bm25InvertedIndex {
         let Pruner {
             term_index,
             alt_specs,
+            alt_slops,
             alt_term_ids,
             phrase_alt_groups,
             consts,
@@ -342,7 +371,13 @@ impl Bm25InvertedIndex {
             idf_by_index[id] = (1.0 + (n - nt_f + 0.5) / (nt_f + 0.5)).ln();
         }
 
-        let max_phrase_len = alt_specs.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        let max_phrase_len = alt_specs
+            .iter()
+            .zip(&alt_slops)
+            .map(|(seq, &slop)| seq.len() + slop as usize)
+            .max()
+            .unwrap_or(1)
+            .max(1);
         let matcher = query::SnippetMatcher::from_compiled(query);
 
         SectionScorer {
@@ -351,6 +386,7 @@ impl Bm25InvertedIndex {
             term_index,
             idf_by_index,
             alt_specs,
+            alt_slops,
             alt_term_ids,
             phrase_alt_groups,
             max_phrase_len,
@@ -358,6 +394,8 @@ impl Bm25InvertedIndex {
             consts,
             doc_ids,
             has_text,
+            weights: query.params().weights,
+            skip_code: super::search_settings().skip_code_blocks,
         }
     }
 }
@@ -416,6 +454,14 @@ impl SectionScorer {
             .is_some_and(|r| walk(r, self, stat, consts))
     }
 
+    /// BM25F term frequency of term `id` in a section: the heading line in
+    /// the headings field, every other line in the body field (DEC-337).
+    fn weighted_tf(&self, stat: &SectionStat, id: usize) -> f64 {
+        let heading = stat.heading_tf[id];
+        let body = stat.term_tf[id].saturating_sub(heading);
+        self.weights.headings * f64::from(heading) + self.weights.body * f64::from(body)
+    }
+
     fn score_section(&self, stat: &SectionStat, avgdl: f64) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         let dl = stat.token_count as f64;
@@ -424,11 +470,11 @@ impl SectionScorer {
             match leaf {
                 PrunedNode::Terms(ids) => {
                     for &id in ids {
-                        let tf = stat.term_tf[id];
-                        if tf == 0 {
+                        let tf = self.weighted_tf(stat, id);
+                        if tf <= 0.0 {
                             continue;
                         }
-                        score += self.idf_by_index[id] * tfnorm(f64::from(tf), dl, avgdl);
+                        score += self.idf_by_index[id] * tfnorm(tf, dl, avgdl);
                     }
                 }
                 PrunedNode::Phrase(leaf_idx) => {
@@ -437,11 +483,11 @@ impl SectionScorer {
                             continue;
                         }
                         for &term_id in &self.alt_term_ids[alt_idx] {
-                            let tf = stat.term_tf[term_id];
-                            if tf == 0 {
+                            let tf = self.weighted_tf(stat, term_id);
+                            if tf <= 0.0 {
                                 continue;
                             }
-                            score += self.idf_by_index[term_id] * tfnorm(f64::from(tf), dl, avgdl);
+                            score += self.idf_by_index[term_id] * tfnorm(tf, dl, avgdl);
                         }
                     }
                 }
@@ -537,7 +583,9 @@ impl SectionScorer {
             window: VecDeque::new(),
             tokens: 0,
             term_tf: vec![0; term_count],
+            heading_tf: vec![0; term_count],
             alt_hit: vec![false; alt_count],
+            fence: crate::scanner::FenceTracker::new(),
             best: Vec::with_capacity(4),
             stats: Vec::new(),
         };
@@ -648,8 +696,11 @@ struct Collector<'a> {
     window: VecDeque<String>,
     tokens: usize,
     term_tf: Vec<u32>,
+    heading_tf: Vec<u32>,
     alt_hit: Vec<bool>,
-    best: Vec<(usize, ContentMatch)>,
+    /// Fenced-code state for `[search] code_blocks = "skip"`.
+    fence: crate::scanner::FenceTracker,
+    best: Vec<(usize, u64, ContentMatch)>,
     stats: Vec<SectionStat>,
 }
 
@@ -661,33 +712,49 @@ impl Collector<'_> {
             self.finalize(line_end);
             self.cursor += 1;
         }
-        if !self.eligible[self.cursor] {
+        // The fence state must see every line, eligible or not.
+        let skipped = self.scorer.skip_code && self.fence.process_line(raw);
+        if !self.eligible[self.cursor] || skipped {
             return;
         }
+        let heading = self.cursor > 0 && line == self.starts[self.cursor];
 
         let tokens = tokenize(raw, stemmer);
         for tok in &tokens {
             self.tokens += 1;
             if let Some(&id) = self.scorer.term_index.get(tok.as_str()) {
                 self.term_tf[id] += 1;
+                if heading {
+                    self.heading_tf[id] += 1;
+                }
             }
             self.window.push_back(tok.clone());
             if self.window.len() > self.scorer.max_phrase_len {
                 self.window.pop_front();
             }
             for (alt_idx, seq) in self.scorer.alt_specs.iter().enumerate() {
-                if !self.alt_hit[alt_idx] && window_ends_with(&self.window, seq) {
+                if !self.alt_hit[alt_idx]
+                    && window_ends_with(&self.window, seq, self.scorer.alt_slops[alt_idx])
+                {
                     self.alt_hit[alt_idx] = true;
                 }
             }
         }
 
         let count = self.scorer.matcher.coverage(&tokens);
-        if count == 0 || (self.best.len() == 3 && self.best[2].0 >= count) {
+        if count == 0 {
             return;
+        }
+        let window = self.scorer.matcher.window(&tokens);
+        if self.best.len() == 3 {
+            let worst = &self.best[2];
+            if (std::cmp::Reverse(worst.0), worst.1) <= (std::cmp::Reverse(count), window) {
+                return;
+            }
         }
         self.best.push((
             count,
+            window,
             ContentMatch {
                 line,
                 section: self.metas[self.cursor].label(),
@@ -695,7 +762,7 @@ impl Collector<'_> {
             },
         ));
         self.best
-            .sort_by_key(|(count, m)| (std::cmp::Reverse(*count), m.line));
+            .sort_by_key(|(count, window, m)| (std::cmp::Reverse(*count), *window, m.line));
         self.best.truncate(3);
     }
 
@@ -721,19 +788,24 @@ impl Collector<'_> {
                         &mut self.term_tf,
                         vec![0; self.scorer.term_index.len()],
                     ),
+                    heading_tf: std::mem::replace(
+                        &mut self.heading_tf,
+                        vec![0; self.scorer.term_index.len()],
+                    ),
                     alt_hit: std::mem::replace(
                         &mut self.alt_hit,
                         vec![false; self.scorer.alt_specs.len()],
                     ),
                     matches: std::mem::take(&mut self.best)
                         .into_iter()
-                        .map(|(_, m)| m)
+                        .map(|(_, _, m)| m)
                         .collect(),
                 });
             }
         }
         self.tokens = 0;
         self.term_tf = vec![0; self.scorer.term_index.len()];
+        self.heading_tf = vec![0; self.scorer.term_index.len()];
         self.alt_hit = vec![false; self.scorer.alt_specs.len()];
         self.best.clear();
         self.window.clear();
@@ -781,6 +853,7 @@ mod tests {
                     title: String::new(),
                     body: (*body).to_owned(),
                     language: StemLanguage::English,
+                    ..Default::default()
                 })
                 .collect(),
         )

@@ -156,124 +156,6 @@ pub fn create_stemmer(lang: StemLanguage) -> Stemmer {
     Stemmer::create(lang.to_algorithm())
 }
 
-/// Bumped whenever [`tokenize`]'s output for the same input text changes in a
-/// way that makes previously persisted [`crate::index::IndexEntry::bm25_tokens`]
-/// stale (i.e. no longer what a fresh tokenize would produce). Readers compare
-/// this against [`crate::index::IndexEntry::bm25_tokenizer_version`] and fall
-/// back to live re-tokenization on mismatch — see DEC-094 (F-2).
-///
-/// v1: whole-alphanumeric-run tokens (original). v2: scriptio-continua runs
-/// (CJK ideographs, Hiragana/Katakana, Hangul) are additionally split into
-/// overlapping character bigrams instead of one unmatchable giant token.
-/// v3 (iter-243 BUG-4): the raw body collected during `create-index`
-/// now includes code-fence delimiter lines and `%%` comment-fence lines
-/// (matching `frontmatter::body_only`), so corpus statistics (avgdl, term
-/// frequencies) agree between the `--index` fast path and a fresh disk scan.
-pub const TOKENIZER_VERSION: u32 = 3;
-
-/// Returns `true` for codepoints from scripts conventionally written without
-/// spaces between words ("scriptio continua"): CJK ideographs (including
-/// compatibility/extension blocks), Hiragana, Katakana, and Hangul syllables.
-/// Detected by codepoint range rather than a full Unicode Script table —
-/// cheap, and sufficient to catch the common case a naive alphanumeric split
-/// misses entirely (see F-2 in `reviews/deep-analysis-2-2026-08-23.md`).
-fn is_scriptio_continua(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF   // Hiragana + Katakana
-        | 0x31F0..=0x31FF // Katakana Phonetic Extensions
-        | 0x2E80..=0x2EFF // CJK Radicals Supplement
-        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
-        | 0x4E00..=0x9FFF // CJK Unified Ideographs
-        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
-        | 0xAC00..=0xD7A3 // Hangul Syllables
-        | 0x20000..=0x2A6DF // CJK Unified Ideographs Extension B
-    )
-}
-
-/// Tokenize one scriptio-continua *segment* (a maximal run of consecutive
-/// scriptio-continua characters, already isolated by [`tokenize_run`]) as
-/// overlapping character bigrams, so a query for a substring of a longer CJK
-/// run can still match. A single-character segment has no bigram partner and
-/// is kept as a unigram.
-fn tokenize_scriptio_continua_segment(segment: &[char], out: &mut Vec<String>) {
-    if let [only] = segment {
-        out.push(only.to_string());
-    } else {
-        out.extend(
-            segment
-                .windows(2)
-                .map(|pair| pair.iter().collect::<String>()),
-        );
-    }
-}
-
-/// Tokenize one alphanumeric run (already split on non-alphanumeric chars).
-///
-/// A run can itself mix scripts with no separator at all — e.g. `日本語Docker`
-/// in real CJK technical writing, where a Latin product name sits directly
-/// against surrounding Japanese with no space. Classifying the *whole run* by
-/// "contains any scriptio-continua char" (the original approach) forced the
-/// entire run — Latin substring included — into character bigrams, which
-/// fragmented `Docker` into unmatchable pieces (`語D`, `ck`, `er入`) and made
-/// a plain `hyalo find Docker` return nothing: worse than before the CJK fix,
-/// which at least kept the whole run as one exact (if unmatchable-by-query)
-/// token. Fixed by segmenting the run at every scriptio-continua /
-/// non-scriptio-continua boundary first, then tokenizing each segment with
-/// the pipeline appropriate to *that segment*: scriptio-continua segments
-/// become bigrams, everything else keeps the whole-segment lowercase + stem
-/// pipeline. Segment boundaries are drawn only on the scriptio-continua /
-/// non-scriptio-continua distinction — never between different scriptio-
-/// continua scripts (Han vs. Hiragana vs. Katakana vs. Hangul) — so a
-/// Kanji+Hiragana run like `です` immediately after `日本語` stays in one
-/// bigram segment, matching how real CJK text (especially Japanese) freely
-/// interleaves those scripts within a single semantic word-run with no
-/// internal separator. See DEC-095's segmentation-rule note.
-fn tokenize_run(run: &str, stemmer: &Stemmer, out: &mut Vec<String>) {
-    let chars: Vec<char> = run.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let seg_is_cjk = is_scriptio_continua(chars[i]);
-        let mut j = i + 1;
-        while j < chars.len() && is_scriptio_continua(chars[j]) == seg_is_cjk {
-            j += 1;
-        }
-        let segment = &chars[i..j];
-        if seg_is_cjk {
-            tokenize_scriptio_continua_segment(segment, out);
-        } else {
-            let word: String = segment.iter().collect();
-            out.push(stemmer.stem(&word.to_lowercase()).into_owned());
-        }
-        i = j;
-    }
-}
-
-/// Tokenizes `text` with per-token Unicode-aware lowercasing, splits on non-alphanumeric chars,
-/// and stems each token using `stemmer`. Scriptio-continua runs (CJK, Hiragana/Katakana, Hangul)
-/// are tokenized as overlapping character bigrams instead of one whole-run token — see
-/// [`TOKENIZER_VERSION`].
-pub fn tokenize(text: &str, stemmer: &Stemmer) -> Vec<String> {
-    // Fast path: pure-ASCII text can never contain scriptio-continua codepoints,
-    // so skip the per-run classification pass entirely and keep the original
-    // single-pass pipeline. This preserves the hot scan-path performance that
-    // motivated the pretokenize-perf fix (bm25_tokenize scan regression).
-    if text.is_ascii() {
-        return text
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty())
-            .map(|word| stemmer.stem(&word.to_lowercase()).into_owned())
-            .collect();
-    }
-
-    let mut tokens = Vec::new();
-    for run in text.split(|c: char| !c.is_alphanumeric()) {
-        if !run.is_empty() {
-            tokenize_run(run, stemmer, &mut tokens);
-        }
-    }
-    tokens
-}
-
 // ---------------------------------------------------------------------------
 // Corpus types
 // ---------------------------------------------------------------------------
@@ -282,20 +164,25 @@ pub fn tokenize(text: &str, stemmer: &Stemmer) -> Vec<String> {
 pub struct PreTokenizedInput {
     /// Relative path that uniquely identifies the document.
     pub rel_path: String,
-    /// Already-stemmed tokens for this document (title + body, combined).
-    pub tokens: Vec<String>,
+    /// Already-stemmed, field-aware tokens for this document.
+    pub tokens: DocTokens,
 }
 
 /// Input data for a single document added to a [`Bm25InvertedIndex`].
+#[derive(Debug, Clone, Default)]
 pub struct DocumentInput {
     /// Relative path that uniquely identifies the document.
     pub rel_path: String,
     /// Title text (from frontmatter or the first H1 heading).
     pub title: String,
-    /// Full body text of the document.
+    /// Body text of the document (frontmatter excluded).
     pub body: String,
     /// Stemming language to use for this document's content.
     pub language: StemLanguage,
+    /// 0-based indices of `body` lines that are outline headings, sorted.
+    pub heading_lines: Vec<usize>,
+    /// Frontmatter tags followed by `aliases` (the BM25F tags field).
+    pub tags: Vec<String>,
 }
 
 /// Authored title used by the ranked corpus: frontmatter string, then first H1.
@@ -319,14 +206,19 @@ pub fn document_title<'a>(
 
 /// Tokenize a [`DocumentInput`] into a [`PreTokenizedInput`].
 ///
-/// Applies the same tokenization pipeline as [`Bm25InvertedIndex::build`]: Unicode-aware
-/// lowercasing, split on non-alphanumeric chars, then stemming with the document's
-/// declared language. Useful when mixing indexed (pre-tokenized) and unindexed
-/// (raw body) documents in a single corpus build.
+/// Applies the same pipeline `create-index` uses ([`tokenize_document_text`]
+/// with the effective `[search] code_blocks`), so indexed and disk-read
+/// documents can be mixed in one corpus.
 pub fn tokenize_document(doc: DocumentInput) -> PreTokenizedInput {
-    let stemmer = Stemmer::create(doc.language.to_algorithm());
-    let combined = format!("{} {}", doc.title, doc.body);
-    let tokens = tokenize(&combined, &stemmer);
+    let stemmer = create_stemmer(doc.language);
+    let tokens = tokenize_document_text(
+        &doc.title,
+        &doc.body,
+        &doc.heading_lines,
+        doc.tags.iter().map(String::as_str),
+        &stemmer,
+        search_settings().skip_code_blocks,
+    );
     PreTokenizedInput {
         rel_path: doc.rel_path,
         tokens,
@@ -347,6 +239,17 @@ pub struct Bm25Match {
 
 mod query;
 mod sections;
+mod tokenizer;
+#[cfg(test)]
+use tokenizer::is_scriptio_continua;
+#[cfg(test)]
+mod v4_tests;
+
+pub use tokenizer::{
+    DEFAULT_PROXIMITY_BONUS, DocTokenBuilder, DocTokens, FieldWeights, SearchSettings,
+    TOKENIZER_VERSION, heading_body_lines, search_settings, set_search_settings, tokenize,
+    tokenize_document_text,
+};
 
 pub use query::{
     CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PREFIX_EXPANSION,
@@ -395,10 +298,17 @@ impl SnippetQuery {
         }
     }
 
-    /// Number of distinct positive query tokens on a qualifying line, or zero.
-    /// Body stemming must use the same document language as the BM25 corpus.
-    fn distinct_tokens(&self, line: &str, stemmer: &Stemmer) -> usize {
-        self.matcher.coverage(&tokenize(line, stemmer))
+    /// Number of distinct positive query tokens on a qualifying line (zero
+    /// when it does not qualify) and the extra positions of its smallest
+    /// window over the required groups (DEC-338). Body stemming must use the
+    /// same document language as the BM25 corpus.
+    fn rank_line(&self, line: &str, stemmer: &Stemmer) -> (usize, u64) {
+        let tokens = tokenize(line, stemmer);
+        let coverage = self.matcher.coverage(&tokens);
+        if coverage == 0 {
+            return (0, u64::MAX);
+        }
+        (coverage, self.matcher.window(&tokens))
     }
 
     /// Stream one selected result's raw body and keep the best three lines.
@@ -421,6 +331,8 @@ impl SnippetQuery {
             sections,
             scope,
             best: Vec::with_capacity(4),
+            skip_code: search_settings().skip_code_blocks,
+            fence: crate::scanner::FenceTracker::new(),
         };
         let path = resolve_document_path(dir, rel_path)?;
         let file = std::fs::File::open(path)?;
@@ -460,7 +372,7 @@ impl SnippetQuery {
                 break;
             }
         }
-        Ok(visitor.best.into_iter().map(|(_, m)| m).collect())
+        Ok(visitor.best.into_iter().map(|(_, _, m)| m).collect())
     }
 }
 
@@ -469,18 +381,28 @@ struct SnippetVisitor<'a> {
     stemmer: Stemmer,
     sections: &'a [crate::types::OutlineSection],
     scope: &'a [crate::heading::SectionRange],
-    best: Vec<(usize, crate::types::ContentMatch)>,
+    best: Vec<(usize, u64, crate::types::ContentMatch)>,
+    skip_code: bool,
+    fence: crate::scanner::FenceTracker,
 }
 
 impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
     fn on_raw_body_line(&mut self, raw: &str, line: usize) -> crate::scanner::ScanAction {
         use crate::scanner::ScanAction;
-        if !self.scope.is_empty() && !crate::heading::in_scope(self.scope, line) {
+        // Fence state sees every line, in scope or not.
+        let skipped = self.skip_code && self.fence.process_line(raw);
+        if skipped || (!self.scope.is_empty() && !crate::heading::in_scope(self.scope, line)) {
             return ScanAction::Continue;
         }
-        let count = self.query.distinct_tokens(raw, &self.stemmer);
-        if count == 0 || (self.best.len() == 3 && self.best[2].0 >= count) {
+        let (count, window) = self.query.rank_line(raw, &self.stemmer);
+        if count == 0 {
             return ScanAction::Continue;
+        }
+        if self.best.len() == 3 {
+            let worst = &self.best[2];
+            if (std::cmp::Reverse(worst.0), worst.1) <= (std::cmp::Reverse(count), window) {
+                return ScanAction::Continue;
+            }
         }
         let section = self
             .sections
@@ -495,6 +417,7 @@ impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
             .unwrap_or_default();
         self.best.push((
             count,
+            window,
             crate::types::ContentMatch {
                 line,
                 section,
@@ -502,12 +425,16 @@ impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
             },
         ));
         self.best
-            .sort_by_key(|(count, m)| (std::cmp::Reverse(*count), m.line));
+            .sort_by_key(|(count, window, m)| (std::cmp::Reverse(*count), *window, m.line));
         self.best.truncate(3);
         // Nothing later can beat three lines carrying every distinct query
-        // token; equal coverage loses on document order. Particularly useful
-        // for common single-term searches over long indexed documents.
-        if self.best.len() == 3 && self.best[2].0 == self.query.matcher.max_coverage() {
+        // token with no gap between the required terms; equal rank loses on
+        // document order. Particularly useful for common single-term searches
+        // over long indexed documents.
+        if self.best.len() == 3
+            && self.best[2].0 == self.query.matcher.max_coverage()
+            && self.best[2].1 == 0
+        {
             ScanAction::Stop
         } else {
             ScanAction::Continue
@@ -526,16 +453,67 @@ impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
 /// Aggregate expanded-token budget, including temporary reconstruction slots.
 pub(crate) const MAX_EXPANDED_TOKEN_BYTES: usize = 256 * 1024 * 1024;
 
-/// A (doc_id, term_frequency, positions) triple stored in a posting list.
+/// Per-document scratch for [`Bm25InvertedIndex::reconstruct_tokens_with_budget`].
+#[derive(Default)]
+struct Parts<'t> {
+    stream: Vec<(u32, &'t str)>,
+    tags: Vec<&'t str>,
+}
+
+/// One document's entry in a term's posting list.
 ///
-/// `positions` contains the token offsets (0-based) within the document at which
-/// this term appears, in ascending order. Required for phrase matching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `positions` are the term's offsets (0-based, ascending) in the document's
+/// title+body stream and `term_freq == positions.len()`. BM25F (DEC-337)
+/// splits that stream count into fields: `title_tf` and `heading_tf` of the
+/// positions are title or heading-line occurrences, the rest are body.
+/// `tag_tf` counts occurrences in tags and aliases, which have no position —
+/// so a posting may have no positions at all when the term occurs only in a
+/// tag. The field counts are omitted from the wire format when zero, so a
+/// body-only posting costs exactly what it did in format v3.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Posting {
     pub(crate) doc_id: u32,
     pub(crate) term_freq: u32,
-    /// Token offsets (ascending) — used for consecutive-position phrase checks.
+    /// Token offsets (ascending) — used for phrase checks and proximity.
     pub(crate) positions: Vec<u32>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) title_tf: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) heading_tf: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) tag_tf: u32,
+}
+
+impl Posting {
+    /// BM25F weighted term frequency: `Σ weight_f × tf_f`.
+    pub(crate) fn weighted_tf(&self, weights: &FieldWeights) -> f64 {
+        let body = self
+            .term_freq
+            .saturating_sub(self.title_tf)
+            .saturating_sub(self.heading_tf);
+        weights.title * f64::from(self.title_tf)
+            + weights.headings * f64::from(self.heading_tf)
+            + weights.tags * f64::from(self.tag_tf)
+            + weights.body * f64::from(body)
+    }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires the by-ref shape
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+/// Per-document field layout kept beside the postings so a document's
+/// [`DocTokens`] can be reconstructed exactly (incremental updates, mixed
+/// corpora) without storing the forward index twice.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DocMarks {
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    title_len: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    heading_runs: Vec<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    tag_len: u32,
 }
 
 /// Serializable BM25 inverted index built from a collection of documents.
@@ -544,13 +522,16 @@ pub(crate) struct Posting {
 /// then call [`Bm25InvertedIndex::score`] as many times as needed. Because this type is
 /// `Serialize + Deserialize`, it can be persisted in the snapshot index and reused across
 /// invocations — avoiding the O(N·doc) corpus rebuild on every query.
+/// [`Bm25InvertedIndex::apply_updates`] replaces documents in place (DEC-339).
 ///
-/// ## BM25 scoring formula
+/// ## BM25F scoring formula (DEC-337)
 ///
 /// ```text
-/// score(q, d) = Σ IDF(t) × (tf(t,d) × (k1 + 1)) / (tf(t,d) + k1 × (1 - b + b × |d|/avgdl))
+/// tf_w(t,d)   = Σ_f weight_f × tf_f(t,d)        f ∈ {title, headings, tags, body}
+/// score(q, d) = Σ IDF(t) × (tf_w × (k1 + 1)) / (tf_w + k1 × (1 - b + b × |d|/avgdl))
 ///
 /// where:
+///   |d|    = all title, body and tag tokens of d (one combined length)
 ///   IDF(t) = ln(1 + (N - n(t) + 0.5) / (n(t) + 0.5))
 ///   k1 = 1.2, b = 0.75
 /// ```
@@ -564,25 +545,32 @@ pub(crate) struct Posting {
 /// | `a b OR c` | `OR` binds tighter than AND: a AND (b OR c) (DEC-333) |
 /// | `(a OR b) -c` | Parentheses group; `-` negates a term, phrase or group |
 /// | `"foo bar"` | Phrase — tokens must be adjacent and in order |
+/// | `"foo bar"~3` | Phrase with slop — in order, up to 3 extra positions (DEC-338) |
 /// | `conf*` | Prefix — any dictionary stem starting with `conf` |
 /// | `title:x` `heading:x` `tag:x` `path:x` | Field predicates from index metadata |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bm25InvertedIndex {
-    /// Term → list of (doc_id, term_frequency, positions) postings, sorted by doc_id.
+    /// Term → postings, sorted by doc_id.
     postings: HashMap<String, Vec<Posting>>,
-    /// Number of tokens in each document (indexed by doc_id).
+    /// Number of title+body stream tokens in each document (indexed by doc_id).
     doc_lengths: Vec<u32>,
     /// doc_id → relative path mapping.
     doc_paths: Vec<String>,
-    /// Average document length (pre-computed, stored as f64 for precision).
+    /// Field layout per document, parallel to `doc_lengths`.
+    #[serde(default)]
+    doc_marks: Vec<DocMarks>,
+    /// Average BM25 document length (stream plus tag tokens).
     avgdl: f64,
     /// [`TOKENIZER_VERSION`] that produced every token in `postings`. `#[serde(default)]`
     /// makes a snapshot written before this field existed deserialize as `0`, which never
     /// equals the current [`TOKENIZER_VERSION`] — callers must treat that as "rebuild
-    /// before trusting" (DEC-094 / F-2), the same way a version mismatch is handled for
-    /// [`crate::index::IndexEntry::bm25_tokenizer_version`].
+    /// before trusting" (DEC-094 / F-2).
     #[serde(default)]
     tokenizer_version: u32,
+    /// Whether fenced code blocks were excluded (`[search] code_blocks = "skip"`).
+    /// A reader whose setting differs must not trust these postings.
+    #[serde(default)]
+    skip_code_blocks: bool,
 }
 
 impl Bm25InvertedIndex {
@@ -600,58 +588,163 @@ impl Bm25InvertedIndex {
         Self::build_from_tokens(pre_tokenized)
     }
 
+    /// An index with no documents, stamped with the current tokenizer.
+    fn empty() -> Self {
+        Self {
+            postings: HashMap::new(),
+            doc_lengths: Vec::new(),
+            doc_paths: Vec::new(),
+            doc_marks: Vec::new(),
+            avgdl: 256.0,
+            tokenizer_version: TOKENIZER_VERSION,
+            skip_code_blocks: search_settings().skip_code_blocks,
+        }
+    }
+
     /// Builds a BM25 index from pre-tokenized documents (e.g. stored in the snapshot index).
     ///
     /// Each document's tokens are already stemmed — no further tokenization is applied.
     pub fn build_from_tokens(docs: Vec<PreTokenizedInput>) -> Self {
-        let n = docs.len();
-        let mut postings: HashMap<String, Vec<Posting>> = HashMap::new();
-        let mut doc_lengths: Vec<u32> = Vec::with_capacity(n);
-        let mut doc_paths: Vec<String> = Vec::with_capacity(n);
-
-        for (doc_id, doc) in docs.into_iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let doc_id = doc_id as u32;
-            let token_count = doc.tokens.len();
-
-            // Build per-document term-frequency + positions map.
-            let mut tf: HashMap<&str, (u32, Vec<u32>)> = HashMap::new();
-            for (pos, token) in doc.tokens.iter().enumerate() {
-                let entry = tf.entry(token.as_str()).or_insert_with(|| (0, Vec::new()));
-                entry.0 += 1;
-                #[allow(clippy::cast_possible_truncation)]
-                entry.1.push(pos as u32);
-            }
-
-            // Insert into postings lists.
-            for (term, (freq, positions)) in tf {
-                postings.entry(term.to_owned()).or_default().push(Posting {
-                    doc_id,
-                    term_freq: freq,
-                    positions,
-                });
-            }
-
-            #[allow(clippy::cast_possible_truncation)]
-            doc_lengths.push(token_count as u32);
-            doc_paths.push(doc.rel_path);
+        let mut index = Self::empty();
+        index.doc_lengths.reserve(docs.len());
+        index.doc_paths.reserve(docs.len());
+        index.doc_marks.reserve(docs.len());
+        for doc in docs {
+            index.push_doc(doc.rel_path, &doc.tokens);
         }
+        index.recompute_avgdl();
+        index
+    }
 
+    /// Append one document with the next doc id.
+    fn push_doc(&mut self, rel_path: String, doc: &DocTokens) {
+        #[allow(clippy::cast_possible_truncation)]
+        let doc_id = self.doc_paths.len() as u32;
+        let mut tf: HashMap<&str, Posting> = HashMap::new();
+        let mut runs = doc.heading_runs.iter().peekable();
+        for (pos, token) in doc.tokens.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let pos = pos as u32;
+            let entry = tf.entry(token.as_str()).or_default();
+            entry.term_freq += 1;
+            entry.positions.push(pos);
+            if pos < doc.title_len {
+                entry.title_tf += 1;
+            } else {
+                while runs.peek().is_some_and(|run| run.1 <= pos) {
+                    runs.next();
+                }
+                if runs.peek().is_some_and(|run| run.0 <= pos) {
+                    entry.heading_tf += 1;
+                }
+            }
+        }
+        for token in &doc.tag_tokens {
+            tf.entry(token.as_str()).or_default().tag_tf += 1;
+        }
+        for (term, mut posting) in tf {
+            posting.doc_id = doc_id;
+            self.postings
+                .entry(term.to_owned())
+                .or_default()
+                .push(posting);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        self.doc_lengths.push(doc.tokens.len() as u32);
+        #[allow(clippy::cast_possible_truncation)]
+        self.doc_marks.push(DocMarks {
+            title_len: doc.title_len,
+            heading_runs: doc.heading_runs.clone(),
+            tag_len: doc.tag_tokens.len() as u32,
+        });
+        self.doc_paths.push(rel_path);
+    }
+
+    /// BM25 length of `doc_id`: stream tokens plus tag tokens.
+    fn bm25_len(&self, doc_id: usize) -> u64 {
+        u64::from(self.doc_lengths[doc_id])
+            + self
+                .doc_marks
+                .get(doc_id)
+                .map_or(0, |m| u64::from(m.tag_len))
+    }
+
+    fn total_length(&self) -> Option<u64> {
+        (0..self.doc_lengths.len()).try_fold(0_u64, |total, id| {
+            let tags = self.doc_marks.get(id).map_or(0, |m| u64::from(m.tag_len));
+            total
+                .checked_add(u64::from(self.doc_lengths[id]))?
+                .checked_add(tags)
+        })
+    }
+
+    fn recompute_avgdl(&mut self) {
+        let n = self.doc_paths.len();
         #[allow(clippy::cast_precision_loss)]
-        let avgdl: f64 = if n == 0 {
+        let avgdl = if n == 0 {
             256.0
         } else {
-            let total: u64 = doc_lengths.iter().map(|&l| u64::from(l)).sum();
-            total as f64 / n as f64
+            self.total_length().unwrap_or(u64::MAX) as f64 / n as f64
         };
+        self.avgdl = avgdl;
+    }
 
-        Self {
-            postings,
-            doc_lengths,
-            doc_paths,
-            avgdl,
-            tokenizer_version: TOKENIZER_VERSION,
+    /// Replace documents in place (DEC-339): every document whose path is in
+    /// `remove`, or which `add` supplies again, loses its postings; then each
+    /// `add` document is appended. Doc ids are compacted, so the result
+    /// scores every query exactly like [`Self::build_from_tokens`] over the
+    /// same documents — only the internal id order differs.
+    ///
+    /// One pass over the posting lists, however many documents change:
+    /// cheaper than re-tokenizing the corpus by orders of magnitude.
+    pub fn apply_updates(&mut self, remove: &HashSet<&str>, add: Vec<PreTokenizedInput>) {
+        let replaced: HashSet<&str> = add.iter().map(|d| d.rel_path.as_str()).collect();
+        let mut map: Vec<Option<u32>> = Vec::with_capacity(self.doc_paths.len());
+        let mut next = 0u32;
+        for path in &self.doc_paths {
+            if remove.contains(path.as_str()) || replaced.contains(path.as_str()) {
+                map.push(None);
+            } else {
+                map.push(Some(next));
+                next += 1;
+            }
         }
+        if (next as usize) < self.doc_paths.len() {
+            self.postings.retain(|_, posts| {
+                posts.retain_mut(|p| match map.get(p.doc_id as usize).copied().flatten() {
+                    Some(id) => {
+                        p.doc_id = id;
+                        true
+                    }
+                    None => false,
+                });
+                !posts.is_empty()
+            });
+            let keep = |i: &usize| map[*i].is_some();
+            let mut i = 0usize;
+            self.doc_paths.retain(|_| {
+                let k = keep(&i);
+                i += 1;
+                k
+            });
+            i = 0;
+            self.doc_lengths.retain(|_| {
+                let k = keep(&i);
+                i += 1;
+                k
+            });
+            i = 0;
+            self.doc_marks.retain(|_| {
+                let k = keep(&i);
+                i += 1;
+                k
+            });
+        }
+        drop(replaced);
+        for doc in add {
+            self.push_doc(doc.rel_path, &doc.tokens);
+        }
+        self.recompute_avgdl();
     }
 
     /// Build a `Bm25InvertedIndex` from `IndexEntry` values stored in a snapshot.
@@ -691,6 +784,7 @@ impl Bm25InvertedIndex {
     }
 
     /// Full reconstruction admission, distinct from compact-postings scoring.
+    #[cfg(test)]
     pub(crate) fn expansion_within_budget(&self, budget: usize) -> bool {
         self.selected_expansion_within_budget(&|_| true, budget)
     }
@@ -721,7 +815,11 @@ impl Bm25InvertedIndex {
                     if !include(path) {
                         return Some(sum);
                     }
-                    let next = sum.checked_add(width.checked_mul(posting.positions.len())?)?;
+                    let occurrences = posting
+                        .positions
+                        .len()
+                        .checked_add(posting.tag_tf as usize)?;
+                    let next = sum.checked_add(width.checked_mul(occurrences)?)?;
                     (next <= budget).then_some(next)
                 })
             })
@@ -743,20 +841,17 @@ impl Bm25InvertedIndex {
         self.score_with_fields(query, &NoFields)
     }
 
-    /// Reconstruct every document's full ordered token list from postings.
+    /// Reconstruct every document's [`DocTokens`] from postings.
     ///
     /// The snapshot format strips per-entry `bm25_tokens` when a persisted
     /// inverted index is present (roughly halves snapshot size), so a loaded
-    /// snapshot's entries carry no tokens — yet a mutation wave must be able
-    /// to rebuild the inverted index without re-reading the whole vault from
-    /// disk (BUG-4, iter-244). Postings store, per (term, doc), the position
-    /// of every occurrence, which is exactly enough to invert back to the
-    /// original ordered token list.
+    /// snapshot's entries carry no tokens. Postings store, per (term, doc),
+    /// the position of every stream occurrence and the tag count, and
+    /// `doc_marks` the field layout — exactly enough to invert back to the
+    /// original record (tag tokens come back sorted, as they were built).
     ///
     /// One pass over all postings: O(total postings), no per-document scans.
-    pub fn reconstruct_all_tokens(
-        &self,
-    ) -> anyhow::Result<std::collections::HashMap<&str, Vec<String>>> {
+    pub fn reconstruct_all_tokens(&self) -> anyhow::Result<HashMap<&str, DocTokens>> {
         self.reconstruct_tokens_where(|_| true)
     }
 
@@ -766,7 +861,7 @@ impl Bm25InvertedIndex {
     pub fn reconstruct_selected_tokens(
         &self,
         selected: &HashSet<&str>,
-    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+    ) -> anyhow::Result<HashMap<&str, DocTokens>> {
         if selected.is_empty() {
             return Ok(HashMap::new());
         }
@@ -776,7 +871,7 @@ impl Bm25InvertedIndex {
     fn reconstruct_tokens_where(
         &self,
         include: impl Fn(&str) -> bool,
-    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+    ) -> anyhow::Result<HashMap<&str, DocTokens>> {
         self.reconstruct_tokens_with_budget(include, MAX_EXPANDED_TOKEN_BYTES)
     }
 
@@ -784,7 +879,7 @@ impl Bm25InvertedIndex {
         &self,
         include: impl Fn(&str) -> bool,
         budget: usize,
-    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+    ) -> anyhow::Result<HashMap<&str, DocTokens>> {
         anyhow::ensure!(
             self.selected_expansion_within_budget(&include, budget),
             "BM25 token reconstruction exceeds the {budget}-byte allocation budget; compact indexed scoring remains available"
@@ -802,12 +897,19 @@ impl Bm25InvertedIndex {
         if selected.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut by_doc: HashMap<u32, Vec<(u32, &str)>> =
-            selected.iter().map(|&(id, _)| (id, Vec::new())).collect();
+        let mut by_doc: HashMap<u32, Parts<'_>> = selected
+            .iter()
+            .map(|&(id, _)| (id, Parts::default()))
+            .collect();
         for (term, posts) in &self.postings {
             for posting in posts {
                 if let Some(parts) = by_doc.get_mut(&posting.doc_id) {
-                    parts.extend(posting.positions.iter().map(|&pos| (pos, term.as_str())));
+                    parts
+                        .stream
+                        .extend(posting.positions.iter().map(|&pos| (pos, term.as_str())));
+                    parts
+                        .tags
+                        .extend(std::iter::repeat_n(term.as_str(), posting.tag_tf as usize));
                 }
             }
         }
@@ -816,10 +918,25 @@ impl Bm25InvertedIndex {
             let mut parts = by_doc.remove(&doc_id).unwrap_or_default();
             // Positions uniquely identify occurrences, restoring the token order
             // required for phrase matching while retaining repeated terms.
-            parts.sort_unstable_by_key(|&(pos, _)| pos);
+            parts.stream.sort_unstable_by_key(|&(pos, _)| pos);
+            parts.tags.sort_unstable();
+            let marks = self
+                .doc_marks
+                .get(doc_id as usize)
+                .cloned()
+                .unwrap_or_default();
             out.insert(
                 path,
-                parts.into_iter().map(|(_, term)| term.to_owned()).collect(),
+                DocTokens {
+                    tokens: parts
+                        .stream
+                        .into_iter()
+                        .map(|(_, term)| term.to_owned())
+                        .collect(),
+                    title_len: marks.title_len,
+                    heading_runs: marks.heading_runs,
+                    tag_tokens: parts.tags.into_iter().map(str::to_owned).collect(),
+                },
             );
         }
         Ok(out)
@@ -845,8 +962,24 @@ impl Bm25InvertedIndex {
         self.tokenizer_version
     }
 
+    /// Whether fenced code blocks were excluded when these postings were built.
+    #[must_use]
+    pub fn skip_code_blocks(&self) -> bool {
+        self.skip_code_blocks
+    }
+
+    /// `true` when this index was built by the current tokenizer with the
+    /// effective `[search] code_blocks` setting — the precondition for
+    /// serving queries from it, or updating it incrementally.
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.tokenizer_version == TOKENIZER_VERSION
+            && self.skip_code_blocks == search_settings().skip_code_blocks
+    }
+
     /// Validate compact scoring structure: unique documents, coherent finite
-    /// length metadata, and strictly ordered, bounded postings and positions.
+    /// length metadata, and strictly ordered, bounded postings, positions and
+    /// per-field term frequencies.
     ///
     /// A crafted snapshot could contain `doc_id` values that exceed the length of
     /// `doc_paths` or `doc_lengths`, causing an out-of-bounds panic in [`score`](Self::score).
@@ -855,7 +988,7 @@ impl Bm25InvertedIndex {
     /// Returns `true` if the index is structurally consistent, `false` otherwise.
     pub(crate) fn validate_doc_ids(&self) -> bool {
         let max_id = self.doc_paths.len();
-        if self.doc_lengths.len() != max_id {
+        if self.doc_lengths.len() != max_id || self.doc_marks.len() != max_id {
             return false;
         }
         if !self.avgdl.is_finite()
@@ -864,12 +997,22 @@ impl Bm25InvertedIndex {
         {
             return false;
         }
+        let marks_ok = self
+            .doc_marks
+            .iter()
+            .zip(&self.doc_lengths)
+            .all(|(m, &len)| {
+                m.title_len <= len
+                    && m.heading_runs
+                        .iter()
+                        .all(|&(start, end)| start >= m.title_len && start < end && end <= len)
+                    && m.heading_runs.windows(2).all(|pair| pair[0].1 <= pair[1].0)
+            });
+        if !marks_ok {
+            return false;
+        }
         if max_id > 0 {
-            let Some(total) = self
-                .doc_lengths
-                .iter()
-                .try_fold(0_u64, |total, length| total.checked_add(u64::from(*length)))
-            else {
+            let Some(total) = self.total_length() else {
                 return false;
             };
             #[allow(clippy::cast_precision_loss)]
@@ -885,8 +1028,13 @@ impl Bm25InvertedIndex {
                     let Some(length) = self.doc_lengths.get(p.doc_id as usize) else {
                         return false;
                     };
-                    !p.positions.is_empty()
+                    let tag_len = self.doc_marks[p.doc_id as usize].tag_len;
+                    (!p.positions.is_empty() || p.tag_tf > 0)
                         && p.term_freq as usize == p.positions.len()
+                        && p.title_tf
+                            .checked_add(p.heading_tf)
+                            .is_some_and(|f| f <= p.term_freq)
+                        && p.tag_tf <= tag_len
                         && p.positions.iter().all(|position| position < length)
                         && p.positions.windows(2).all(|pair| pair[0] < pair[1])
                 })
@@ -909,12 +1057,15 @@ impl Bm25InvertedIndex {
         doc_paths: Vec<String>,
         avgdl: f64,
     ) -> Self {
+        let doc_marks = vec![DocMarks::default(); doc_lengths.len()];
         Self {
             postings,
             doc_lengths,
             doc_paths,
+            doc_marks,
             avgdl,
             tokenizer_version: TOKENIZER_VERSION,
+            skip_code_blocks: false,
         }
     }
 
@@ -930,61 +1081,50 @@ impl Bm25InvertedIndex {
     // Private helpers
     // ------------------------------------------------------------------
 
-    /// Returns the set of `doc_id`s that contain **all** given terms.
+    /// Returns the set of `doc_id`s that contain **all** given terms in the
+    /// positional stream.
     fn docs_with_all_terms(&self, terms: &[String]) -> HashSet<u32> {
         if terms.iter().any(|t| !self.postings.contains_key(t)) {
             return HashSet::new();
         }
+        let positional = |postings: &Vec<Posting>| {
+            postings
+                .iter()
+                .filter(|p| !p.positions.is_empty())
+                .map(|p| p.doc_id)
+                .collect::<HashSet<u32>>()
+        };
         let mut iter = terms.iter().filter_map(|t| self.postings.get(t));
         let first = match iter.next() {
-            Some(postings) => postings.iter().map(|p| p.doc_id).collect::<HashSet<u32>>(),
+            Some(postings) => positional(postings),
             None => return HashSet::new(),
         };
         iter.fold(first, |acc, postings| {
-            let ids: HashSet<u32> = postings.iter().map(|p| p.doc_id).collect();
+            let ids = positional(postings);
             acc.intersection(&ids).copied().collect()
         })
     }
 
-    /// Returns `true` if `terms` appear at consecutive token positions in `doc_id`.
-    fn has_phrase_at_positions(&self, terms: &[String], doc_id: u32) -> bool {
+    /// Positions of `term` in `doc_id` (empty when absent).
+    pub(crate) fn positions_of(&self, term: &str, doc_id: u32) -> &[u32] {
+        self.postings
+            .get(term)
+            .and_then(|ps| {
+                ps.binary_search_by_key(&doc_id, |p| p.doc_id)
+                    .ok()
+                    .map(|idx| ps[idx].positions.as_slice())
+            })
+            .unwrap_or(&[] as &[u32])
+    }
+
+    /// Returns `true` if `terms` appear in order in `doc_id` with at most
+    /// `slop` extra positions between the first and the last (0 = adjacent).
+    fn has_phrase_at_positions(&self, terms: &[String], doc_id: u32, slop: u32) -> bool {
         if terms.is_empty() {
             return false;
         }
-
-        // Collect position slices for each term in this document.
-        // Postings are sorted by doc_id, so use binary search for O(log n) lookup.
-        let positions: Vec<&[u32]> = terms
-            .iter()
-            .map(|t| {
-                self.postings
-                    .get(t)
-                    .and_then(|ps| {
-                        ps.binary_search_by_key(&doc_id, |p| p.doc_id)
-                            .ok()
-                            .map(|idx| ps[idx].positions.as_slice())
-                    })
-                    .unwrap_or(&[] as &[u32])
-            })
-            .collect();
-
-        if positions.iter().any(|p| p.is_empty()) {
-            return false;
-        }
-
-        // For each starting position of the first term, check for consecutive hits.
-        for &start_pos in positions[0] {
-            let found = positions.iter().enumerate().skip(1).all(|(i, pos_list)| {
-                u32::try_from(i)
-                    .ok()
-                    .and_then(|offset| start_pos.checked_add(offset))
-                    .is_some_and(|target| pos_list.binary_search(&target).is_ok())
-            });
-            if found {
-                return true;
-            }
-        }
-        false
+        let positions: Vec<&[u32]> = terms.iter().map(|t| self.positions_of(t, doc_id)).collect();
+        query::phrase_in_positions(&positions, slop)
     }
 }
 
@@ -1034,6 +1174,7 @@ mod tests {
                         doc_id: 0,
                         term_freq: 1,
                         positions: vec![u32::MAX],
+                        ..Default::default()
                     }],
                 ),
                 (
@@ -1042,6 +1183,7 @@ mod tests {
                         doc_id: 0,
                         term_freq: 1,
                         positions: vec![0],
+                        ..Default::default()
                     }],
                 ),
             ]),
@@ -1063,28 +1205,31 @@ mod tests {
         let docs = vec![
             PreTokenizedInput {
                 rel_path: "a.md".to_owned(),
-                tokens: vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()],
+                tokens: vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()].into(),
             },
             PreTokenizedInput {
                 rel_path: "b.md".to_owned(),
-                tokens: vec!["beta".to_owned()],
+                tokens: vec!["beta".to_owned()].into(),
             },
             PreTokenizedInput {
                 rel_path: "empty.md".to_owned(),
-                tokens: vec![],
+                tokens: vec![].into(),
             },
         ];
         let index = Bm25InvertedIndex::build_from_tokens(docs);
         let reconstructed = index.reconstruct_all_tokens().unwrap();
         assert_eq!(reconstructed.len(), 3);
         assert_eq!(
-            reconstructed.get("a.md").unwrap(),
-            &vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()]
+            reconstructed.get("a.md").unwrap().tokens,
+            vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()]
         );
-        assert_eq!(reconstructed.get("b.md").unwrap(), &vec!["beta".to_owned()]);
         assert_eq!(
-            reconstructed.get("empty.md").unwrap(),
-            &Vec::<String>::new()
+            reconstructed.get("b.md").unwrap().tokens,
+            vec!["beta".to_owned()]
+        );
+        assert_eq!(
+            reconstructed.get("empty.md").unwrap().tokens,
+            Vec::<String>::new()
         );
     }
 
@@ -1093,23 +1238,23 @@ mod tests {
         let index = Bm25InvertedIndex::build_from_tokens(vec![
             PreTokenizedInput {
                 rel_path: "selected.md".into(),
-                tokens: vec!["beta".into(), "alpha".into(), "beta".into()],
+                tokens: vec!["beta".into(), "alpha".into(), "beta".into()].into(),
             },
             PreTokenizedInput {
                 rel_path: "excluded.md".into(),
-                tokens: vec!["unrelated".into(); 1000],
+                tokens: vec!["unrelated".into(); 1000].into(),
             },
             PreTokenizedInput {
                 rel_path: "empty.md".into(),
-                tokens: vec![],
+                tokens: vec![].into(),
             },
         ]);
         let selected = HashSet::from(["selected.md", "empty.md", "missing.md"]);
         let recovered = index.reconstruct_selected_tokens(&selected).unwrap();
         assert_eq!(recovered.len(), 2);
-        assert_eq!(recovered["selected.md"], ["beta", "alpha", "beta"]);
+        assert_eq!(recovered["selected.md"].tokens, ["beta", "alpha", "beta"]);
         assert!(
-            recovered["empty.md"].is_empty(),
+            recovered["empty.md"].tokens.is_empty(),
             "expected empty, got {:?}",
             recovered["empty.md"]
         );
@@ -1140,15 +1285,15 @@ mod tests {
         let docs = vec![
             PreTokenizedInput {
                 rel_path: "a.md".to_owned(),
-                tokens: vec!["rust".to_owned(), "memory".to_owned(), "rust".to_owned()],
+                tokens: vec!["rust".to_owned(), "memory".to_owned(), "rust".to_owned()].into(),
             },
             PreTokenizedInput {
                 rel_path: "b.md".to_owned(),
-                tokens: vec!["rust".to_owned(), "rust".to_owned(), "rust".to_owned()],
+                tokens: vec!["rust".to_owned(), "rust".to_owned(), "rust".to_owned()].into(),
             },
             PreTokenizedInput {
                 rel_path: "c.md".to_owned(),
-                tokens: vec!["memory".to_owned()],
+                tokens: vec!["memory".to_owned()].into(),
             },
         ];
         let original = Bm25InvertedIndex::build_from_tokens(docs);
@@ -1321,15 +1466,28 @@ mod tests {
         // pre-F-2 behaviour for pure-ASCII text (no scan-perf regression).
         let stemmer = make_stemmer(StemLanguage::English);
         let tokens = tokenize("The Quick-Brown Fox_Jumps", &stemmer);
-        assert_eq!(tokens, vec!["the", "quick", "brown", "fox", "jump"]);
+        // Tokenizer v4 (DEC-336): joined identifiers emit whole then parts.
+        assert_eq!(
+            tokens,
+            vec![
+                "the",
+                "quickbrown",
+                "quick",
+                "brown",
+                "foxjump",
+                "fox",
+                "jump"
+            ]
+        );
     }
 
     #[test]
     fn test_tokenize_splits_on_punctuation() {
         let stemmer = make_stemmer(StemLanguage::English);
-        // "hello-world foo_bar" should yield 4 tokens: hello, world, foo, bar
+        // "hello-world foo_bar" yields each identifier whole plus its parts
+        // (DEC-336): helloworld, hello, world, foobar, foo, bar.
         let tokens = tokenize("hello-world foo_bar", &stemmer);
-        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens.len(), 6);
     }
 
     #[test]
@@ -1360,11 +1518,12 @@ mod tests {
             title: "Running guide".to_owned(),
             body: "A guide to running faster.".to_owned(),
             language: StemLanguage::English,
+            ..Default::default()
         };
         let pre = tokenize_document(input);
         assert_eq!(pre.rel_path, "test.md");
         // "running" and "run" both stem to "run"
-        assert!(pre.tokens.contains(&"run".to_owned()));
+        assert!(pre.tokens.tokens.contains(&"run".to_owned()));
     }
 
     // ------------------------------------------------------------------
@@ -1453,6 +1612,7 @@ mod tests {
             title: title.to_owned(),
             body: body.to_owned(),
             language: StemLanguage::English,
+            ..Default::default()
         }
     }
 
@@ -1811,11 +1971,11 @@ mod tests {
         let docs = vec![
             PreTokenizedInput {
                 rel_path: "a.md".to_owned(),
-                tokens: vec!["rust".to_owned(), "program".to_owned()],
+                tokens: vec!["rust".to_owned(), "program".to_owned()].into(),
             },
             PreTokenizedInput {
                 rel_path: "b.md".to_owned(),
-                tokens: vec!["python".to_owned(), "program".to_owned()],
+                tokens: vec!["python".to_owned(), "program".to_owned()].into(),
             },
         ];
         let index = Bm25InvertedIndex::build_from_tokens(docs);
@@ -1877,7 +2037,7 @@ mod tests {
                 tasks: Vec::new(),
                 links: Vec::new(),
                 self_anchors: Vec::new(),
-                bm25_tokens: Some(vec!["rust".to_owned(), "program".to_owned()]),
+                bm25_tokens: Some(vec!["rust".to_owned(), "program".to_owned()].into()),
                 bm25_language: Some("english".to_owned()),
                 bm25_tokenizer_version: Some(TOKENIZER_VERSION),
             },
@@ -1941,6 +2101,7 @@ mod tests {
             title: "Title".to_owned(),
             body: "Body text".to_owned(),
             language: StemLanguage::English,
+            ..Default::default()
         }]);
         assert_eq!(index.tokenizer_version(), TOKENIZER_VERSION);
     }
@@ -1958,6 +2119,7 @@ mod tests {
             title: "Title".to_owned(),
             body: "Body text".to_owned(),
             language: StemLanguage::English,
+            ..Default::default()
         }])
         .with_tokenizer_version_for_test(1);
         assert_ne!(index.tokenizer_version(), TOKENIZER_VERSION);
@@ -2147,6 +2309,7 @@ mod iteration292_tests {
                     title: String::new(),
                     body: (*body).into(),
                     language: StemLanguage::English,
+                    ..Default::default()
                 })
                 .collect(),
         );
@@ -2256,6 +2419,7 @@ mod iteration292_tests {
                             title: String::new(),
                             body: (*body).into(),
                             language,
+                            ..Default::default()
                         }
                     })
                     .collect(),
@@ -2314,6 +2478,7 @@ mod iteration292_tests {
                     doc_id: 0,
                     term_freq: 32,
                     positions: (0..32).collect(),
+                    ..Default::default()
                 }],
             )]),
             vec![32],
@@ -2322,7 +2487,12 @@ mod iteration292_tests {
         );
         assert!(!corpus.expansion_within_budget(1024));
         assert!(corpus.expansion_within_budget(8192));
-        assert_eq!(corpus.reconstruct_all_tokens().unwrap()["a.md"].len(), 32);
+        assert_eq!(
+            corpus.reconstruct_all_tokens().unwrap()["a.md"]
+                .tokens
+                .len(),
+            32
+        );
     }
     #[test]
     fn compact_scoring_and_selected_reconstruction_have_separate_budgets() {
@@ -2330,11 +2500,11 @@ mod iteration292_tests {
         let corpus = Bm25InvertedIndex::build_from_tokens(vec![
             PreTokenizedInput {
                 rel_path: "large.md".into(),
-                tokens: vec![long.clone(); 32],
+                tokens: vec![long.clone(); 32].into(),
             },
             PreTokenizedInput {
                 rel_path: "small.md".into(),
-                tokens: vec!["small".into()],
+                tokens: vec!["small".into()].into(),
             },
         ]);
         assert!(!corpus.expansion_within_budget(1024));
@@ -2346,7 +2516,7 @@ mod iteration292_tests {
         let selected = corpus
             .reconstruct_tokens_with_budget(|path| path == "small.md", 1024)
             .unwrap();
-        assert_eq!(selected["small.md"], vec!["small"]);
+        assert_eq!(selected["small.md"].tokens, vec!["small"]);
         let stemmer = Stemmer::create(rust_stemmers::Algorithm::English);
         let scored = corpus.score(&long, &stemmer);
         assert_eq!(scored.len(), 1);
