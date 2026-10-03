@@ -60,14 +60,23 @@ test('packed ESM/CJS API includes declarations and the default native resolver w
       assert.match(source, /END OF TERMS AND CONDITIONS/);
     }
 
+    // Derive the expected snapshot format from the binary under test, so a
+    // format bump never needs this test edited.
+    const reported = await execFileAsync(path.resolve(binary), ['config', '--format', 'json', '--no-hints'], {
+      cwd: packageDir,
+      encoding: 'utf8',
+    });
+    const expectedFormat = JSON.parse(reported.stdout).results.snapshot_format_version;
+    assert.equal(typeof expectedFormat, 'number');
+
     const esm = await import(pathToFileURL(path.join(consumer, 'node_modules/@ractive-ch/hyalo/dist/index.mjs')).href);
     const config = await esm.config({ cwd: packageDir });
-    assert.equal(config.results.snapshot_format_version, 4);
+    assert.equal(config.results.snapshot_format_version, expectedFormat);
     assert.deepEqual(config.hints, []);
 
     const cjs = require(path.join(consumer, 'node_modules/@ractive-ch/hyalo/dist/index.cjs'));
     const explicit = await cjs.config({ binaryPath: binary, cwd: packageDir });
-    assert.equal(explicit.results.snapshot_format_version, 4);
+    assert.equal(explicit.results.snapshot_format_version, expectedFormat);
   } finally {
     await fsp.rm(scratch, { recursive: true, force: true });
   }

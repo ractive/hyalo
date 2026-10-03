@@ -136,5 +136,9 @@ jobs:
             "hyalo $expected"*) ;;
             *) echo "unexpected hyalo version output: $actual" >&2; exit 1 ;;
           esac
+          # The expected snapshot format comes from the source-built binary,
+          # so a format bump never needs this step edited.
+          EXPECTED_FORMAT=$("$GITHUB_WORKSPACE/target/release/hyalo" config --format json --no-hints --jq '.results.snapshot_format_version')
+          export EXPECTED_FORMAT
           node --input-type=module -e \
-            "import('@ractive-ch/hyalo').then(async ({config}) => { const value = await config(); if (value.results.snapshot_format_version !== 4) process.exit(1) })"
+            "import('@ractive-ch/hyalo').then(async ({config}) => { const value = await config(); const got = value.results.snapshot_format_version; if (got !== Number(process.env.EXPECTED_FORMAT)) { console.error('snapshot_format_version mismatch: got ' + got + ', expected ' + process.env.EXPECTED_FORMAT); process.exit(1) } })"
