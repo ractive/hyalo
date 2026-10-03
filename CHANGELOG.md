@@ -57,10 +57,13 @@ and this project adheres to
 - Incremental `create-index` (DEC-339): files with unchanged size and mtime
   keep their entries and search postings are patched instead of rebuilt.
   `--force` rebuilds from scratch; the result reports `reused`, `refreshed`,
-  `removed` and `rebuilt`.
+  `skipped`, `removed` and `rebuilt`. A racily clean file (mtime not older
+  than the previous snapshot) is always re-scanned.
 - An `--index` read against a drifted snapshot re-scans only the drifted files
   in memory and prints a `-q`-proof note naming how many (and up to three);
-  the snapshot file is never written by a read (DEC-339).
+  a drifted file that cannot be scanned is left out with a `-q`-proof warning,
+  as a disk scan would, and the snapshot file is never written by a read
+  (DEC-339). `[search.weights]` and `proximity_bonus` accept 0 to 1000.
 - `hyalo config` reports `results.search` (`language`, `code_blocks`,
   `weights`, `proximity_bonus`).
 
@@ -76,9 +79,12 @@ and this project adheres to
   refused (the run falls back to a disk scan with a warning); rebuild them with
   `hyalo create-index`. Ranked scores and result order change: title, heading
   and tag hits now outweigh body hits, close terms get a bonus, hyphenated and
-  camelCase/snake_case words add their parts as tokens (so a phrase that ended
-  at an identifier's first part may need `~N`), and a term found only in a
-  note's tags or aliases now matches it (DEC-336–339).
+  camelCase/snake_case words add their parts as tokens, and a term found only
+  in a note's tags or aliases now matches it (DEC-336–339). Phrases around
+  identifiers are asymmetric: `"call get"` misses `call getUserName` (use
+  `"call get"~1`) while `"name here"` matches, and a quoted
+  `"error-handling"` misses prose `error handling` while the bare term finds
+  it. Ligatures such as `Œ` do not fold to `oe`.
 - **Behaviour change: ranked search `OR` now binds tighter than the implicit
   AND** (DEC-333). `find 'a b OR c'` means a AND (b OR c); it used to mean any
   of the three, because one `OR` anywhere turned every positive term into an

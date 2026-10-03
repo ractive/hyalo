@@ -392,8 +392,8 @@ body = 1.0               # everything else
   number of extra words in the smallest window holding every term. Snippets
   likewise prefer the line where the terms sit closest.
 
-An invalid value (an unknown `code_blocks` string, a negative or non-finite
-number) prints a warning and keeps the default. Weights and the bonus apply at
+An invalid value (an unknown `code_blocks` string, or a weight or bonus outside
+0 to 1000) prints a warning and keeps the default. Weights and the bonus apply at
 query time, so changing them needs no rebuild. `code_blocks` changes the
 tokens themselves: the snapshot index records the setting it was built with
 and is not used for search under a different one (hyalo falls back to a live
@@ -495,14 +495,17 @@ Mutations with `--index` patch the index in-place, keeping it current for subseq
 `create-index` is incremental (DEC-339): when the output already holds a current
 snapshot of this vault, files with unchanged size and mtime keep their entries,
 changed and new files are re-scanned, removed ones are dropped, and the search
-postings are patched. `--force` rebuilds from scratch — the remedy for an edit
-made within the same second that kept the file size. The JSON result reports
-`reused`, `refreshed`, `removed` and `rebuilt`. A snapshot written by an older
+postings are patched. A file whose mtime is not safely older than the previous
+snapshot ("racily clean": a same-size rewrite in that second keeps its mtime) is
+always re-scanned. `--force` rebuilds from scratch. The JSON result reports
+`reused`, `refreshed`, `skipped`, `removed` and `rebuilt`. A snapshot written by an older
 binary (format < 4) is refused and must be rebuilt.
 
 A read with `--index` against a snapshot that has drifted re-scans just the
 drifted files in memory and prints a `-q`-proof note naming how many (and up to
-three of them); the snapshot file itself is never written by a read — run
-`create-index` to persist the repair.
+three of them). A drifted file that cannot be scanned (unparsable frontmatter, a
+symlink leaving the vault) is left out with a `-q`-proof warning, as a disk scan
+would. The snapshot file itself is never written by a read — run `create-index`
+to persist the repair.
 
 Every command documents its flags and semantics in detail: `hyalo <cmd> --help`.

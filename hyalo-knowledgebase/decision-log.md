@@ -6614,9 +6614,17 @@ as much as prose with no way to opt out.
 - `TOKENIZER_VERSION` 4.
 
 **Consequences.** Hyphenated prose words add one token each, so document
-lengths grow slightly. A phrase that ends at an identifier's first part
-(`"x foo"` against `x foo-bar`) no longer matches, because the whole sits
-between them; slop (DEC-338) recovers it.
+lengths grow slightly. Emitting the whole before the parts makes phrases
+asymmetric, and three cases are known:
+
+- A phrase that ends at an identifier's first part misses: `"call get"` does
+  not match `call getUserName`, because the whole sits between them, while
+  `"name here"` does match. Slop (DEC-338) recovers it: `"call get"~1`.
+- A quoted identifier is a phrase of whole plus parts: `"error-handling"`
+  misses prose `error handling`, while the bare term `error-handling` matches
+  it through the parts branch.
+- NFKD has no decomposition for ligatures such as `Œ`/`œ` or `Æ`, so they do
+  not fold to `oe`/`ae`; only combining marks are dropped.
 
 **Rejected alternatives.**
 
@@ -6694,15 +6702,27 @@ paid a full disk scan.
   BM25 section (tokenizer and `code_blocks`). Files with the same size and
   mtime and, when tokenized, the same effective language keep their entries;
   others are re-scanned; postings are patched. `--force` rebuilds. `results`
-  gains `reused`, `refreshed`, `removed`, `rebuilt`. A same-second edit that
-  keeps the size is not seen; `--force` is the remedy.
+  gains `reused`, `refreshed` (entries actually re-scanned and indexed),
+  `skipped` (discovered files left out, e.g. unparsable frontmatter),
+  `removed` and `rebuilt`.
+- Racily clean (git's rule): an entry whose file mtime is not older than the
+  previous snapshot's `created_at` minus the one-second tolerance is never
+  reused, because a same-size rewrite in that second keeps the recorded mtime.
+  Such files are re-scanned, so `create-index` stays the cure for staleness.
 - A read command with a snapshot computes the drift (size changed, mtime past
   the tolerance, file gone, and new notes when a directory mtime moved),
   re-scans only those files in memory and patches the postings. A `-q`-proof
   note names the count and up to three files and suggests `create-index`. The
-  snapshot file is never written by a read. When a drifted file cannot be
-  re-scanned, nothing changes: the stale warning prints and the snapshot
-  answers, with every body read keeping its containment checks.
+  snapshot file is never written by a read. The repair sees the vault the way
+  a disk scan does: a deleted file is dropped, and a file that cannot be
+  scanned (unparsable frontmatter, a symlink resolving outside the vault, an
+  unreadable file) is dropped with a `-q`-proof warning naming it, while every
+  other drifted file is still patched. One bad file never leaves the rest of
+  the vault stale, and a read never exits 2 over a file deleted since the
+  snapshot. Only a snapshot that cannot be patched at all falls back to disk.
+- `[search.weights]` and `proximity_bonus` accept 0 to 1000; anything else
+  (negative, NaN, `1e308`, which overflowed scores to `null`) warns and keeps
+  the default.
 - `SNAPSHOT_FORMAT_VERSION` 4; older snapshots are refused as before.
 
 **Consequences.** A read against a stale snapshot pays one stat per entry and

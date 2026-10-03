@@ -41,6 +41,15 @@ answers.
 - [x] Unit tests and e2e tests `search_tokenizer_v4.rs`, `search_field_weights.rs`, `search_proximity.rs`, `index_incremental.rs`
 - [x] Timings recorded below
 
+### Review round (PR #364)
+
+- [x] Incremental `create-index` never reuses a racily clean entry (mtime not older than the previous snapshot minus the tolerance)
+- [x] In-memory repair drops unparsable and deleted files like a disk scan, warns `-q`-proof, and patches the rest
+- [x] `[search.weights]` and `proximity_bonus` bounded to 0..1000 (a weight of 1e308 gave `score: null`)
+- [x] Phrase asymmetries around identifiers and the missing ligature fold documented in DEC-336 and the CHANGELOG
+- [x] `refreshed` counts only re-scanned entries; new `skipped` counts discovered files left out
+- [x] npm package test and workflow derive the expected snapshot format from the binary
+
 ## Acceptance criteria
 
 - [x] `résumé` finds `resume`, `Häuser` finds `hauser`, `user` finds `getUserName`, `getUserName` still finds itself
@@ -90,6 +99,10 @@ Timings (Apple M-series, release build, best of three):
 |---|---|---|---|---|---|
 | This knowledgebase (509 files) | 0.36 s | 0.14 s | 0.06 s | 0.06 s | 0.31 s |
 | MDN `files/en-us` (14,375 files) | 3.42 s | 1.75 s | 0.85 s | 0.71 s | 4.89 s |
+
+An independent reviewer measured MDN at 4.12 s (`--force`), 2.08 s
+(incremental, no change), 2.30 s (one change), 0.83 s (`find --index`, one
+stale file) against 0.73 s clean; the format-4 snapshot is 13 % larger.
 
 On MDN the incremental build is bounded by decoding and re-serialising the
 141 MB snapshot, not by scanning: it reused 14,374 entries and re-scanned one.
