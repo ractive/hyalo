@@ -70,6 +70,19 @@ pub fn note(msg: impl AsRef<str>) {
     emit_with_prefix("note", msg.as_ref());
 }
 
+/// Emit a note that `--quiet` cannot suppress.
+///
+/// For notes that explain why an answer differs from what a reader of the
+/// files on disk would assume — the in-memory stale-index repair (DEC-339)
+/// says the snapshot is behind and names the fix. Dedup still applies.
+pub fn note_always(msg: impl AsRef<str>) {
+    emit(&Emit {
+        prefix: "note",
+        msg: msg.as_ref(),
+        force: true,
+    });
+}
+
 /// Emit a message that is *fatal* to this run, with an `error` prefix.
 ///
 /// Distinct from [`warn`] purely in what it promises the reader: a `warning:`

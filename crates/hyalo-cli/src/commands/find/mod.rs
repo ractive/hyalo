@@ -715,7 +715,7 @@ pub(crate) fn find_prepared(
             if !corpus_section_scoped
                 && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
-                && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
+                && bm25_idx.is_current()
                 && bm25_idx.doc_count() == index.entries().len()
                 && bm25_idx
                     .document_paths()
@@ -785,7 +785,7 @@ pub(crate) fn find_prepared(
             } else {
                 index
                     .bm25_index()
-                    .filter(|bm25| bm25.tokenizer_version() == TOKENIZER_VERSION)
+                    .filter(|bm25| bm25.is_current())
                     .and_then(
                         |bm25| match bm25.reconstruct_selected_tokens(&recovery_paths) {
                             Ok(tokens) => Some(tokens),
@@ -883,11 +883,26 @@ pub(crate) fn find_prepared(
                     // YAML (including tag values) does not influence scoring.
                     let raw_body = hyalo_core::frontmatter::body_only(&file_content);
 
+                    // Index line numbers are 1-based relative to the full file
+                    // (frontmatter + body): body line i is file line fm_lines + i + 1.
+                    let fm_prefix_len = file_content.len() - raw_body.len();
+                    let fm_lines = file_content[..fm_prefix_len].lines().count();
+                    let heading_file_lines: Vec<usize> = {
+                        let mut lines: Vec<usize> = entry
+                            .sections
+                            .iter()
+                            .filter(|s| s.heading.is_some())
+                            .map(|s| s.line)
+                            .collect();
+                        lines.sort_unstable();
+                        lines
+                    };
+
                     // When section filters are active, restrict the BM25 body to lines
                     // that fall within the matching section scope. This preserves the
                     // expectation that "pattern + --section X" only matches files where
                     // the pattern appears inside section X, not elsewhere in the document.
-                    let body = if corpus_section_scoped {
+                    let (body, heading_lines) = if corpus_section_scoped {
                         let scope_ranges =
                             build_section_scope(&entry.sections, section_filters, usize::MAX);
                         if scope_ranges.is_empty() {
@@ -895,26 +910,25 @@ pub(crate) fn find_prepared(
                             // in Phase 1, but guard here just in case.
                             return Ok(());
                         }
-                        // Index line numbers are 1-based relative to the full file (frontmatter + body).
-                        // Count lines in the frontmatter prefix to offset body line numbers correctly.
-                        let fm_prefix_len = file_content.len() - raw_body.len();
-                        let fm_lines = file_content[..fm_prefix_len].lines().count();
-                        raw_body
-                            .lines()
-                            .enumerate()
-                            .filter_map(|(i, line)| {
-                                // body line i corresponds to file line (fm_lines + i + 1) (1-based)
-                                let file_line = fm_lines + i + 1;
-                                if in_scope(&scope_ranges, file_line) {
-                                    Some(line)
-                                } else {
-                                    None
+                        let mut kept: Vec<&str> = Vec::new();
+                        let mut headings: Vec<usize> = Vec::new();
+                        for (i, line) in raw_body.lines().enumerate() {
+                            let file_line = fm_lines + i + 1;
+                            if in_scope(&scope_ranges, file_line) {
+                                if heading_file_lines.binary_search(&file_line).is_ok() {
+                                    headings.push(kept.len());
                                 }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
+                                kept.push(line);
+                            }
+                        }
+                        (kept.join("\n"), headings)
                     } else {
-                        raw_body.to_owned()
+                        let headings = heading_file_lines
+                            .iter()
+                            .filter(|&&l| l > fm_lines)
+                            .map(|&l| l - fm_lines - 1)
+                            .collect();
+                        (raw_body.to_owned(), headings)
                     };
 
                     let title_str =
@@ -922,11 +936,16 @@ pub(crate) fn find_prepared(
                             .to_owned();
                     let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
                     let lang = resolve_language(fm_lang, language, config_language);
+                    // BM25F tags field (DEC-337): tags, then frontmatter aliases.
+                    let mut tags = entry.tags.clone();
+                    tags.extend(hyalo_core::filter::extract_aliases(&entry.properties));
                     doc_inputs.push(DocumentInput {
                         rel_path: entry.rel_path.clone(),
                         title: title_str,
                         body,
                         language: lang,
+                        heading_lines,
+                        tags,
                     });
                     Ok(())
                 };

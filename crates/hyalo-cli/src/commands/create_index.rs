@@ -1,9 +1,14 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use hyalo_core::bm25::Bm25InvertedIndex;
+use hyalo_core::bm25::{Bm25InvertedIndex, PreTokenizedInput, TOKENIZER_VERSION, resolve_language};
 use hyalo_core::discovery;
-use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
+use hyalo_core::index::{
+    IndexEntry, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes,
+    format_mtime,
+};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::output::{CommandOutcome, Format, output_value};
 
@@ -12,6 +17,14 @@ use crate::output::{CommandOutcome, Format, output_value};
 ///
 /// Prints warnings for any skipped files, then reports the path and file count
 /// on success.
+///
+/// Incremental by default (DEC-339): when `output` already holds a
+/// current-format snapshot of this vault, built by the current tokenizer with
+/// the same `[search] code_blocks`, unchanged files (same size and mtime) keep
+/// their entries, changed and new files are re-scanned, removed files are
+/// dropped, and the BM25 postings are patched in place. `force` rebuilds
+/// from scratch.
+#[allow(clippy::fn_params_excessive_bools)]
 pub fn create_index(
     dir: &Path,
     site_prefix: Option<&str>,
@@ -19,6 +32,7 @@ pub fn create_index(
     format: Format,
     allow_outside_vault: bool,
     default_language: Option<&str>,
+    force: bool,
 ) -> Result<CommandOutcome> {
     // Determine output path
     let index_path = match output {
@@ -86,8 +100,39 @@ pub fn create_index(
         })
         .collect();
 
+    // Serialize vault_dir as a canonical string (fall back to raw display)
+    let vault_dir_str = std::fs::canonicalize(dir)
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+
+    // DEC-339: reuse the previous snapshot's unchanged entries and postings.
+    let mut previous = if force || !replacing_existing {
+        None
+    } else {
+        SnapshotIndex::load_for_reuse(&index_path)
+            .filter(|prev| prev.validate(&vault_dir_str, site_prefix))
+    };
+    let mut old_bm25 = previous.as_mut().and_then(SnapshotIndex::take_bm25_index);
+    if old_bm25.is_none() {
+        previous = None;
+    }
+    let removed = previous.as_ref().map_or(0, |prev| {
+        let discovered: HashSet<&str> = files.iter().map(|(_, rel)| rel.as_str()).collect();
+        prev.entries()
+            .iter()
+            .filter(|e| !discovered.contains(e.rel_path.as_str()))
+            .count()
+    });
+    let reused = AtomicUsize::new(0);
+    let reuse = |full: &Path, rel: &str| -> Option<IndexEntry> {
+        let entry = reusable_entry(previous.as_ref()?, full, rel, default_language)?;
+        reused.fetch_add(1, Ordering::Relaxed);
+        Some(entry)
+    };
+
     // Build the scanned index
-    let build = ScannedIndex::build(
+    let build = ScannedIndex::build_reusing(
         &files,
         site_prefix,
         &ScanOptions {
@@ -96,7 +141,10 @@ pub fn create_index(
             default_language,
             frontmatter_link_props: None,
         },
+        true,
+        &reuse,
     )?;
+    let reused = reused.into_inner();
 
     // Collect, rather than stream, the per-file diagnostics (iter-265,
     // DEC-278): `results.warnings` already carries the count, and the
@@ -110,14 +158,28 @@ pub fn create_index(
         hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
     }
 
-    // Serialize vault_dir as a canonical string (fall back to raw display)
-    let vault_dir_str = std::fs::canonicalize(dir)
-        .unwrap_or_else(|_| dir.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-
-    // Build the BM25 inverted index from tokenized entries (if any have tokens).
-    let bm25_index = Bm25InvertedIndex::build_from_entries(build.index.entries());
+    // Build the BM25 inverted index from tokenized entries (if any have
+    // tokens), or patch the previous postings with the re-scanned documents.
+    let rebuilt = old_bm25.is_none();
+    let bm25_index = match old_bm25.take() {
+        Some(mut bm25) => {
+            if !patch_postings(&mut bm25, build.index.entries()) {
+                // The previous postings disagree with the entries they were
+                // saved beside: never guess — rebuild from scratch.
+                return create_index(
+                    dir,
+                    site_prefix,
+                    output,
+                    format,
+                    allow_outside_vault,
+                    default_language,
+                    true,
+                );
+            }
+            Some(bm25)
+        }
+        None => Bm25InvertedIndex::build_from_entries(build.index.entries()),
+    };
 
     // iter-261 (BUG-5, BUG-6): record the vault's attachments alongside the
     // notes so an `--index` run resolves `![[img.png]]` and `[[Books.base]]`
@@ -184,6 +246,10 @@ pub fn create_index(
         files_indexed: file_count,
         warnings: build.warnings.len(),
         note: replacing_existing.then_some("replaced existing index"),
+        reused,
+        refreshed: files.len() - reused,
+        removed,
+        rebuilt,
     };
 
     let report = crate::commands::apply::ApplyReport {
@@ -211,4 +277,78 @@ struct CreateIndexResult<'a> {
     /// Replacement notice, omitted for a new index.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<&'a str>,
+    /// Entries kept from the previous snapshot unchanged (DEC-339).
+    reused: usize,
+    /// Files scanned and tokenized by this run (new or changed).
+    refreshed: usize,
+    /// Previous entries whose files no longer exist.
+    removed: usize,
+    /// Whether the index was built from scratch (no reusable snapshot,
+    /// a format/tokenizer/setting mismatch, or `--force`).
+    rebuilt: bool,
+}
+
+/// The previous snapshot's entry for `rel` when it still describes the file:
+/// same size and mtime, and — for a tokenized entry — the current tokenizer
+/// and the language this run would stem it with.
+fn reusable_entry(
+    previous: &SnapshotIndex,
+    full: &Path,
+    rel: &str,
+    default_language: Option<&str>,
+) -> Option<IndexEntry> {
+    let entry = previous.get(rel)?;
+    let meta = std::fs::metadata(full).ok()?;
+    if meta.len() != entry.size || format_mtime(meta.modified().ok()?, full) != entry.modified {
+        return None;
+    }
+    if let Some(version) = entry.bm25_tokenizer_version {
+        let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+        let lang = resolve_language(fm_lang, None, default_language);
+        if version != TOKENIZER_VERSION
+            || entry.bm25_language.as_deref() != Some(lang.canonical_name())
+        {
+            return None;
+        }
+    }
+    Some(entry.clone())
+}
+
+/// Patch `bm25` so it holds exactly the tokenized documents of `entries`:
+/// re-scanned entries (carrying fresh tokens) replace their old postings,
+/// documents of removed or now-untokenizable files are dropped. Returns
+/// `false` when a reused entry's document is missing from the postings.
+fn patch_postings(bm25: &mut Bm25InvertedIndex, entries: &[IndexEntry]) -> bool {
+    let live: std::collections::HashMap<&str, &IndexEntry> =
+        entries.iter().map(|e| (e.rel_path.as_str(), e)).collect();
+    let indexed: HashSet<&str> = bm25.document_paths().collect();
+    let consistent = entries.iter().all(|e| {
+        e.bm25_tokens.is_some()
+            || e.bm25_tokenizer_version.is_none()
+            || indexed.contains(e.rel_path.as_str())
+    });
+    if !consistent {
+        return false;
+    }
+    let remove: HashSet<String> = indexed
+        .iter()
+        .filter(|path| {
+            live.get(*path)
+                .is_none_or(|e| e.bm25_tokens.is_some() || e.bm25_tokenizer_version.is_none())
+        })
+        .map(|path| (*path).to_owned())
+        .collect();
+    drop(indexed);
+    let add: Vec<PreTokenizedInput> = entries
+        .iter()
+        .filter_map(|e| {
+            e.bm25_tokens.as_ref().map(|tokens| PreTokenizedInput {
+                rel_path: e.rel_path.clone(),
+                tokens: tokens.clone(),
+            })
+        })
+        .collect();
+    let remove_refs: HashSet<&str> = remove.iter().map(String::as_str).collect();
+    bm25.apply_updates(&remove_refs, add);
+    true
 }

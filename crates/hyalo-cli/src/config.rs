@@ -13,6 +13,71 @@ use hyalo_mdlint::RuleOverride;
 #[serde(deny_unknown_fields)]
 struct SearchConfig {
     language: Option<String>,
+    /// `"index"` (default) or `"skip"`: whether fenced code blocks enter the
+    /// ranked-search corpus (DEC-336).
+    code_blocks: Option<String>,
+    /// BM25F field weights (DEC-337).
+    weights: Option<SearchWeightsConfig>,
+    /// Proximity bonus for adjacent required terms (DEC-338); 0 disables.
+    proximity_bonus: Option<f64>,
+}
+
+/// `[search.weights]` in `.hyalo.toml` (DEC-337).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchWeightsConfig {
+    title: Option<f64>,
+    headings: Option<f64>,
+    tags: Option<f64>,
+    body: Option<f64>,
+}
+
+/// Resolve `[search] code_blocks`, `[search.weights]` and
+/// `[search] proximity_bonus` into the settings hyalo-core installs. An
+/// invalid value is a config error the user should see, so warn and keep the
+/// default rather than clamp silently.
+fn resolve_search_settings(search: Option<&SearchConfig>) -> hyalo_core::bm25::SearchSettings {
+    let mut settings = hyalo_core::bm25::SearchSettings::default();
+    let Some(search) = search else {
+        return settings;
+    };
+    match search.code_blocks.as_deref().map(str::trim) {
+        None | Some("index") => {}
+        Some("skip") => settings.skip_code_blocks = true,
+        Some(other) => crate::warn::warn(format!(
+            "invalid [search] code_blocks in .hyalo.toml: {other:?} (use \"index\" or \"skip\") — ignoring"
+        )),
+    }
+    let valid = |key: &str, v: f64| {
+        if v.is_finite() && v >= 0.0 {
+            Some(v)
+        } else {
+            crate::warn::warn(format!(
+                "invalid [search] {key} in .hyalo.toml: {v} must be a finite number >= 0 — ignoring"
+            ));
+            None
+        }
+    };
+    if let Some(w) = &search.weights {
+        let weights = &mut settings.weights;
+        for (key, value, slot) in [
+            ("weights.title", w.title, &mut weights.title),
+            ("weights.headings", w.headings, &mut weights.headings),
+            ("weights.tags", w.tags, &mut weights.tags),
+            ("weights.body", w.body, &mut weights.body),
+        ] {
+            if let Some(v) = value.and_then(|v| valid(key, v)) {
+                *slot = v;
+            }
+        }
+    }
+    if let Some(v) = search
+        .proximity_bonus
+        .and_then(|v| valid("proximity_bonus", v))
+    {
+        settings.proximity_bonus = v;
+    }
+    settings
 }
 
 /// Link-extraction configuration from `[links]` in `.hyalo.toml`.
@@ -343,6 +408,9 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) site_prefix: Option<String>,
     /// Default stemming language for BM25 search from `[search] language` in `.hyalo.toml`.
     pub(crate) search_language: Option<String>,
+    /// Effective `[search] code_blocks`, `[search.weights]` and
+    /// `[search] proximity_bonus` (DEC-336/337/338).
+    pub(crate) search_settings: hyalo_core::bm25::SearchSettings,
     /// Frontmatter property names scanned for `[[wikilink]]` values in the link
     /// graph. `None` = scan **every** frontmatter value (iter-262 default);
     /// `Some(list)` narrows the scan to those top-level properties.
@@ -488,6 +556,7 @@ impl PartialEq for ResolvedDefaults {
             && self.hints == other.hints
             && self.site_prefix == other.site_prefix
             && self.search_language == other.search_language
+            && self.search_settings == other.search_settings
             && self.frontmatter_link_props == other.frontmatter_link_props
             && self.frontmatter_links_enabled == other.frontmatter_links_enabled
             && self.alias_links_enabled == other.alias_links_enabled
@@ -511,6 +580,7 @@ impl ResolvedDefaults {
             hints: true,
             site_prefix: None,
             search_language: None,
+            search_settings: hyalo_core::bm25::SearchSettings::default(),
             frontmatter_link_props: None,
             frontmatter_links_enabled: true,
             // DEC-308: Obsidian does not resolve a bare `[[alias]]`.
@@ -1137,6 +1207,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         format: cfg.format,
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
+        search_settings: resolve_search_settings(cfg.search.as_ref()),
         search_language: cfg.search.and_then(|s| s.language),
         frontmatter_link_props: resolve_frontmatter_link_props(cfg.links.as_ref()),
         frontmatter_links_enabled: cfg
