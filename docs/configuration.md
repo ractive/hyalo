@@ -11,6 +11,7 @@ hints = false             # drill-down command hints (default: true)
 default_limit = 100       # max results for list commands (default: 50; 0 = unlimited)
 
 [links]
+frontmatter = true                                    # every frontmatter [[wikilink]] is a graph edge (default: true)
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
 aliases = false                                       # opt in to resolving frontmatter `aliases:` as link targets
@@ -33,6 +34,34 @@ headings = 2.0
 tags = 2.0
 body = 1.0
 
+[scan]
+include = [".claude/skills/**"]                       # hidden dot-paths the walker may enter
+exclude = ["Templates/**"]                            # files invisible to every command
+verbose_skips = false                                 # stream per-file skip diagnostics (default: false)
+
+[lint]
+ignore = ["drafts/**"]                                # paths `hyalo lint` skips
+strict = false                                        # same as always passing --strict (default: false)
+max_violations_per_rule = 3                           # text-output cap per rule (default: 3)
+max_files = 50                                        # text-output file cap (default: 50)
+profiles = ["okf"]                                    # conformance profiles plain `hyalo lint` runs
+
+[lint.rules]
+MD033 = false                                         # scalar form: enable/disable
+
+[lint.rules.MD013]
+severity = "error"                                    # table form: enabled and/or severity ("warn" | "error")
+
+[changelog]
+path = "../CHANGELOG.md"                              # changelog file, relative to this config (default: <vault>/CHANGELOG.md)
+
+[okf]
+ignore = ["_template/**"]                             # trees `okf index` / `okf log` leave alone
+
+[views.drafts]
+properties = ["status=draft"]                         # saved find filters, written by `hyalo views set`
+tag = ["rust"]
+
 [schema.default]
 required = ["title"]
 
@@ -47,8 +76,16 @@ values = ["planned", "in-progress", "completed", "superseded"]
 
 ## Config resolution: which `.hyalo.toml` applies
 
-hyalo reads **one** `.hyalo.toml` per run — the one in the current working
-directory. It does not merge configs and does not walk up the directory tree.
+hyalo reads **one** `.hyalo.toml` per run and never merges configs. It takes
+the one in the current working directory; when there is none, it adopts the
+**nearest ancestor** `.hyalo.toml` — but only if that config's vault contains
+the working directory. The walk stops at the first ancestor that has a
+`.hyalo.toml`: a nearer config pointing somewhere else does not govern the run,
+and hyalo does not look past it. An adopted ancestor config is announced on
+stderr (`note: using …/.hyalo.toml from a parent directory: the vault is …`),
+and the run covers the whole configured vault, not just the subdirectory you
+are in; pass `--dir .` to scope it to the current directory instead.
+
 `dir` inside that file names the vault, resolved relative to the config file, so
 the standard layout is a config at the repo root and a vault in a subdirectory:
 
@@ -201,6 +238,122 @@ the orphan is dot-prefixed and invisible to `hyalo find`; the next
 `hyalo create-index` run sweeps `.hyalo-case-probe-*` files older than a
 minute from the vault root.
 
+### `[links] frontmatter` — which frontmatter values are links
+
+By default a `[[wikilink]]` in **any** frontmatter value is a graph edge
+(DEC-269): `categories: ["[[Books]]"]`, `type: "[[Author]]"` or a value nested
+in a map counts for `backlinks`, `--orphan`/`--dead-end`/`--broken-links`,
+`summary.links` and HYALO006, and `mv` rewrites it.
+
+```toml
+[links]
+frontmatter = false
+```
+
+narrows the scan back to the four legacy link properties — `related`,
+`depends-on`, `supersedes` and `superseded-by` — for a vault whose frontmatter
+wikilinks are metadata rather than links. `frontmatter_properties = [...]`
+names an exact list instead and wins over `frontmatter` when both are set.
+`hyalo config --jq '.results.links'` reports both keys as configured
+(`frontmatter`, and `frontmatter_properties`, `null` when unset).
+
+## File discovery (`[scan]`)
+
+Every command walks the vault the same way, so `find`, `summary`, `lint`,
+`links *`, `mv`, `backlinks`, `create-index`, `views`, `types`, `okf` and
+`madr` agree on the file set.
+
+```toml
+[scan]
+include = [".claude/skills/**"]
+exclude = ["Templates/**", "archive/old/**"]
+verbose_skips = true
+```
+
+- **Hidden paths** (a component starting with `.`) are skipped unless
+  **`include`** names them; `.git/**` is never walked. The example makes the
+  Claude Code skill directory part of the vault.
+- **`exclude`** hides matching files from *every* command — hyalo's analogue
+  of Obsidian's "Excluded files". Naming an excluded file explicitly
+  (`--file`, a positional path) is refused with the glob that excluded it.
+  `summary` counts them under `files.excluded`. Narrower per-feature lists —
+  `[lint] ignore`, `[okf] ignore`, `[schema] exempt` — apply within what
+  survives `exclude`.
+- **`verbose_skips`** (default `false`) streams each skipped file's diagnostic
+  (for example the YAML parse excerpt) to stderr as it happens instead of one
+  end-of-run summary line; `RUST_LOG=hyalo=debug` does the same for one run.
+- **Ignore files.** The walk honours `.ignore` files everywhere and, inside a
+  git repository, `.gitignore`, `.git/info/exclude` and the global gitignore.
+  A file they hide is not discovered and is not counted under
+  `summary.skipped` or `excluded`. An explicit Markdown link to an existing
+  hidden file (`.gitignore`, `.github/workflows/ci.yml`) still resolves, without
+  adding the file to the vault.
+
+`hyalo config --jq '.results.scan'` reports the effective `include`, `exclude`
+and `verbose_skips`.
+
+## Lint settings (`[lint]`)
+
+```toml
+[lint]
+ignore = ["drafts/**", "CHANGELOG.md"]
+strict = true
+max_violations_per_rule = 5
+max_files = 100
+profiles = ["okf", "madr"]
+
+[lint.rules]
+MD033 = false
+
+[lint.rules.MD013]
+severity = "error"
+
+[lint.rules.HYALO008]
+enabled = true
+severity = "warn"
+```
+
+- **`ignore`** — vault-relative paths or globs `hyalo lint` skips (a path
+  without glob characters matches literally). A path you name with `--file`,
+  positionally or via `--files-from` is linted anyway (DEC-284); select with
+  `--glob` to keep the ignore list applied. Other commands are unaffected.
+- **`strict`** (default `false`) — behaves as if every `hyalo lint` passed
+  `--strict`, which promotes the schema's missing-`type` and
+  undeclared-property warnings, `HYALO003`, `HYALO004`, `HYALO006`, `HYALO007`
+  and `HYALO008` to errors. A HYALO rule keeps a severity set explicitly below;
+  the schema warnings (`SCHEMA`) always become errors and take no override.
+  There is no command-line switch to turn a configured `strict = true` off.
+- **`max_violations_per_rule`** (default 3) and **`max_files`** (default 50) —
+  caps for the summary output; `--max-per-rule` overrides the first per run
+  (`0` = unlimited) and `--detailed` lists everything.
+- **`profiles`** — conformance profiles (`okf`, `madr`, `skills`, `changelog`)
+  that plain `hyalo lint` runs as if `--profile <name>` were passed for each.
+  `hyalo init --profile <name>` writes this list. The singular
+  `profile = "okf"` is accepted as a deprecated alias.
+- **`[lint.rules]`** — per-rule overrides, either a scalar (`MD033 = false`)
+  or a table with `enabled` and/or `severity` (`"warn"` | `"error"`). Manage
+  them with `hyalo lint-rules set <ID> --enabled false` /
+  `--severity error` and `hyalo lint-rules remove <ID>`; `hyalo lint-rules
+  list` shows every rule with its effective state.
+
+## Changelog and OKF paths (`[changelog]`, `[okf]`)
+
+```toml
+[changelog]
+path = "../CHANGELOG.md"
+
+[okf]
+ignore = ["_template/**", "test/fixture-vault/**"]
+```
+
+- **`[changelog] path`** — the file `changelog add`, `changelog release` and
+  `lint --profile changelog` work on, resolved relative to the directory
+  holding `.hyalo.toml`. Default: `CHANGELOG.md` in the vault. It may point
+  outside the vault (a repo-root changelog when the vault is `docs/`) but not
+  above the repository root.
+- **`[okf] ignore`** — globs whose files `okf index` and `okf log` neither
+  index nor generate into, independent of `[lint] ignore`.
+
 ## Persistent auto-link exclusions
 
 `hyalo links auto` links unlinked mentions of page titles. On a vault whose
@@ -345,7 +498,8 @@ accept-everything behaviour.
 
 Proposals below the floor are still reported: `fuzzy_below_floor` counts them
 in JSON and the text report marks each one `— below floor`. `hyalo config`
-prints the floor in force as `links.fuzzy_min_confidence`.
+prints the floor in force as `links.fuzzy_min_confidence` in text output and
+as `results.links_fuzzy_min_confidence` in `--format json`.
 
 Measured on the GitHub Docs corpus (3,710 files, 6,099 broken links), scoring
 proposals against the `redirect_from` metadata GitHub maintains as ground
@@ -451,6 +605,18 @@ hyalo find --view drafts                          # recall
 hyalo find --view drafts --tag rust               # extend with additional filters
 ```
 
+`views set` stores the filters as a `[views.<name>]` table in `.hyalo.toml`,
+one key per `find` flag (`properties`, `tag`, `glob`, …), so a view can also be
+written by hand:
+
+```toml
+[views.drafts]
+properties = ["status=draft"]
+tag = ["rust"]
+```
+
+`hyalo views list` prints them and `hyalo views remove <name>` deletes one.
+
 ## CWD-aware behaviour
 
 When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _context-aware_:
@@ -459,7 +625,7 @@ When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _contex
 - **`hyalo --version`** appends `(kb dir: <dir>)` so the resolved directory is visible at a glance. The base version string also includes the git short-sha and commit date when hyalo was built from a checkout — e.g. `hyalo 0.20.0 (abc123def456 2026-05-26)`. A `+dirty` suffix marks builds made with uncommitted changes. Set `CARGO_HYALO_FORCE_NO_GIT=1` at build time to force the bare semver form.
 - **`hyalo summary`** includes the resolved `kb dir:` as its first output line. The `--format json` envelope exposes the same value as a top-level `dir` field alongside `total`, `tags`, `properties`, etc.
 - **`hyalo config`** prints the full resolved configuration — handy for debugging `.hyalo.toml` resolution or feeding config into an LLM context. `--format json` uses the standard envelope, so `hyalo config --jq '.results.dir'` works like it does everywhere else; the config's own hints switch is reported as `results.hints_enabled` so it never collides with the envelope's `hints` array. `dir` is also hoisted to the envelope root.
-- Running from _inside_ the vault directory emits a warning banner suggesting you `cd ..` to the project root so hyalo can find `.hyalo.toml`.
+- Running from _inside_ the vault directory still uses the project's `.hyalo.toml` (see [Config resolution](#config-resolution-which-hyalotoml-applies)); `hyalo --help` adds a banner suggesting you run from the project root instead.
 - Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time `note:` that `--dir` is redundant. The config still applies — see [Config resolution](#config-resolution-which-hyalotoml-applies).
 
 ## Drill-down hints
@@ -474,10 +640,12 @@ Commands append a short list of follow-up commands unless `hints = false` (or
 ```
 
 In `--format json` every hint object carries a boolean `writes` field, so an
-agent can execute the read-only ones unattended:
+agent can execute the read-only ones unattended. Read them from plain
+`--format json`: `--jq` computes no hints, so `.hints` under a filter is always
+`[]` (DEC-313). Pipe the envelope to an external `jq` instead:
 
 ```sh
-hyalo find --tag rust --format json --jq '[.hints[] | select(.writes | not) | .cmd]'
+hyalo find --tag rust --format json | jq '[.hints[] | select(.writes | not) | .cmd]'
 ```
 
 ## Snapshot index

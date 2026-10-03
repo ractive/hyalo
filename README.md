@@ -173,24 +173,25 @@ hyalo find --property status=planned --filenames-only | sort
 # Sequence-keyed documents: glob by number (recursively reaches archived files)
 hyalo find --glob '**/iteration-206-*.md' --filenames-only
 
-# Bulk-update metadata
-hyalo set --property status=reviewed --where-tag research
+# Bulk-update metadata (drop --dry-run to write)
+hyalo set --property status=reviewed --where-tag research --dry-run
 
 # Move or rename — every [[wikilink]] and [markdown](link) across the vault is rewritten
-hyalo mv old/path.md archive/path.md
+hyalo mv old/path.md archive/path.md --dry-run
 
-# Detect and repair broken links
-hyalo links fix --apply
+# Detect and repair broken links (preview; add --apply to write)
+hyalo links fix --dry-run
 
-# Convert unlinked mentions of known page titles into [[wikilinks]]
-hyalo links auto --apply
+# Convert unlinked mentions of known page titles into [[wikilinks]] (preview; add --apply to write)
+hyalo links auto --dry-run
 
 # Validate frontmatter against your schema and the markdown body against bundled lint rules
 hyalo lint
-hyalo lint --fix     # apply autofixes
+# Preview autofixes; drop --dry-run to apply them
+hyalo lint --fix --dry-run
 
-# Scaffold a new file from a type schema
-hyalo new --type iteration --file iterations/iter-99-example.md
+# Scaffold a new file from a type schema (preview; drop --dry-run to write)
+hyalo new --type iteration --file iterations/iter-99-example.md --dry-run
 ```
 
 Commands that expose `--dry-run` preview their documented changes before applying them. Other mutations, including task toggles, report their exact behavior in `hyalo <cmd> --help`.
@@ -288,7 +289,8 @@ matched tag avoids extension/binary drift; the tag form needs ≥ v0.21.0,
 earlier tags predate the root package manifest):
 
 ```sh
-pi install git:github.com/ractive/hyalo@v0.21.0
+# replace X.Y.Z with the version `hyalo --version` prints
+pi install git:github.com/ractive/hyalo@vX.Y.Z
 ```
 
 This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, and `hyalo_task`) plus the `hyalo` and `hyalo-tidy` skills. The extension runs a post-write lint guardrail for typed `hyalo_set`/`hyalo_task` effects and Pi host write/edit events; generic mutation calls retain their normal CLI result and diagnostics. A main-HEAD install updates independently of hyalo releases via `pi update --extensions`; a pinned-tag install moves only on an explicit re-pin (`pi install git:…@vX.Y.Z`).

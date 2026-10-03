@@ -1,9 +1,11 @@
 # hyalo pi package
 
 This directory is the pi integration package for hyalo. It is the **single
-source of truth** for the pi extension and skills — the hyalo binary embeds
-these same files (via `include_str!`) and writes them to `.pi/` with
-`hyalo init --pi` (the vendored fallback).
+source of truth** for the pi extension and skills. The hyalo binary embeds a
+vendored copy of them from `crates/hyalo-cli/templates/pi/` (via `include_str!`,
+because `cargo package` cannot reach files outside the crate), kept byte-identical
+by `just sync-pi-package` and gated by `check-pi-package-sync`, and writes them to
+`.pi/` with `hyalo init --pi` (the vendored fallback).
 
 ## Install
 

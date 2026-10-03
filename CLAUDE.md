@@ -20,9 +20,9 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` (text) or `hyalo config --format json` — shows effective dir, config path, hints, format, site_prefix, and the effective `[links.auto]` auto-link settings; `--raw` adds the file's text, and `results.malformed` / `results.parse_error` report a config that exists but does not parse. JSON uses the standard envelope, so `hyalo config --jq '.results.dir'` works
 - **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
-- **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set iterations/iteration-16-robustness.md --property status=completed`)
+- **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set iterations/done/iteration-16-robustness.md --property status=completed`)
 - **Toggle tasks**: `hyalo task toggle <path> --all` (whole file), `--section "Tasks"` (by heading), `--line 5,7,9` (specific lines)
-- **Lint frontmatter + markdown body**: `hyalo lint`, `hyalo lint --rule MD013 --detailed`, `hyalo lint --rule-prefix HYALO`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --fix --dry-run`, `hyalo lint --fix`, `hyalo lint --fix --fix-rule HYALO001`
+- **Lint frontmatter + markdown body**: `hyalo lint`, `hyalo lint --rule MD013 --detailed`, `hyalo lint --rule-prefix HYALO`, `hyalo lint --strict` (promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity)), `hyalo lint --fix --dry-run`, `hyalo lint --fix`, `hyalo lint --fix --fix-rule HYALO001`
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show MD013`, `hyalo lint-rules set MD013 --enabled false`, `hyalo lint-rules set MD013 --severity error`, `hyalo lint-rules remove MD013`
 - **Manage schemas**: `hyalo types list`, `hyalo types show <name>`, `hyalo types set <name> --required title,date`
 - Only fall back to Edit for body content changes (markdown prose) that hyalo can't handle
