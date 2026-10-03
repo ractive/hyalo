@@ -78,6 +78,19 @@ the corrected query, and carries a top-level `suggestions: [{term, candidates: [
 docs}]}]` key. `hyalo terms [PREFIX]` lists `{term, docs}` (`--limit`, default 50, 0 =
 unlimited).
 
+Find the paragraph, not just the file: `hyalo find 'snapshot index' --granularity section
+--limit 5` returns one hit per matching section (`{file, section: {heading, level,
+line_start, line_end, path}, score, matches}`), then follow each hit's read hint
+(`hyalo read <file> --section '<heading>'` or `--lines A:B`). A section must hold every
+positive term itself; negations and field terms stay file-level (DEC-334). `--limit`
+counts sections; `--sort`, `--reverse`, `--fields` and `-e` are rejected.
+
+See the distribution of a match set: `hyalo find --tag iteration --facet property:status
+--facet dir` adds a top-level `facets: [{facet, buckets: [{value, count}], truncated}]`
+counting FILES over the full match set before `--limit` (DEC-335). Specs: `tags` (exact,
+no prefix folding), `property:K` (top-level key; missing/null counts under `null`),
+`type`, `dir`. At most 50 buckets per facet; hints drill into the 3 largest.
+
 For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
 
 Stemmer language: `--stemmer french` (or the older `--language french`) selects the French

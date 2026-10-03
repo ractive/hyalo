@@ -694,6 +694,11 @@ type FileObject = {
 };
 
 /**
+ * Result granularity of a ranked `find` (iteration 303, DEC-334).
+ */
+type Granularity = "file" | "section";
+
+/**
  * Arguments accepted by `hyalo find`.
  *
  * The generated TypeScript declaration is the source for the public API's
@@ -842,6 +847,34 @@ type FindArgs = {
      * for a meaningful sort.
      */
     sort?: string;
+    /**
+     * file (default)|section: rank files or sections
+     *
+     * `section` turns a ranked PATTERN search into one result per matching SECTION:
+     * {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
+     * are flat (a heading runs to the next heading of any level; text before the first
+     * heading is a section with heading null and level 0). A section is a hit only when it
+     * satisfies the query's positive terms on its own; negations and field terms
+     * (title:/heading:/tag:/path:) apply to the whole file. Scores use the corpus IDF and
+     * section-length normalisation. --limit counts sections and --section restricts which
+     * sections are eligible. Requires PATTERN with at least one text term; --regexp, --sort,
+     * --reverse and --fields are rejected in section mode (exit 1).
+     */
+    granularity?: Granularity;
+    /**
+     * Count hits per tags|property:K|type|dir (repeatable)
+     *
+     * Facet counts over the FULL match set, computed before --limit, emitted as a top-level
+     * `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
+     * exact tag (no prefix buckets); `property:K` counts files per scalar value of
+     * frontmatter K (each element of a list counts, a missing or null value counts under a
+     * `null` bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
+     * directory ("." for files at the vault root). Buckets sort by count (desc) then value and
+     * are capped at 50 per facet (`truncated: true`). In --granularity section mode the
+     * counts are files with at least one section hit. Works with every query, --jq and
+     * --count; an unknown spec is a user error (exit 1).
+     */
+    facet: Array<string>;
     /**
      * Reverse the sort order [alias: --desc]
      *

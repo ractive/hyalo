@@ -28,6 +28,18 @@ and this project adheres to
   document frequency, most frequent first; `--limit` (default 50, 0
   unlimited), `--index`/`--index-file`, `--jq` and `--count` work as
   elsewhere.
+- `find PATTERN --granularity section` returns one ranked hit per matching
+  section (`{file, section: {heading, level, line_start, line_end, path},
+  score, matches}`) instead of per file (DEC-334). A section must satisfy the
+  query's positive terms on its own; negations and field terms stay
+  file-level. Scores use the corpus IDF with section-length normalisation,
+  `--limit` counts sections, `--section` restricts eligible sections, and each
+  hit hints a `hyalo read` that shows it. Same answer with `--index`.
+- `find --facet tags|property:K|type|dir` (repeatable) adds a top-level
+  `facets` key with per-value file counts over the full match set, computed
+  before `--limit`, at most 50 buckets per facet with `truncated` (DEC-335).
+  Text mode prints a block per facet, hints drill into the largest buckets,
+  and `--jq` sees `.facets`.
 
 ### Fixed
 

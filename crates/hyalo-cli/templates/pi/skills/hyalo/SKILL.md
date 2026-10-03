@@ -124,6 +124,11 @@ hyalo find 'title:iteration conf*'       # Field term + prefix over stems
 scores 0 without snippets, and an unknown `foo:bar` is a plain word. Zero results carry a
 `suggestions` key; `hyalo terms [PREFIX]` lists the stemmed dictionary.
 
+Find the paragraph: `hyalo find 'query' --granularity section --limit 5` returns one hit per
+matching section (`section: {heading, level, line_start, line_end, path}`); follow its read
+hint. See the distribution: `hyalo find --tag X --facet property:status --facet dir` adds
+`facets` (file counts over the full match set, before `--limit`).
+
 For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
 
 ## Property & Tag Filtering

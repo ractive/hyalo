@@ -26,6 +26,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   unknown `foo:bar` is a plain word; unbalanced `(`/`()`/bare `*` exit 1. Terms are stemmed in
   every vault language. Zero results carry `suggestions` (did-you-mean) and a corrected-query
   hint; `hyalo terms [PREFIX]` lists the stemmed dictionary with document counts.
+- **Find the paragraph** (DEC-334): `hyalo find 'query' --granularity section --limit 5` returns
+  one hit per section (`section: {heading, level, line_start, line_end, path}`); follow the read
+  hint. A section must hold every positive term itself; `--sort`/`--fields`/`-e` exit 1.
+- **See the distribution** (DEC-335): `hyalo find --tag X --facet property:status --facet dir`
+  adds `facets` — file counts over the full match set before `--limit` (`tags`, `property:K`,
+  `type`, `dir`; missing values under `null`; 50 buckets max with `truncated`).
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
   the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor
