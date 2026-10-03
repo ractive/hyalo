@@ -772,9 +772,15 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                         "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
                     ));
                 }
-                Ok(PropertyConstraint::Enum {
-                    values: raw.values.unwrap_or_default(),
-                })
+                // A missing or empty `values` list makes every value fail
+                // lint with no way to satisfy the constraint; reject it at
+                // load time like every other shape error instead of letting
+                // it silently become unsatisfiable (iteration 306 review).
+                let values = raw.values.unwrap_or_default();
+                if values.is_empty() {
+                    return Err("'enum' properties require a non-empty 'values' list".to_owned());
+                }
+                Ok(PropertyConstraint::Enum { values })
             }
             "string-list" => {
                 if raw.pattern.is_some() {
@@ -1905,6 +1911,57 @@ type = \"adr\"
             err.contains("'minimum'") && err.contains("'string'"),
             "expected a type-mismatch error naming both fields, got: {err}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Iteration 306 review: an `enum` constraint without `values` (or with an
+    // empty `values` list) is unsatisfiable by every value — reject it at
+    // load time instead of silently failing lint forever.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn enum_without_values_is_config_error() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("enum".to_owned()),
+            ..Default::default()
+        };
+        let err = PropertyConstraint::try_from(raw)
+            .expect_err("enum with no 'values' should be rejected");
+        assert!(
+            err.contains("'enum'") && err.contains("'values'"),
+            "expected an enum/values shape error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn enum_with_empty_values_is_config_error() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("enum".to_owned()),
+            values: Some(Vec::new()),
+            ..Default::default()
+        };
+        let err = PropertyConstraint::try_from(raw)
+            .expect_err("enum with empty 'values' should be rejected");
+        assert!(
+            err.contains("'enum'") && err.contains("'values'"),
+            "expected an enum/values shape error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn enum_with_values_still_parses() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("enum".to_owned()),
+            values: Some(vec!["a".to_owned(), "b".to_owned()]),
+            ..Default::default()
+        };
+        let constraint = PropertyConstraint::try_from(raw).expect("should parse");
+        match constraint {
+            PropertyConstraint::Enum { values } => {
+                assert_eq!(values, vec!["a".to_owned(), "b".to_owned()]);
+            }
+            other => panic!("expected Enum constraint, got {other:?}"),
+        }
     }
 
     #[test]

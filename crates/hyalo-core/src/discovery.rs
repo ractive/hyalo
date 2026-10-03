@@ -380,11 +380,63 @@ fn discover_files_with_include_ext(
     include: Option<&ScanInclude>,
     kind: FileKind,
 ) -> Result<Vec<PathBuf>> {
+    discover_files_with_include_ext_policy(dir, include, kind, true, true)
+}
+
+/// [`discover_files`] variant that does not honour `.gitignore`, used only to
+/// measure how many `.md` files it is hiding from a normal vault sweep
+/// (`summary`'s `results.files.excluded`, iteration 306 / F5). Never used for
+/// a read or write path: a gitignored file stays invisible to every other
+/// command unless named explicitly (DEC-301).
+pub fn discover_files_ignoring_gitignore(dir: &Path) -> Result<Vec<PathBuf>> {
+    let include = match SCAN_INCLUDE.get() {
+        Some(Some(inc)) => Some(inc),
+        _ => None,
+    };
+    // `record_scan_exclude_stats: false` — this walk's own `[scan] exclude`
+    // drops must not perturb `scan_excluded_count()`, which `summary` already
+    // populates from the real (gitignore-respecting) walk.
+    discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, false, false)
+}
+
+/// How many `.md` files under `dir` a normal (gitignore-respecting) vault
+/// sweep never sees because `.gitignore` hides them (iteration 306 / F5).
+///
+/// Walks the vault twice — once as [`discover_files`] does, once ignoring
+/// `.gitignore` — and returns the size of the set difference between the two,
+/// so a file already dropped by `[scan] exclude` on both walks is not counted
+/// twice. `summary` folds this into `results.files.excluded` alongside
+/// `[scan] exclude` drops, since both describe a file the vault "lost" to an
+/// exclusion rule rather than to a read/parse failure.
+///
+/// The extra walk is confined to `summary`, which already performs one full
+/// sweep per run; no other command pays this cost.
+pub fn count_gitignore_dropped(dir: &Path) -> Result<usize> {
+    let respecting: HashSet<PathBuf> = discover_files(dir)?.into_iter().collect();
+    let ignoring = discover_files_ignoring_gitignore(dir)?;
+    Ok(ignoring
+        .into_iter()
+        .filter(|p| !respecting.contains(p))
+        .count())
+}
+
+/// The shared vault walk, parameterized by which files to keep, whether
+/// `.gitignore` applies, and whether a `[scan] exclude` drop on this walk
+/// should be folded into the process-wide `scan_excluded_count()` (iteration
+/// 306 / F5: the gitignore-counting walk above must not double-count against
+/// that statistic).
+fn discover_files_with_include_ext_policy(
+    dir: &Path,
+    include: Option<&ScanInclude>,
+    kind: FileKind,
+    respect_gitignore: bool,
+    record_scan_exclude_stats: bool,
+) -> Result<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel::<String>();
     let walk_root = dir.to_path_buf();
     let mut builder = WalkBuilder::new(dir);
-    builder.git_ignore(true);
+    builder.git_ignore(respect_gitignore);
     if let Some(inc) = include {
         // Take over hidden-skipping so `[scan] include` can re-admit specific
         // dot-subtrees. `filter_entry` prunes hidden dirs/files not covered by
@@ -512,7 +564,7 @@ fn discover_files_with_include_ext(
         let before = kept.len();
         kept.retain(|p| !exc.is_excluded(&relative_path(dir, p)));
         let dropped = before - kept.len();
-        if dropped > 0 {
+        if dropped > 0 && record_scan_exclude_stats {
             note_scan_excluded(dropped);
         }
     }
@@ -2250,8 +2302,18 @@ pub fn directory_for_index_file(rel: &str) -> Option<&str> {
     if rel.len() <= SUFFIX_LEN {
         return None;
     }
-    let (dir, suffix) = rel.split_at(rel.len() - SUFFIX_LEN);
-    suffix.eq_ignore_ascii_case("/index.md").then_some(dir)
+    let split_at = rel.len() - SUFFIX_LEN;
+    // Compare bytes first: `rel.split_at(split_at)` can panic when a
+    // multi-byte character straddles `split_at` and `rel` does not actually
+    // end in `/index.md` (F2, dogfood 2026-10-03 — a filename containing a
+    // 4-byte emoji crashed batch `mv`'s outbound-link resolution). Matching
+    // on the raw bytes needs no char-boundary check; only the ASCII suffix
+    // `/index.md` guarantees `split_at` lands on one, so the string slice
+    // below is safe exactly when the comparison succeeds.
+    let suffix = &rel.as_bytes()[split_at..];
+    suffix
+        .eq_ignore_ascii_case(b"/index.md")
+        .then(|| &rel[..split_at])
 }
 
 /// Resolve a link target to a file path relative to the vault root.

@@ -1562,6 +1562,22 @@ Body
         assert_eq!(extract_fence_language("```  sh  ", '`', 3), "sh");
     }
 
+    /// A mismatched precondition (iteration 306 review): `extract_fence_language`
+    /// is `pub` across the crate boundary (`hyalo-mdlint` calls it directly), so
+    /// a `fence_count` the line's actual fence run does not support, or a
+    /// multi-byte `fence_char` whose repeated length overruns the line, must
+    /// report no language instead of panicking on an out-of-bounds /
+    /// char-boundary-violating slice.
+    #[test]
+    fn extract_fence_language_mismatched_precondition_does_not_panic() {
+        // `fence_count` far exceeds the line's length.
+        assert_eq!(extract_fence_language("```rust", '`', 1000), "");
+        // A multi-byte `fence_char` whose `len_utf8() * fence_count` would
+        // land mid-character, or past the end, of a short line.
+        assert_eq!(extract_fence_language("é", 'é', 3), "");
+        assert_eq!(extract_fence_language("", '`', 3), "");
+    }
+
     // --- Comment block tests (simple callback scanner) ---
 
     #[test]
