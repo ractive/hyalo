@@ -264,6 +264,59 @@ fn bulk_workers_transfer_distinct_directories_and_defer_finalization_failure() {
     }
 }
 
+/// `lint --fix` (codebase review 2026-10-03 item 3, DEC-317 follow-up) gives
+/// each file processed on the rayon pool its own `.worker()` and absorbs
+/// every one back into a single top-level session, exactly like the
+/// `BulkRewrite` pattern above. This pins the actual deduplication a 10-file
+/// fix run depends on: ten files sharing two directories must leave the
+/// top-level session queuing two directory fences, not ten — the whole point
+/// of batching `Durability::PerDirectory`'s deferred fsync instead of paying
+/// it once per file (`Durability::PerFile`, which never queues at all).
+#[test]
+fn lint_fix_shaped_workers_batch_per_directory_fsync_by_directory_not_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let mut session = WriteSession::new(Durability::PerDirectory);
+    let names: Vec<String> = (0..10)
+        .map(|i| {
+            if i % 2 == 0 {
+                format!("note{i}.md")
+            } else {
+                format!("nested/note{i}.md")
+            }
+        })
+        .collect();
+    for name in &names {
+        std::fs::write(dir.path().join(name), b"old").unwrap();
+    }
+    for name in &names {
+        let mut worker = session.worker();
+        let (effect, _receipt) = root
+            .capture(&RelativeName::new(name.as_str()).unwrap())
+            .unwrap()
+            .prepare(b"new", &worker)
+            .unwrap()
+            .commit_with_receipt(&mut worker)
+            .unwrap();
+        // `record()` under `PerDirectory` only queues the directory; it never
+        // fsyncs inline, so every one of the ten per-file commits reports a
+        // clean `Committed`-shaped effect with no finalization error yet.
+        assert!(effect.finalization_error().is_none());
+        session.absorb(worker);
+    }
+    assert_eq!(
+        session.directories.len(),
+        2,
+        "ten files across two directories must queue exactly two fences, \
+         not one per file"
+    );
+    assert!(session.finish().is_ok());
+    for name in &names {
+        assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"new");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn external_symlinks_are_refused_and_internal_aliases_keep_the_entry() {

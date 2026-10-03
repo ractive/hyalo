@@ -168,6 +168,14 @@ pub(super) fn hints_for_backlinks(
 pub(super) fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
+    // codebase review 2026-10-03 item 6: single-file `--on-conflict skip`
+    // reports the untouched source under `skipped` — nothing was moved, and
+    // `to` still names the pre-existing file that blocked it.
+    let skipped_single = data
+        .get("skipped")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|skipped| !skipped.is_empty());
+
     let to_path = data.get("to").and_then(|t| t.as_str());
     let is_dry_run = data
         .get("dry_run")
@@ -177,12 +185,26 @@ pub(super) fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<H
     if let Some(to_path) = to_path {
         if is_dry_run {
             if let Some(from_path) = data.get("from").and_then(|f| f.as_str()) {
+                // BUG (codebase review 2026-10-03 item 6): this hint used to
+                // drop `--on-conflict skip`, so applying a dry run that
+                // reported a skip re-hit the same destination conflict under
+                // the default `error` policy and exited 1 instead of
+                // reproducing the skip the dry run just previewed.
+                let extra: &[&str] = if ctx.mv_on_conflict_skip {
+                    &["--to", to_path, "--on-conflict", "skip"]
+                } else {
+                    &["--to", to_path]
+                };
                 hints.push(Hint::new(
                     "Apply this move",
-                    build_command_with_file(ctx, &["mv"], from_path, &["--to", to_path]),
+                    build_command_with_file(ctx, &["mv"], from_path, extra),
                 ));
             }
-        } else {
+        } else if !skipped_single {
+            // A skip that already happened (no `--dry-run`) moved nothing —
+            // `to_path` names the file that was already there, not a moved
+            // one, so "read/verify the moved file" would inspect the wrong
+            // (or the same pre-existing, unrelated) file.
             hints.push(Hint::new(
                 "Read the moved file",
                 build_command_with_file(ctx, &["read"], to_path, &[]),

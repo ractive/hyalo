@@ -434,14 +434,28 @@ pub(crate) fn set_type(
     // configuration. This makes malformed input, aliases, output limits and
     // source conflicts deterministic preflight failures for the whole
     // config+notes operation.
+    //
+    // The vault is discovered up front (instead of after the change set is
+    // constructed) so its size — not a hardcoded `0` — drives the DEC-317
+    // durability threshold below: every file is captured during the scan
+    // regardless of `type:` match (iter-306 review follow-up, item 3), so
+    // `0` forced `Durability::PerFile` even for a `--default` run touching
+    // hundreds of notes.
+    let all_vault_files = if defaults_map.is_empty() {
+        Vec::new()
+    } else {
+        discovery::discover_files(dir)?
+    };
     let mut default_changes = if defaults_map.is_empty() {
         None
     } else {
-        Some(super::apply::PreparedChangeSet::new(dir, 0)?)
+        Some(super::apply::PreparedChangeSet::new(
+            dir,
+            all_vault_files.len(),
+        )?)
     };
     let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
     if let Some(changes) = &mut default_changes {
-        let all_vault_files = discovery::discover_files(dir)?;
         for full_path in &all_vault_files {
             let rel = discovery::relative_path(dir, full_path);
             let captured = changes.capture(&rel)?;

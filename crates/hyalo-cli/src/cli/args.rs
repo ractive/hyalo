@@ -1182,6 +1182,13 @@ pub(crate) enum Commands {
             named path the snapshot has never seen is read from disk for that run (a note added \
             since the last create-index is never invisible); a path in neither the snapshot nor \
             the vault is still `file not found`, exit 1.\n\
+            GITIGNORE: every scan honours `.gitignore` the same way `git` does, in addition to \
+            `[scan] exclude` in .hyalo.toml — a gitignored .md file never appears in an unscoped \
+            `find`, is not a graph edge for --orphan/--dead-end, and is counted under \
+            `hyalo summary`'s `results.files.excluded` (iteration 306). A path you NAME (--file, \
+            positional, --files-from) is still a promise and is always returned, with every \
+            --fields combination, even when it is gitignored -- including in backlinks/orphan/\
+            dead-end scans, which otherwise rebuild the whole-vault file list.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
@@ -1380,7 +1387,8 @@ pub(crate) enum Commands {
             UNUSABLE FILES: `results.files.total` counts only the notes hyalo could read.\n\
             `results.files.skipped` counts files whose YAML frontmatter would not parse (list\n\
             them with `hyalo lint --rule HYALO005`) and `results.files.excluded` counts files\n\
-            dropped by `[scan] exclude` in .hyalo.toml; each entry in\n\
+            dropped by `[scan] exclude` in .hyalo.toml OR by a `.gitignore` match (every scan\n\
+            respects `.gitignore` the same way `git` does, iteration 306); each entry in\n\
             `results.files.directories` carries its own `skipped` (omitted when zero) so the\n\
             unusable files can be located. Text mode renders both inline as\n\
             'Files: 75 (28 skipped, 0 excluded)', and prints the bare 'Files: N' when there is\n\
@@ -2433,11 +2441,13 @@ Repeatable (AND).\n\
         /// Requires --fix: on its own it has nothing to restrict, and clap rejects it.
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
-        /// Promote schema warnings (missing type, undeclared property, date format) to errors
+        /// Promote schema, frontmatter-shape and link-check warnings (HYALO003/004/006/007/008) to errors
         ///
-        /// Promotes "no 'type' property", "undeclared property in frontmatter" and
-        /// date-format violations (HYALO003) to errors, so lint exits non-zero when those
-        /// issues are found.
+        /// Promotes to error, unless the rule's own severity is explicitly
+        /// configured: "no 'type' property" and "undeclared property in
+        /// frontmatter" (SCHEMA), date/datetime-format (HYALO003/HYALO004),
+        /// a non-scalar `title` (HYALO007), and a broken link target or
+        /// heading anchor (HYALO006/HYALO008).
         ///
         /// Note: missing-type and undeclared-property promotions require a
         /// `[schema.types.*]` block in `.hyalo.toml` — on a schema-less vault

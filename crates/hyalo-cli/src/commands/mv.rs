@@ -126,6 +126,11 @@ struct BatchMvResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     /// Vault-relative files left unchanged.
     skipped: Vec<String>,
+    /// Sources already sitting at their computed destination — a no-op move,
+    /// not a conflict (codebase review 2026-10-03 item 6). Previously dropped
+    /// from the plan with no trace anywhere in the output.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skipped_noop: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +340,7 @@ pub fn mv_batch(
     }
 
     // 4. Build rename map (old_rel → new_rel), detect collisions.
-    let (renames, conflicts, skipped, collisions) =
+    let (renames, conflicts, skipped, collisions, skipped_noop) =
         match build_rename_map(dir, &sources, &to_dir, on_conflict, format, apply) {
             Ok(t) => t,
             Err(outcome) => return Ok(*outcome),
@@ -409,6 +414,7 @@ pub fn mv_batch(
         dry_run: !apply,
         conflicts,
         skipped,
+        skipped_noop,
     };
 
     // 7. Apply if requested.
@@ -529,6 +535,7 @@ fn build_rename_map(
         Vec<String>,
         Vec<String>,
         Vec<Collision>,
+        Vec<String>,
     ),
     Box<CommandOutcome>,
 > {
@@ -549,8 +556,22 @@ fn build_rename_map(
         proposed.push((src.clone(), new_rel));
     }
 
-    // Drop no-op renames (source already at destination).
-    proposed.retain(|(old_rel, new_rel)| old_rel != new_rel);
+    // Drop no-op renames (source already at destination). Reported under
+    // `skipped_noop` (codebase review 2026-10-03 item 6) rather than
+    // vanishing from the plan in silence: a batch selecting a file that is
+    // already in the target directory (e.g. `--tag beta --to other/` where
+    // `other/UPPERCASE.md` already lives there) used to report fewer moves
+    // than files matched, with no explanation anywhere in the output.
+    let mut skipped_noop: Vec<String> = Vec::new();
+    proposed.retain(|(old_rel, new_rel)| {
+        if old_rel == new_rel {
+            skipped_noop.push(old_rel.clone());
+            false
+        } else {
+            true
+        }
+    });
+    skipped_noop.sort();
 
     // H-3: reject destinations that would escape the vault through a
     // symlinked directory component, even when the destination's parent
@@ -662,7 +683,7 @@ fn build_rename_map(
                 .into_iter()
                 .filter(|(s, _)| !skipped_set.contains(s.as_str()))
                 .collect();
-            return Ok((final_renames, vec![], skipped, vec![]));
+            return Ok((final_renames, vec![], skipped, vec![], skipped_noop));
         }
         // BUG-25 (dogfood v0.22.0), iter-275 MV-5: a **dry run** lists the
         // collisions and still plans everything else, so `--dry-run` answers
@@ -689,7 +710,7 @@ fn build_rename_map(
                 .into_iter()
                 .filter(|(_, dst)| !all_collision_dests.contains(dst))
                 .collect();
-            return Ok((planned, vec![], vec![], collisions));
+            return Ok((planned, vec![], vec![], collisions, skipped_noop));
         }
         // Default (`--apply`): error.
         //
@@ -729,7 +750,7 @@ fn build_rename_map(
         return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
-    Ok((proposed, vec![], vec![], vec![]))
+    Ok((proposed, vec![], vec![], vec![], skipped_noop))
 }
 
 // ---------------------------------------------------------------------------

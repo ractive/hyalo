@@ -1994,6 +1994,77 @@ fn lint_fix_md047_converges_in_one_run() {
     assert_eq!(results2.files.len(), 0);
 }
 
+/// Codebase review 2026-10-03 item 3 / DEC-317 follow-up: a `lint --fix` run
+/// over more than 8 files takes the batched `Durability::PerDirectory` path
+/// (`crates/hyalo-core/src/rooted/tests.rs` pins the underlying per-directory
+/// fsync deduplication this relies on). Ten files, split across two
+/// directories so the shared top-level write session absorbs more than one
+/// file per directory, must all converge correctly in one `--fix` run —
+/// nothing about running every file's write through a shared session instead
+/// of each file finishing its own may drop, duplicate, or corrupt a write.
+#[test]
+fn lint_fix_batches_ten_files_across_two_directories() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    std::fs::create_dir(tmp.path().join("nested")).unwrap();
+    for i in 0..10 {
+        let rel = if i % 2 == 0 {
+            format!("note{i}.md")
+        } else {
+            format!("nested/note{i}.md")
+        };
+        write_md(
+            tmp.path(),
+            &rel,
+            &format!("---\ntitle: Note {i}\n---\nbody\n\n"),
+        );
+    }
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let results: ExtLintFixOutput = typed_results(&output.stdout);
+    assert_eq!(
+        results.total_fixed, 10,
+        "every one of the 10 files needed the fix"
+    );
+    assert_eq!(results.total_remaining, 0);
+
+    for i in 0..10 {
+        let rel = if i % 2 == 0 {
+            format!("note{i}.md")
+        } else {
+            format!("nested/note{i}.md")
+        };
+        let content = std::fs::read_to_string(tmp.path().join(&rel)).unwrap();
+        assert!(
+            content.ends_with("body\n") && !content.ends_with("body\n\n"),
+            "{rel} must have converged to one trailing newline, got: {content:?}"
+        );
+        assert!(
+            content.contains(&format!("title: Note {i}")),
+            "{rel} must keep its own frontmatter untouched by a sibling's write: {content:?}"
+        );
+    }
+
+    // A second run must report zero fixes across the whole batch.
+    let output2 = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    let results2: ExtLintFixOutput = typed_results(&output2.stdout);
+    assert_eq!(results2.total_fixed, 0);
+    assert_eq!(results2.files.len(), 0);
+}
+
 /// MD047 on CRLF and mixed-ending files, end to end through the vault
 /// writer. Until mdbook-lint 0.16.1 (upstream #496) MD047 hard-coded `"\n"`
 /// for the missing-EOF insertion and counted trailing terminators by bare
@@ -2193,6 +2264,42 @@ fn lint_oversized_file_is_skipped_with_warning() {
     assert_eq!(
         results.files_with_violations, 1,
         "the skipped file must be reported as not-clean, not silently dropped"
+    );
+}
+
+/// Codebase review 2026-10-03 item 5: a file hyalo cannot read at all (invalid
+/// UTF-8) produces the same `note:`-prefixed, `-q`-suppressible skip message,
+/// not a raw unsuppressible `eprintln!`.
+#[test]
+fn lint_quiet_silences_the_unreadable_file_skip_note() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    std::fs::write(
+        tmp.path().join("bad.md"),
+        b"---\ntitle: bad\n---\n\n\xff\xfe invalid utf-8 here\n",
+    )
+    .unwrap();
+
+    let loud = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "bad.md"])
+        .output()
+        .unwrap();
+    let loud_stderr = String::from_utf8_lossy(&loud.stderr);
+    assert!(
+        loud_stderr.contains("skipping") && loud_stderr.contains("bad.md"),
+        "expected a skip note without -q, got: {loud_stderr}"
+    );
+
+    let quiet = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--quiet", "bad.md"])
+        .output()
+        .unwrap();
+    let quiet_stderr = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        !quiet_stderr.contains("skipping"),
+        "-q must silence the unreadable-file skip note, got: {quiet_stderr}"
     );
 }
 

@@ -74,6 +74,20 @@ pub fn lint_files_extended(
     // worker. `None` disables the rule for this run.
     let link_ctx = opts.link_lint_ctx.as_ref();
 
+    // One top-level write session for the whole `--fix` run (DEC-317
+    // batching, codebase review 2026-10-03 item 3): each parallel worker
+    // below gets its own `.worker()` clone of this policy, queues its
+    // directory fences into that clone, and hands it back in its
+    // `PerFileLintResult`/`ObservedLintWorkerError` for this loop to absorb.
+    // Finishing happens exactly once, after every worker has run, instead of
+    // each file finishing (and so fsyncing) its own session — matching the
+    // same file-count threshold `PreparedChangeSet::new` and batch `mv` use.
+    let mut write_session = hyalo_core::rooted::WriteSession::new(if files.len() > 8 {
+        hyalo_core::rooted::Durability::PerDirectory
+    } else {
+        hyalo_core::rooted::Durability::PerFile
+    });
+
     // Process files in parallel. Each worker lints one file.
     let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
         lint_one_file_extended(
@@ -95,6 +109,7 @@ pub fn lint_files_extended(
             vault_dir,
             case_insensitive,
             link_ctx,
+            &write_session,
         )
     };
     #[cfg(not(miri))]
@@ -110,6 +125,8 @@ pub fn lint_files_extended(
         match result {
             Ok(mut r) => {
                 mutation_effects.append(&mut r.mutation_effects);
+                let worker = std::mem::replace(&mut r.write_session, write_session.worker());
+                write_session.absorb(worker);
                 r.body_modified = false;
                 all_results.push(r);
             }
@@ -117,11 +134,30 @@ pub fn lint_files_extended(
                 // Rayon has already completed every worker. Retain their
                 // effects and report this independent failure rather than
                 // discarding completed publications with `?`.
-                if let Some(observed) = error.downcast_ref::<super::file::ObservedLintWorkerError>()
-                {
-                    mutation_effects.extend(observed.effects.iter().cloned());
+                match error.downcast::<super::file::ObservedLintWorkerError>() {
+                    Ok(observed) => {
+                        crate::warn::warn(format!("lint worker failed: {observed:#}"));
+                        mutation_effects.extend(observed.effects.iter().cloned());
+                        write_session.absorb(observed.write_session);
+                    }
+                    Err(error) => crate::warn::warn(format!("lint worker failed: {error:#}")),
                 }
-                crate::warn::warn(format!("lint worker failed: {error:#}"));
+            }
+        }
+    }
+
+    // Finish the shared session exactly once, after every worker's directory
+    // fences have been absorbed. On failure, every write this run committed
+    // without yet reporting a finalization error is retroactively marked
+    // `CommittedWithFinalizationError` — mirroring `PreparedChangeSet::apply_with`
+    // (`commands/apply.rs`), which does the same for its own single shared
+    // session.
+    if let Err(error) = write_session.finish() {
+        for effect in &mut mutation_effects {
+            if effect.state == crate::commands::apply::EffectState::Committed {
+                effect.state = crate::commands::apply::EffectState::CommittedWithFinalizationError;
+                effect.error = Some(error.to_string());
+                effect.category = Some(crate::commands::apply::EffectFailure::Finalization);
             }
         }
     }
@@ -677,6 +713,13 @@ pub(super) struct PerFileLintResult {
     /// `None` means fix-mode was off or no SCHEMA pass ran. Body rules use
     /// `InternalViolation.fixed` instead.
     pub(super) post_fix_schema_remaining: Option<Vec<InternalViolation>>,
+    /// This file's share of the run's shared `--fix` write session (DEC-317
+    /// batching, codebase review 2026-10-03 item 3): absorbed into the
+    /// top-level session in [`lint_files_extended`]'s merge loop and finished
+    /// exactly once there, instead of each file finishing (and so fsyncing)
+    /// its own session the moment it's done, which defeated per-directory
+    /// batching for `lint --fix` specifically.
+    pub(super) write_session: hyalo_core::rooted::WriteSession,
 }
 
 /// Compute one file's fix-mode totals — (fixed, remaining, conflicts) —

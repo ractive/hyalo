@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::output::{CommandOutcome, Format, output_value};
@@ -135,8 +135,11 @@ pub fn drop_index(
             )));
         }
         Err(e) => {
-            return Err(e)
-                .with_context(|| format!("failed to delete index file: {}", index_path.display()));
+            return Err(hyalo_core::user_error_with(
+                format!("failed to delete index file: {}", index_path.display()),
+                None,
+                Some(e.to_string()),
+            ));
         }
         Ok(finalization) => finalization,
     };
