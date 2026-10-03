@@ -51,6 +51,15 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
   insist(config.malformed === false && config.dir_out_of_bounds === false && !config.schema_error, "configuration requires repair");
   const root = await realpath(resolve(string(config.cwd), string(config.dir)));
   const excluded = await exclusionIdentities(root, p.exclude);
+  // An undeclared policy type is a policy error (exit 2), not an unavailable
+  // Hyalo: `types show` would exit 1 for it and read as a service failure.
+  if (p.types.length) {
+    const declared = (await read(["types", "list"])).results;
+    insist(Array.isArray(declared), "invalid Hyalo response");
+    const known = new Set(declared.map(t => object(t).type));
+    const undeclared = p.types.map(c => c.value).filter(t => !known.has(t));
+    insist(undeclared.length === 0, `policy types not declared in [schema.types]: ${undeclared.join(", ")}`);
+  }
   const schemas = Object.fromEntries(await Promise.all(p.types.map(async c => [c.value, object((await read(["types", "show", c.value])).results)])));
   for (const c of p.folders) await inside(root, c.value, true);
   const contextHash = hash({ config, schemas });
@@ -71,7 +80,13 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
       const readArgs = selected.section === null ? ["--lines", "1:"] : ["--section", selected.section];
       const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
       insist(evidence.file === selected.file, "file resolution differs from selection");
-      const current = object(evidence.frontmatter ?? {}), content = string(evidence.content, 18_000);
+      const current = object(evidence.frontmatter ?? {});
+      insist(typeof evidence.content === "string" && !evidence.content.includes("\0"), "invalid evidence content");
+      const content = evidence.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
+      // A selected section starts with its own heading line; a heading alone is no evidence.
+      const body = selected.section === null ? content : content.replace(/^#[^\n]*\n?/, "");
+      insist(body.trim().length > 0, `${what} empty`);
+      insist(bytes <= 18_000, `${what} too large (${bytes} bytes > 18000)`);
       insist(!credential || !JSON.stringify({ current, content }).includes(credential), "credential found in selected evidence");
       let missingType = false;
       if (!("type" in current) && p.types.length) {

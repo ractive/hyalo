@@ -2,6 +2,7 @@
 
 export type * from "./generated/index.js";
 
+import type { BacklinksArgs } from "./generated/BacklinksArgs.js";
 import type { ConfigResult } from "./generated/ConfigResult.js";
 import type { FileObject } from "./generated/FileObject.js";
 import type { FindArgs } from "./generated/FindArgs.js";
@@ -9,6 +10,10 @@ import type { GlobalArgs } from "./generated/GlobalArgs.js";
 import type { ReadArgs } from "./generated/ReadArgs.js";
 import type { ReadResult } from "./generated/ReadResult.js";
 import type { SummaryArgs } from "./generated/SummaryArgs.js";
+import type { TagSummaryEntry } from "./generated/TagSummaryEntry.js";
+import type { TagsSummaryArgs } from "./generated/TagsSummaryArgs.js";
+import type { TermEntry } from "./generated/TermEntry.js";
+import type { TermsArgs } from "./generated/TermsArgs.js";
 import type { VaultSummary } from "./generated/VaultSummary.js";
 
 type ApiGlobals = Partial<Omit<GlobalArgs, "format" | "jq" | "count" | "hints" | "no_hints">>;
@@ -16,7 +21,12 @@ export type FindOptions = ApiGlobals & Partial<Omit<FindArgs, "filenames_only" |
 export type ReadOptions = ApiGlobals & Partial<ReadArgs>;
 export type SummaryOptions = ApiGlobals & Partial<SummaryArgs>;
 export type ConfigOptions = ApiGlobals;
+export type TermsOptions = ApiGlobals & Partial<TermsArgs>;
+export type TagsOptions = ApiGlobals & Partial<TagsSummaryArgs>;
+export type BacklinksOptions = ApiGlobals & Partial<BacklinksArgs>;
 
 export type FindResult = Array<FileObject>;
 export type SummaryResult = Omit<VaultSummary, "dir">;
+export type TermsResult = Array<TermEntry>;
+export type TagsResult = Array<TagSummaryEntry>;
 export type { ConfigResult, ReadResult };

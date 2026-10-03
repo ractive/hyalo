@@ -162,6 +162,168 @@ type BacklinkInfo = {
 };
 
 /**
+ * What a link in the `--fields links` inventory *is* — the reported `kind`
+ * (iter-261, dogfood UX-6).
+ *
+ * Distinct from [`crate::links::LinkKind`], which is the two-valued *syntax*
+ * the resolver branches on. This is the user-facing bucket, and it mixes
+ * syntax (`embed`, `markdown`) with verdict (`external`, `attachment`)
+ * because that is what a reader triaging a link report needs: without it,
+ * telling `![[img.png]]` from `[[note]]` from `<obsidian://…>` meant going
+ * back to the file.
+ *
+ * Precedence when several could apply — `external` beats `attachment` beats
+ * `embed` beats the syntax kinds — so exactly one label is reported per link.
+ */
+type LinkKindLabel = "wikilink" | "embed" | "markdown" | "external" | "attachment" | "frontmatter";
+
+/**
+ * One inbound link reported by `hyalo backlinks`.
+ */
+type BacklinkItem = {
+    /**
+     * Vault-relative file containing the authored link.
+     */
+    source: string;
+    /**
+     * One-based source line number.
+     */
+    line: number;
+    /**
+     * Resolved or authored link target, according to the command.
+     */
+    target: string;
+    /**
+     * The link's own target text, exactly as `LinkGraph::build` left it —
+     * relative path components resolved (so `../target.md` reports
+     * `target.md`, not the raw `../` the author wrote) but casing and `.md`
+     * presence untouched.
+     *
+     * PR #251 review L8: `target` reports the query's own canonical path
+     * uniformly across every entry (see its own comment below) — necessary
+     * for a consistent spelling, but it erases exactly the signal someone
+     * chasing a case mismatch needs: whether THIS occurrence was written
+     * `[[NOTE]]` or `[[note]]`. Kept under a separate key rather than folded
+     * back into `target` so both questions ("what file does every entry
+     * really point at" and "how did each occurrence spell it") stay
+     * answerable without re-adding the inconsistency the NEW-18 fix removed.
+     */
+    written_target: string;
+    /**
+     * What this occurrence is: `wikilink` | `embed` | `markdown` |
+     * `frontmatter` (iter-262). Attachments and external URIs never reach the
+     * graph, so they never appear here. Always serialized — every backlink has
+     * a kind — so a consumer can bucket frontmatter references without
+     * re-reading the source file.
+     */
+    kind: LinkKindLabel;
+    /**
+     * The frontmatter key this occurrence was written under, for a
+     * `kind: "frontmatter"` entry (iter-262). Absent for a body link.
+     */
+    property?: string;
+    /**
+     * Label reported for this result.
+     */
+    label?: string;
+};
+
+/**
+ * Arguments accepted by `hyalo backlinks`.
+ */
+type BacklinksArgs = {
+    /**
+     * Maximum number of backlinks to return (0 = unlimited).
+     *
+     * Default cap is bypassed when --jq or --count is used
+     */
+    limit?: number;
+    /**
+     * Target file (relative to --dir) — positional form (single file)
+     */
+    file_positional?: string;
+    file: Array<string>;
+    glob: Array<string>;
+    files_from?: string;
+    /**
+     * Use the `.hyalo-index` snapshot in the vault dir
+     *
+     * Read-only commands (find, summary, tags, properties, backlinks) skip
+     * the disk scan entirely when the index is present. On `tags` and
+     * `properties` the flag is accepted on the bare command as well as on
+     * the `summary`/`rename` subcommand (iter-266).
+     *
+     * Mutation commands (set, remove, append, task, mv, tags rename,
+     * properties rename, links fix) still read/write individual files on disk
+     * but also patch the index in-place after each mutation — keeping
+     * the index current for subsequent queries. A file the index has never
+     * seen (created by an editor or Obsidian since the last create-index)
+     * is *upserted*: its full entry and outgoing links are inserted, not
+     * dropped, so indexed reads match a disk scan after the mutation.
+     * `set`/`append`/`remove` go further: every file they read whose
+     * `(mtime, size)` no longer matches the snapshot is rescanned, even when
+     * the mutation itself changes nothing (`0 modified`) — so a body edited
+     * by hand between `create-index` and the mutation cannot leave the entry
+     * describing bytes that are gone. `--dry-run` writes nothing, stale
+     * entry or not.
+     * `links fix`/`links auto` additionally mtime-check every indexed entry
+     * before their discovery pass, rescan files that changed on disk since
+     * create-index, and upsert files the index does not know yet (with a
+     * warning), so an externally edited vault is not silently trusted.
+     *
+     * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+     * falls back to a full disk scan automatically.
+     *
+     * STALENESS PROBE: on load, hyalo compares directory mtimes in the
+     * vault (the root and every directory up to 3 levels below it — cheap,
+     * directory-only stats, no file reads) against the snapshot's creation
+     * time and warns `index older than vault` when one postdates it. When
+     * that probe finds nothing, a second pass compares each indexed file's
+     * recorded mtime against disk and stops at the first drift, so an
+     * in-place overwrite (which moves no directory mtime) is named in the
+     * warning rather than silently served. Remaining blind spot: **up to
+     * about two seconds** — mtimes are compared as whole seconds and a
+     * one-second tolerance is applied on top, so an edit made within the
+     * snapshot's own second or the one after it is invisible (BUG-30,
+     * iter-276: the old wording said "the same whole second", which
+     * understated it by half). The warning never stops the run: stale
+     * results are still served.
+     */
+    index: boolean;
+    /**
+     * Use the snapshot index at PATH instead of `.hyalo-index`
+     *
+     * Implies `--index`. Relative paths are resolved against the current
+     * working directory (not the vault dir); absolute paths are used as-is.
+     *
+     * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+     * not: on `create-index` / `drop-index` this flag is an alias for the
+     * output path, and a path outside the vault is refused unless
+     * `--allow-outside-vault` is also passed.
+     *
+     * Read-only commands skip the disk scan entirely. Mutation commands
+     * patch the index in-place after each write — see `--index` for details.
+     *
+     * If the index file is incompatible hyalo falls back to a disk scan.
+     */
+    index_file?: string;
+};
+
+/**
+ * Serialized BacklinksResult command contract.
+ */
+type BacklinksResult = {
+    /**
+     * Vault-relative target path.
+     */
+    file: string;
+    /**
+     * Inbound authored links to the target.
+     */
+    backlinks: Array<BacklinkItem>;
+};
+
+/**
  * Serialized ConfigLinksResult command contract.
  */
 type ConfigLinksResult = {
@@ -433,6 +595,39 @@ type DirectoryCount = {
 };
 
 /**
+ * One facet value and the number of matching files that carry it.
+ */
+type FacetBucket = {
+    /**
+     * The tag, property value (stringified scalar) or top-level directory;
+     * `null` for files without the property (or without tags).
+     */
+    value: string | null;
+    /**
+     * Matching files in this bucket.
+     */
+    count: number;
+};
+
+/**
+ * Counts for one `--facet SPEC` over the full match set (DEC-335).
+ */
+type FacetResult = {
+    /**
+     * The spec as written: `tags`, `property:<KEY>`, `type` or `dir`.
+     */
+    facet: string;
+    /**
+     * Buckets by count (descending) then value, at most 50.
+     */
+    buckets: Array<FacetBucket>;
+    /**
+     * `true` when more than 50 distinct values existed and the rest were cut.
+     */
+    truncated: boolean;
+};
+
+/**
  * File counts by directory.
  */
 type FileCounts = {
@@ -485,22 +680,6 @@ type FindTaskInfo = {
      */
     done: boolean;
 };
-
-/**
- * What a link in the `--fields links` inventory *is* — the reported `kind`
- * (iter-261, dogfood UX-6).
- *
- * Distinct from [`crate::links::LinkKind`], which is the two-valued *syntax*
- * the resolver branches on. This is the user-facing bucket, and it mixes
- * syntax (`embed`, `markdown`) with verdict (`external`, `attachment`)
- * because that is what a reader triaging a link report needs: without it,
- * telling `![[img.png]]` from `[[note]]` from `<obsidian://…>` meant going
- * back to the file.
- *
- * Precedence when several could apply — `external` beats `attachment` beats
- * `embed` beats the syntax kinds — so exactly one label is reported per link.
- */
-type LinkKindLabel = "wikilink" | "embed" | "markdown" | "external" | "attachment" | "frontmatter";
 
 /**
  * A single link with its resolution status.
@@ -1100,6 +1279,275 @@ type FindArgs = {
     index_file?: string;
 };
 
+/**
+ * All filter arguments for `hyalo find`, extracted so they can be serialized as views.
+ */
+type FindFilters = {
+    /**
+     * Regex body search, case-insensitive (excludes PATTERN)
+     *
+     * Regex body text search (case-insensitive by default; use (?-i) to override).
+     * Mutually exclusive with PATTERN.
+     */
+    regexp?: string;
+    /**
+     * K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/i|K=null; AND; K may be a dot-path
+     *
+     * Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
+     * K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
+     * sequences (contact.email, contacts.0.email, contacts.email = any element).
+     *
+     * Value syntax: K=null matches a property present with a YAML null (`~`, `null`, or an
+     * empty value) and K!=null a present non-null one; K=[] matches an empty list, K!=[] a
+     * non-empty one. A list *containing* a null does not match K=null.
+     * Ordering ops (>, >=, <, <=) compare numerically when both sides are numbers, by date
+     * when both are ISO dates, and as text only when both are plain strings — a value of a
+     * different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
+     * The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
+     * K=V tests the RAW frontmatter value, while type binding normalises: a file whose
+     * `type: ["[[Iteration]]"]` binds to the `Iteration` schema is not matched by
+     * `--property type=Iteration`. Use `--property 'type~=Iteration'` to span every spelling.
+     */
+    properties: Array<string>;
+    /**
+     * Tag, exact or prefix ('a' matches 'a/b'); repeatable (AND)
+     *
+     * Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
+     * 'projects'). Repeatable (AND).
+     */
+    tag: Array<string>;
+    /**
+     * Task presence: 'todo', 'done', 'any', or a single status character
+     *
+     * A FILE filter, not a task projection: it selects files that contain at least one
+     * matching task, and `--fields tasks` then returns every task in those files, not only
+     * the matching ones.
+     */
+    task?: string;
+    /**
+     * Heading substring, '##' pins the level, or /regex/; repeatable (OR)
+     *
+     * Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+     * prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
+     * A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
+     */
+    sections: Array<string>;
+    file: Array<string>;
+    /**
+     * Glob patterns relative to `--dir`, repeatable; `!` negates a pattern.
+     *
+     * Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
+     * recursive matches.
+     */
+    glob: Array<string>;
+    /**
+     * Read paths from PATH, one per line ('-' = stdin)
+     *
+     * Read file paths from PATH (one per line); use '-' to read from stdin.
+     * Mutually exclusive with --file and --glob.
+     * Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
+     * Repo-relative paths with the configured vault dir prefix (e.g. files/en-us/x.md with --dir files/en-us)
+     * are resolved by trying vault-relative first, then stripping the full dir prefix and retrying.
+     * Input is deduplicated; results follow first-seen order.
+     * CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
+     * restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
+     * hyalo shells out to nothing and has no VCS-specific flag).
+     * MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from
+     * list keeps batch semantics and merely counts a missing entry under files_missing, exit 0.
+     * An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
+     * does not silence — in a gate, "no input" and "no findings" must not look alike.
+     */
+    files_from?: string;
+    /**
+     * all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks (exact)
+     *
+     * Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
+     * exactly the named fields plus file (filters add what they need).
+     *
+     * `file` is the only unconditional key — it names the result — so `--fields title` returns
+     * {file, title} and `--fields size,lines` returns {file, size, lines}. `modified`, `size`
+     * and `lines` are ordinary members of the default set: cheap enough to always pay for, and
+     * the inputs an agent uses to choose its next call (`read --lines`, recency), but dropped
+     * when an explicit --fields does not name them. `--fields file` is accepted and means
+     * {file}; `--fields all` selects everything. A saved view's pinned `fields` behaves exactly
+     * like an explicit --fields; a CLI --fields on top replaces the pin rather than adding to it.
+     *
+     * A filter that implies a field still returns it, on top of whatever set is in force:
+     * --section adds sections, --task adds tasks, --broken-links adds links,
+     * --orphan/--dead-end add links and backlinks, and --sort links_count/backlinks_count add
+     * the field they rank on.
+     *
+     * 'properties' is a {key: value} map WITHOUT the promoted 'title' property (which has its
+     * own field whenever 'title' is included, and stays in the map when the frontmatter value
+     * is a list or a map and so cannot be promoted); 'properties-typed' is a
+     * [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the
+     * frontmatter title property — any scalar, stringified as written — or the first H1
+     * heading (null if neither found). 'outline' is an alias for 'sections'. Note: in JSON
+     * output, `properties-typed` is serialized as `properties_typed` (underscore).
+     */
+    fields: Array<string>;
+    /**
+     * file (default)|modified|backlinks_count|links_count|title|date|score|property:K
+     *
+     * Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count',
+     * 'title', 'date', 'score', or 'property:<KEY>' for any frontmatter property.
+     *
+     * DIRECTION: every key sorts ascending and --reverse inverts it, so
+     * `--sort backlinks_count --reverse` is "most linked first" exactly as
+     * `--sort modified --reverse` is "newest first". 'score' is the one exception: it ranks
+     * best-match-first (descending relevance), and --reverse puts the weakest match first.
+     * Files whose sort property is missing or null always sort last, in both directions.
+     *
+     * For 'property:<KEY>',
+     * values of different JSON types (e.g. some files have a string, others a number) compare by
+     * raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a
+     * stderr warning names the property when this happens; use a consistent type in frontmatter
+     * for a meaningful sort.
+     */
+    sort?: string;
+    /**
+     * file|section: rank files or sections
+     *
+     * `section` turns a ranked PATTERN search into one result per matching SECTION:
+     * {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
+     * are flat (a heading runs to the next heading of any level; text before the first
+     * heading is a section with heading null and level 0). A section is a hit only when it
+     * satisfies the query's positive words and phrases on its own; negated terms and field
+     * terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
+     * sections. Files qualify against their whole body, so --section only restricts which
+     * sections are eligible. Scores use the corpus IDF and section-length normalisation;
+     * --limit counts sections and --filenames-only lists each file once. Requires PATTERN
+     * with at least one text term; --regexp, --sort, --reverse and --fields are rejected in
+     * section mode (exit 1).
+     */
+    granularity?: Granularity;
+    /**
+     * Count per tags|property:K|type|dir; repeatable
+     *
+     * Facet counts over the FULL match set, computed before --limit, emitted as a top-level
+     * `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
+     * exact tag (no prefix buckets); `property:K` counts files per value of frontmatter K,
+     * resolved like `--property` (dot-paths included) and folded the same way its `K=V`
+     * equality folds case, so `Open` and `open` share a bucket shown in the most common
+     * spelling (each element of a list counts, a missing or null value counts under a `null`
+     * bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
+     * directory ("." for files at the vault root). Buckets sort by count (desc) then value and
+     * are capped at 50 per facet (`truncated: true`). A repeated spec is reported once. In
+     * --granularity section mode the counts are files with at least one section hit. Works
+     * with every query, --jq and --count; an unknown spec is a user error (exit 1).
+     */
+    facet: Array<string>;
+    /**
+     * Reverse the sort order [alias: --desc]
+     *
+     * Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc.
+     */
+    reverse: boolean;
+    /**
+     * Max results, 0 = unlimited (default cap: 50)
+     *
+     * Maximum number of results to return (0 = unlimited).
+     * Default cap is bypassed when --jq or --count is used.
+     */
+    limit?: number;
+    /**
+     * Only files with an unresolved link or dead heading anchor
+     *
+     * Only return files with at least one unresolved link or dead heading anchor
+     * (auto-includes links field).
+     * Targets that resolve above the vault root are out of scope, not broken: they are
+     * flagged `out_of_vault` on the link and do not qualify a file here.
+     * A `#fragment` matches either the raw heading text or the rendered GitHub slug
+     * (`#sub-section` for `### Sub Section`); same-file fragments (`[b](#nope)`) are
+     * checked against the file's own headings and reported with an empty target.
+     * A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`)
+     * renders to an anchor hyalo cannot compute, so anchors into such a file are never
+     * reported broken.
+     * Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
+     * reports, and links are listed in document order.
+     * An external URI (`obsidian://`, `mailto:`, `https:`) and a link that resolves to a
+     * non-`.md` vault file (an image, a `.base`) are never broken — they are reported with
+     * `kind` `external` / `attachment` and never qualify a file here.
+     */
+    broken_links: boolean;
+    /**
+     * Exit 1 if any results, 0 if empty — a CI gate
+     *
+     * A CI gate for any find query, most commonly `find --broken-links --strict` to fail a build
+     * on a dead heading anchor. Before this, `find --broken-links` always exited 0 even when it
+     * reported findings, so a vault whose only defect was a dead anchor passed CI silently.
+     */
+    strict: boolean;
+    /**
+     * Only orphan files: no inbound or outbound links (adds links, backlinks)
+     *
+     * Deciding orphanhood needs both directions of the graph, so both fields come back
+     * whether or not --fields names them.
+     */
+    orphan: boolean;
+    /**
+     * Only dead-end files: inbound but no outbound links (adds links, backlinks)
+     *
+     * Deciding dead-endedness needs both directions of the graph, so both fields come back
+     * whether or not --fields names them.
+     */
+    dead_end: boolean;
+    /**
+     * Title substring (case-insensitive) or /regex/[i]
+     *
+     * Filter by title: case-insensitive substring match against the displayed title
+     * (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
+     * (e.g. '/^The/' or '/^The/i').
+     */
+    title?: string;
+    /**
+     * BM25 stemmer language (default: english) [alias: --stemmer]
+     *
+     * Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
+     * tokenization — NOT markdown code-block language.
+     * Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
+     * Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
+     * german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn),
+     * portuguese (pt), romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta),
+     * turkish (tr).
+     */
+    language?: string;
+    /**
+     * Print matching paths only, one per line, no hints
+     *
+     * Print only the file path of each matching entry, one per line — no JSON,
+     * no envelope, no count, no hints. grep `-l` precedent: the agent/
+     * pipeline projection of a find result set, usable in `sort`, `xargs`,
+     * and `while read` loops. Zero results → empty output, exit 0.
+     *
+     * Conflicts with `--jq`, `--count`, and an explicit `--format json`
+     * (mutually exclusive projections — pick one). `--strict` still flips
+     * the exit code (1 when results exist), so `find --property status=planned
+     * --filenames-only --strict` is a CI gate that lists the offenders and
+     * fails. Combines with every other filter (`--property`, `--tag`,
+     * `--glob`, `--broken-links`, …) exactly as `find`
+     * normally does.
+     */
+    filenames_only: boolean;
+    /**
+     * NUL-separated --filenames-only, for `xargs -0`
+     *
+     * NUL-delimited sibling of `--filenames-only` (iter-238): each matching
+     * file path is printed terminated by a NUL byte instead of a newline,
+     * exactly like GNU `find -print0`. Safe for filenames that contain
+     * newlines (which are legal in POSIX filenames, though not on Windows),
+     * and composes
+     * with `xargs -0` / `while IFS= read -r -d ''`. Same semantics as
+     * `--filenames-only` otherwise: no JSON, no envelope, no count, no hints;
+     * zero results → empty output, exit 0; `--strict` still flips the exit
+     * code when results exist.
+     *
+     * Mutually exclusive with `--filenames-only`, `--jq`, `--count`, and an
+     * explicit `--format json` (pick one projection).
+     */
+    filenames0: boolean;
+};
+
 type GlobalArgs = {
     /**
      * Vault root for file and glob paths (default: .)
@@ -1214,6 +1662,103 @@ type GlobalArgs = {
      * `drop-index`) additionally needs `--allow-outside-vault`.
      */
     index_file?: string;
+};
+
+/**
+ * Index flags, flattened into subcommands that can consume a snapshot index.
+ */
+type IndexFlags = {
+    /**
+     * Use the `.hyalo-index` snapshot in the vault dir
+     *
+     * Read-only commands (find, summary, tags, properties, backlinks) skip
+     * the disk scan entirely when the index is present. On `tags` and
+     * `properties` the flag is accepted on the bare command as well as on
+     * the `summary`/`rename` subcommand (iter-266).
+     *
+     * Mutation commands (set, remove, append, task, mv, tags rename,
+     * properties rename, links fix) still read/write individual files on disk
+     * but also patch the index in-place after each mutation — keeping
+     * the index current for subsequent queries. A file the index has never
+     * seen (created by an editor or Obsidian since the last create-index)
+     * is *upserted*: its full entry and outgoing links are inserted, not
+     * dropped, so indexed reads match a disk scan after the mutation.
+     * `set`/`append`/`remove` go further: every file they read whose
+     * `(mtime, size)` no longer matches the snapshot is rescanned, even when
+     * the mutation itself changes nothing (`0 modified`) — so a body edited
+     * by hand between `create-index` and the mutation cannot leave the entry
+     * describing bytes that are gone. `--dry-run` writes nothing, stale
+     * entry or not.
+     * `links fix`/`links auto` additionally mtime-check every indexed entry
+     * before their discovery pass, rescan files that changed on disk since
+     * create-index, and upsert files the index does not know yet (with a
+     * warning), so an externally edited vault is not silently trusted.
+     *
+     * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+     * falls back to a full disk scan automatically.
+     *
+     * STALENESS PROBE: on load, hyalo compares directory mtimes in the
+     * vault (the root and every directory up to 3 levels below it — cheap,
+     * directory-only stats, no file reads) against the snapshot's creation
+     * time and warns `index older than vault` when one postdates it. When
+     * that probe finds nothing, a second pass compares each indexed file's
+     * recorded mtime against disk and stops at the first drift, so an
+     * in-place overwrite (which moves no directory mtime) is named in the
+     * warning rather than silently served. Remaining blind spot: **up to
+     * about two seconds** — mtimes are compared as whole seconds and a
+     * one-second tolerance is applied on top, so an edit made within the
+     * snapshot's own second or the one after it is invisible (BUG-30,
+     * iter-276: the old wording said "the same whole second", which
+     * understated it by half). The warning never stops the run: stale
+     * results are still served.
+     */
+    index: boolean;
+    /**
+     * Use the snapshot index at PATH instead of `.hyalo-index`
+     *
+     * Implies `--index`. Relative paths are resolved against the current
+     * working directory (not the vault dir); absolute paths are used as-is.
+     *
+     * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+     * not: on `create-index` / `drop-index` this flag is an alias for the
+     * output path, and a path outside the vault is refused unless
+     * `--allow-outside-vault` is also passed.
+     *
+     * Read-only commands skip the disk scan entirely. Mutation commands
+     * patch the index in-place after each write — see `--index` for details.
+     *
+     * If the index file is incompatible hyalo falls back to a disk scan.
+     */
+    index_file?: string;
+};
+
+/**
+ * Unified file-input selection flags, flattened into every command that
+ * operates on one or more files.
+ *
+ * Replaces the per-command combination of:
+ * - `file_positional: Option<String>` / `Vec<String>`
+ * - `file: Option<String>` / `Vec<String>`
+ * - `glob: Vec<String>`
+ * - `files_from: Option<String>`
+ *
+ * Clap enforces that `--file`, `--glob`, and `--files-from` are mutually
+ * exclusive with each other (and with `file_positional`).
+ *
+ * iteration 254 (HELP-2): the three flags carry the same short/long help
+ * constants `find` uses, so the input trio reads identically on `read`,
+ * `task read/toggle/set` and `backlinks` — and each short line fits one
+ * rendered line instead of the three-to-five it used to wrap to.
+ * `cli::presentation` narrows this shared help for single-target commands.
+ */
+type InputSelection = {
+    /**
+     * Target file (relative to --dir) — positional form (single file)
+     */
+    file_positional?: string;
+    file: Array<string>;
+    glob: Array<string>;
+    files_from?: string;
 };
 
 /**
@@ -1472,6 +2017,131 @@ type RecentFile = {
 };
 
 /**
+ * A dictionary term offered as a correction, with its document frequency.
+ */
+type SuggestionCandidate = {
+    /**
+     * The stemmed dictionary term.
+     */
+    term: string;
+    /**
+     * Number of documents containing it.
+     */
+    docs: number;
+};
+
+/**
+ * Did-you-mean for one ranked-search query term that occurs in no document.
+ */
+type SearchSuggestion = {
+    /**
+     * The query word as written.
+     */
+    term: string;
+    /**
+     * Up to three close dictionary stems, most similar first.
+     */
+    candidates: Array<SuggestionCandidate>;
+};
+
+/**
+ * The success envelope of a `find` that carries search side results: did-you-mean
+ * candidates of a zero-result ranked query (iteration 302) and/or facet counts
+ * (iteration 303). Only `find` emits it; mutation reports never do. Each key is
+ * present only when it has content, so a plain `find` keeps the standard shape.
+ */
+type SearchEnvelope<T> = {
+    /**
+     * Did-you-mean candidates for ranked-search terms with no postings.
+     */
+    suggestions?: Array<SearchSuggestion>;
+    /**
+     * Per-value file counts over the full match set, one entry per `--facet`.
+     */
+    facets?: Array<FacetResult>;
+    /**
+     * Optional vault directory hoisted from the command result.
+     */
+    dir?: string;
+    /**
+     * Missing paths from an explicitly supplied file list, including zero.
+     */
+    files_missing?: number;
+    /**
+     * Non-Markdown paths skipped from the supplied file list.
+     */
+    files_skipped_non_md?: number;
+    /**
+     * Paths outside the vault skipped from the supplied file list.
+     */
+    files_skipped_outside_vault?: number;
+    /**
+     * Read-only suggestions and explicitly marked mutation suggestions.
+     */
+    hints: Array<Hint>;
+    /**
+     * Named command output; arrays contain named result items.
+     */
+    results: T;
+    /**
+     * Total matching items before pagination, omitted for non-list commands.
+     */
+    total?: number;
+};
+
+/**
+ * A flat section: its heading line through the line before the next heading.
+ */
+type SectionLocation = {
+    /**
+     * Heading text, or `null` for the text before the first heading.
+     */
+    heading: string | null;
+    /**
+     * ATX heading level (1-6), 0 for the pre-heading preamble.
+     */
+    level: number;
+    /**
+     * First line (the heading line), 1-based and file-absolute.
+     */
+    line_start: number;
+    /**
+     * Last line, inclusive, 1-based and file-absolute.
+     */
+    line_end: number;
+    /**
+     * Heading path from the outline, ending with this heading.
+     */
+    path: Array<string>;
+};
+
+/**
+ * One result of `find PATTERN --granularity section` (DEC-334).
+ */
+type SectionHitObject = {
+    /**
+     * Vault-relative path of the file holding the section.
+     */
+    file: string;
+    /**
+     * Where the section sits in the file.
+     */
+    section: SectionLocation;
+    /**
+     * BM25 score of the section alone (corpus IDF, section-length normalised).
+     */
+    score: number;
+    /**
+     * Up to three snippet lines from inside the section (`ContentMatch` shape).
+     */
+    matches: Array<{
+        line: number;
+        section: string;
+        text: string;
+    }>;
+};
+
+/**
  * Files grouped by status property value (count only).
  */
 type StatusGroup = {
@@ -1595,6 +2265,264 @@ type TagSummary = {
 };
 
 /**
+ * Arguments accepted by `hyalo tags summary`.
+ */
+type TagsSummaryArgs = {
+    /**
+     * Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
+     */
+    glob: Array<string>;
+    /**
+     * Maximum number of results to return (0 = unlimited).
+     *
+     * Default cap is bypassed when --jq or --count is used
+     */
+    limit?: number;
+    /**
+     * Use the `.hyalo-index` snapshot in the vault dir
+     *
+     * Read-only commands (find, summary, tags, properties, backlinks) skip
+     * the disk scan entirely when the index is present. On `tags` and
+     * `properties` the flag is accepted on the bare command as well as on
+     * the `summary`/`rename` subcommand (iter-266).
+     *
+     * Mutation commands (set, remove, append, task, mv, tags rename,
+     * properties rename, links fix) still read/write individual files on disk
+     * but also patch the index in-place after each mutation — keeping
+     * the index current for subsequent queries. A file the index has never
+     * seen (created by an editor or Obsidian since the last create-index)
+     * is *upserted*: its full entry and outgoing links are inserted, not
+     * dropped, so indexed reads match a disk scan after the mutation.
+     * `set`/`append`/`remove` go further: every file they read whose
+     * `(mtime, size)` no longer matches the snapshot is rescanned, even when
+     * the mutation itself changes nothing (`0 modified`) — so a body edited
+     * by hand between `create-index` and the mutation cannot leave the entry
+     * describing bytes that are gone. `--dry-run` writes nothing, stale
+     * entry or not.
+     * `links fix`/`links auto` additionally mtime-check every indexed entry
+     * before their discovery pass, rescan files that changed on disk since
+     * create-index, and upsert files the index does not know yet (with a
+     * warning), so an externally edited vault is not silently trusted.
+     *
+     * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+     * falls back to a full disk scan automatically.
+     *
+     * STALENESS PROBE: on load, hyalo compares directory mtimes in the
+     * vault (the root and every directory up to 3 levels below it — cheap,
+     * directory-only stats, no file reads) against the snapshot's creation
+     * time and warns `index older than vault` when one postdates it. When
+     * that probe finds nothing, a second pass compares each indexed file's
+     * recorded mtime against disk and stops at the first drift, so an
+     * in-place overwrite (which moves no directory mtime) is named in the
+     * warning rather than silently served. Remaining blind spot: **up to
+     * about two seconds** — mtimes are compared as whole seconds and a
+     * one-second tolerance is applied on top, so an edit made within the
+     * snapshot's own second or the one after it is invisible (BUG-30,
+     * iter-276: the old wording said "the same whole second", which
+     * understated it by half). The warning never stops the run: stale
+     * results are still served.
+     */
+    index: boolean;
+    /**
+     * Use the snapshot index at PATH instead of `.hyalo-index`
+     *
+     * Implies `--index`. Relative paths are resolved against the current
+     * working directory (not the vault dir); absolute paths are used as-is.
+     *
+     * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+     * not: on `create-index` / `drop-index` this flag is an alias for the
+     * output path, and a path outside the vault is refused unless
+     * `--allow-outside-vault` is also passed.
+     *
+     * Read-only commands skip the disk scan entirely. Mutation commands
+     * patch the index in-place after each write — see `--index` for details.
+     *
+     * If the index file is incompatible hyalo falls back to a disk scan.
+     */
+    index_file?: string;
+};
+
+/**
+ * Result of a `task toggle --dry-run` simulation.
+ * Carries both the original and the would-be status so the text formatter
+ * can render `"file":line [old] -> [new] text` and make the direction of
+ * change explicit.
+ */
+type TaskDryRunResult = {
+    /**
+     * Vault-relative Markdown file path.
+     */
+    file: string;
+    /**
+     * One-based source line number.
+     */
+    line: number;
+    /**
+     * Task checkbox marker before the proposed change.
+     */
+    old_status: string;
+    /**
+     * Task checkbox marker or grouped status value.
+     */
+    status: string;
+    /**
+     * Authored task text without its checkbox marker.
+     */
+    text: string;
+    /**
+     * Whether the task is checked.
+     */
+    done: boolean;
+};
+
+/**
+ * A single task (checkbox) with its location and state.
+ * Used by `task read`, `task toggle`, `task set`.
+ */
+type TaskInfo = {
+    /**
+     * One-based source line number.
+     */
+    line: number;
+    /**
+     * Task checkbox marker or grouped status value.
+     */
+    status: string;
+    /**
+     * Authored task text without its checkbox marker.
+     */
+    text: string;
+    /**
+     * Whether the task is checked.
+     */
+    done: boolean;
+};
+
+/**
+ * Result of reading or mutating a single task.
+ * Used by `task read`, `task toggle`, `task set`.
+ */
+type TaskReadResult = {
+    /**
+     * Vault-relative Markdown file path.
+     */
+    file: string;
+    /**
+     * One-based source line number.
+     */
+    line: number;
+    /**
+     * Task checkbox marker or grouped status value.
+     */
+    status: string;
+    /**
+     * Authored task text without its checkbox marker.
+     */
+    text: string;
+    /**
+     * Whether the task is checked.
+     */
+    done: boolean;
+};
+
+/**
+ * One dictionary term and the number of files whose authored title or body
+ * contains it (the BM25 corpus indexes both).
+ */
+type TermEntry = {
+    /**
+     * Stemmed token.
+     */
+    term: string;
+    /**
+     * Number of files whose title or body contains this stem.
+     */
+    docs: number;
+};
+
+/**
+ * Arguments accepted by `hyalo terms`.
+ */
+type TermsArgs = {
+    /**
+     * Only list terms starting with this (lowercased) prefix
+     */
+    prefix?: string;
+    /**
+     * Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
+     */
+    glob: Array<string>;
+    /**
+     * Maximum number of results to return (0 = unlimited).
+     *
+     * Default cap is bypassed when --jq or --count is used
+     */
+    limit?: number;
+    /**
+     * Use the `.hyalo-index` snapshot in the vault dir
+     *
+     * Read-only commands (find, summary, tags, properties, backlinks) skip
+     * the disk scan entirely when the index is present. On `tags` and
+     * `properties` the flag is accepted on the bare command as well as on
+     * the `summary`/`rename` subcommand (iter-266).
+     *
+     * Mutation commands (set, remove, append, task, mv, tags rename,
+     * properties rename, links fix) still read/write individual files on disk
+     * but also patch the index in-place after each mutation — keeping
+     * the index current for subsequent queries. A file the index has never
+     * seen (created by an editor or Obsidian since the last create-index)
+     * is *upserted*: its full entry and outgoing links are inserted, not
+     * dropped, so indexed reads match a disk scan after the mutation.
+     * `set`/`append`/`remove` go further: every file they read whose
+     * `(mtime, size)` no longer matches the snapshot is rescanned, even when
+     * the mutation itself changes nothing (`0 modified`) — so a body edited
+     * by hand between `create-index` and the mutation cannot leave the entry
+     * describing bytes that are gone. `--dry-run` writes nothing, stale
+     * entry or not.
+     * `links fix`/`links auto` additionally mtime-check every indexed entry
+     * before their discovery pass, rescan files that changed on disk since
+     * create-index, and upsert files the index does not know yet (with a
+     * warning), so an externally edited vault is not silently trusted.
+     *
+     * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+     * falls back to a full disk scan automatically.
+     *
+     * STALENESS PROBE: on load, hyalo compares directory mtimes in the
+     * vault (the root and every directory up to 3 levels below it — cheap,
+     * directory-only stats, no file reads) against the snapshot's creation
+     * time and warns `index older than vault` when one postdates it. When
+     * that probe finds nothing, a second pass compares each indexed file's
+     * recorded mtime against disk and stops at the first drift, so an
+     * in-place overwrite (which moves no directory mtime) is named in the
+     * warning rather than silently served. Remaining blind spot: **up to
+     * about two seconds** — mtimes are compared as whole seconds and a
+     * one-second tolerance is applied on top, so an edit made within the
+     * snapshot's own second or the one after it is invisible (BUG-30,
+     * iter-276: the old wording said "the same whole second", which
+     * understated it by half). The warning never stops the run: stale
+     * results are still served.
+     */
+    index: boolean;
+    /**
+     * Use the snapshot index at PATH instead of `.hyalo-index`
+     *
+     * Implies `--index`. Relative paths are resolved against the current
+     * working directory (not the vault dir); absolute paths are used as-is.
+     *
+     * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+     * not: on `create-index` / `drop-index` this flag is an alias for the
+     * output path, and a path outside the vault is refused unless
+     * `--allow-outside-vault` is also passed.
+     *
+     * Read-only commands skip the disk scan entirely. Mutation commands
+     * patch the index in-place after each write — see `--index` for details.
+     *
+     * If the index file is incompatible hyalo falls back to a disk scan.
+     */
+    index_file?: string;
+};
+
+/**
  * High-level vault summary.
  */
 type VaultSummary = {
@@ -1658,8 +2586,13 @@ type FindOptions = ApiGlobals & Partial<Omit<FindArgs, "filenames_only" | "filen
 type ReadOptions = ApiGlobals & Partial<ReadArgs>;
 type SummaryOptions = ApiGlobals & Partial<SummaryArgs>;
 type ConfigOptions = ApiGlobals;
+type TermsOptions = ApiGlobals & Partial<TermsArgs>;
+type TagsOptions = ApiGlobals & Partial<TagsSummaryArgs>;
+type BacklinksOptions = ApiGlobals & Partial<BacklinksArgs>;
 type FindResult = Array<FileObject>;
 type SummaryResult = Omit<VaultSummary, "dir">;
+type TermsResult = Array<TermEntry>;
+type TagsResult = Array<TagSummaryEntry>;
 
 interface ProcessResult {
     stdout: string;
@@ -1699,6 +2632,9 @@ type FindCallOptions = FindOptions & ExecutionOptions;
 type ReadCallOptions = ReadOptions & ExecutionOptions;
 type SummaryCallOptions = SummaryOptions & ExecutionOptions;
 type ConfigCallOptions = ConfigOptions & ExecutionOptions;
+type TermsCallOptions = TermsOptions & ExecutionOptions;
+type TagsCallOptions = TagsOptions & ExecutionOptions;
+type BacklinksCallOptions = BacklinksOptions & ExecutionOptions;
 declare class HyaloError extends Error {
     readonly exitCode: number;
     readonly stdout: string;
@@ -1707,7 +2643,7 @@ declare class HyaloError extends Error {
     /** Committed paths and index disposition, retained even after output failure. */
     readonly effects?: ErrorEnvelope["effects"];
     readonly category?: ErrorEnvelope["category"];
-    constructor(result: ProcessResult, envelope?: ErrorEnvelope);
+    constructor(result: ProcessResult, envelope?: ErrorEnvelope, message?: string);
 }
 declare class HyaloSpawnError extends Error {
     readonly cause: unknown;
@@ -1746,6 +2682,12 @@ declare function mutationReport<T>(argv: readonly string[], options?: ExecutionO
 declare function find(options?: FindCallOptions): Promise<Envelope<FindResult>>;
 declare function read(options?: ReadCallOptions): Promise<Envelope<ReadResult>>;
 declare function summary(options?: SummaryCallOptions): Promise<Envelope<SummaryResult>>;
+/** `hyalo terms [PREFIX]`: BM25 dictionary terms with their document frequency. */
+declare function terms(options?: TermsCallOptions): Promise<Envelope<TermsResult>>;
+/** `hyalo tags summary`: unique frontmatter tags with file counts. */
+declare function tags(options?: TagsCallOptions): Promise<Envelope<TagsResult>>;
+/** `hyalo backlinks`: every authored link that points at one file. */
+declare function backlinks(options?: BacklinksCallOptions): Promise<Envelope<BacklinksResult>>;
 declare function config(options?: ConfigCallOptions): Promise<Envelope<ConfigResult>>;
 interface SetOptions extends ExecutionOptions {
     file: string;
@@ -1776,5 +2718,5 @@ interface PiConfigInfo {
  */
 declare function configForPi(options?: ExecutionOptions): Promise<PiConfigInfo>;
 
-export { HyaloAbortError, HyaloError, HyaloParseError, HyaloSpawnError, HyaloTimeoutError, HyaloTransportError, config, configForPi, createPiTransport, find, lint, mutationReport, raw, read, set, summary, task };
-export type { PiConfigInfo };
+export { HyaloAbortError, HyaloError, HyaloParseError, HyaloSpawnError, HyaloTimeoutError, HyaloTransportError, backlinks, config, configForPi, createPiTransport, find, lint, mutationReport, raw, read, set, summary, tags, task, terms };
+export type { ApplyReport, BacklinkInfo, BacklinkItem, BacklinksArgs, BacklinksCallOptions, BacklinksOptions, BacklinksResult, ConfigCallOptions, ConfigLinksResult, ConfigOptions, ConfigPiResult, ConfigResult, ContentMatch, DiagnosticsCallback, DirectoryCount, EffectFailure, EffectState, Envelope, ErrorEnvelope, ExecutionOptions, FacetBucket, FacetResult, FileCounts, FileObject, FindArgs, FindCallOptions, FindFilters, FindOptions, FindResult, FindTaskInfo, GlobalArgs, Granularity, Hint, HyaloTransport, IndexDisposition, IndexFlags, InputSelection, LinkHealthSummary, LinkInfo, LinkKindLabel, LinksAutoReport, LintSummary, MixedTypeEntry, MutationReportEnvelope, OutlineSection, PathEffect, PiConfigInfo, ProcessResult, PropertyInfo, PropertySummaryEntry, ReadArgs, ReadCallOptions, ReadOptions, ReadResult, RecentFile, ScanReport, SearchEnvelope, SearchReport, SearchSuggestion, SearchWeightsReport, SectionHitObject, SectionLocation, SetOptions, StatusGroup, SuggestionCandidate, SummaryArgs, SummaryCallOptions, SummaryOptions, SummaryResult, TagSummary, TagSummaryEntry, TagsCallOptions, TagsOptions, TagsResult, TagsSummaryArgs, TaskCount, TaskDryRunResult, TaskInfo, TaskOptions, TaskReadResult, TermEntry, TermsArgs, TermsCallOptions, TermsOptions, TermsResult, TransportOptions, VaultSummary };

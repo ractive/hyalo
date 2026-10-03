@@ -6831,3 +6831,74 @@ might need the gitignore-drop count: rejected on performance grounds — only
 ## DEC-343: `MutationJournal::rename_entry` deleted (2026-10-04)
 
 **Decision.** `MutationJournal::rename_entry` deleted: no caller and it discarded update-only refreshes.
+
+## DEC-344: The crate embeds the Jev assets from templates/jev only (2026-10-04)
+
+**Decision.** `crates/hyalo-cli/templates/jev/jev.{md,mjs}` are the only Jev
+copies inside the crate; the copies under `templates/pi/skills/hyalo-tidy/` and
+`templates/codex/skills/hyalo-tidy/` (`scripts/jev.mjs`, `references/jev.md`) are
+deleted (iteration 307). `check-pi-package-sync`/`sync-pi-package` and
+`check-codex-package`/`sync-codex-package` skip `hyalo-tidy/{scripts,references}`
+in both directions (`owned_by_jev_assets` in `crates/xtask/src/pi_package_sync.rs`);
+`check-jev-assets`/`sync-jev-assets` own them and keep `plugins/hyalo/…`,
+`pi-package/…` and `templates/jev/` byte-identical.
+
+**Why.** Only `templates/jev/` is `include_str!`'d (`commands/init/jev_assets.rs`);
+`init --pi` and `init --codex` install the tidy assets from those two constants. The
+pi/codex template copies were read by nothing and existed only to satisfy the
+mirror gates, adding about 118 KB to every crate tarball and a fourth and fifth
+place to forget when the helper changed.
+
+**Consequences.** Every shipped copy still has exactly one gate. A new tidy asset
+must be added to `jev_assets.rs` (xtask) and to the crate's `ASSETS`, not dropped
+into a template tree.
+
+**Rejected alternative.** Embedding the pi/codex template copies instead of
+`templates/jev/`: that would keep three identical embedded copies of the same 50 KB
+bundle in the binary.
+
+## DEC-345: Jev assistance for hyalo-tidy is opt-in, read-only and receipt-owned (2026-10-04)
+
+**Decision.** The optional Jev classifier ([[iterations/iteration-299-jev-helper]],
+[[iterations/iteration-300-jev-tidy-integration]]) ships as two auxiliary assets of
+the `hyalo-tidy` skill — the bundled helper `scripts/jev.mjs` (built from `npm/jev`)
+and its instructions `references/jev.md` — under these rules:
+
+- **Opt-in per session.** Only an explicit user request for Jev in the current tidy
+  session enables it. An environment `TYPESAFE_API_KEY`, a repository file or a
+  configuration value never grants consent, and enablement is never persisted.
+- **Network only behind `--allow-network` plus a key.** `prepare` and `check` are
+  local; only `ask --allow-network` contacts the fixed endpoint
+  (`https://api.typesafe.ai/v1/systemone`, pinned model) with the key inherited from
+  the environment. SDK environment defaults cannot redirect requests or enable body
+  logging, and the hyalo child processes the helper spawns inherit no `TYPESAFE_*`
+  variable (stripped case-insensitively, since Windows names are).
+- **No write path in the helper.** It calls only read-only hyalo commands and prints
+  suggestions; every repair goes through `hyalo set`/`hyalo mv` previews and the
+  user's existing authorization. Jev-assisted runs omit `--index` and create no
+  caches or configuration.
+- **Explicit outcomes and exit codes.** 0 valid results (possibly with deferrals),
+  1 unavailable credentials or service, 2 invalid input or protocol — including a
+  policy type `[schema.types]` does not declare and a non-native `--hyalo` path.
+  Oversized, empty, excluded or unreadable inputs defer with a named reason; nothing
+  is silently truncated. Unknown additive fields in a provider response are ignored
+  while known fields are still validated.
+- **Receipt-owned installation.** `hyalo init --claude`/`--codex` install the two
+  assets next to the tidy skill and record their exact content in
+  `.hyalo-jev-assets.json`; upgrade replaces only receipt-owned bytes, a user-modified
+  file is preserved, and `hyalo deinit` removes only what the receipt owns. Pi uses its
+  existing manifest receipts for the same files.
+
+**Why.** The helper sends document text to a third-party service. Consent must be an
+act of the user in the session, not a side effect of a key being present, and the
+classifier must never be able to change the vault on its own: suggestions are
+advisory and the deterministic hyalo commands stay the only write path. Receipts
+let upgrades and `deinit` touch only bytes hyalo wrote.
+
+**Consequences.** Ordinary tidy needs no JavaScript runtime or network access. The
+only embedded copies are `crates/hyalo-cli/templates/jev/jev.{md,mjs}`, kept identical
+to every shipped copy by `check-jev-assets` (DEC-344). A provider envelope change that
+alters known fields still needs a helper release.
+
+**Rejected alternative.** Enabling Jev whenever `TYPESAFE_API_KEY` is set: a key in a
+shell profile would silently send vault contents off-machine.

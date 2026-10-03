@@ -55,6 +55,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp"] }
 
 [dev-dependencies]
+hyalo-core = { workspace = true, features = ["ts"] }
 rmp-serde = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

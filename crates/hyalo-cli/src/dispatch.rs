@@ -629,12 +629,12 @@ fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<C
             // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.
             tag_commands::run(ctx, bare_glob, bare_limit, action)
         }
-        Commands::Terms {
+        Commands::Terms(crate::cli::args::TermsArgs {
             prefix,
             glob,
             limit,
             index_flags: _, // consumed in run.rs before dispatch
-        } => terms_commands::run(ctx, prefix.as_deref(), &glob, limit),
+        }) => terms_commands::run(ctx, prefix.as_deref(), &glob, limit),
         Commands::Summary(SummaryArgs {
             glob,
             recent,

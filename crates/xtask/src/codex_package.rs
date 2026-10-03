@@ -15,7 +15,15 @@ fn files(root: &Path) -> Result<BTreeSet<PathBuf>> {
             entry.path().display()
         );
         if entry.file_type().is_file() {
-            paths.insert(entry.path().strip_prefix(root)?.to_path_buf());
+            let relative = entry.path().strip_prefix(root)?;
+            // `hyalo-tidy/{scripts,references}` belong to check-jev-assets:
+            // the plugin ships them, the crate embeds them from
+            // `templates/jev/` alone, so `templates/codex/` carries no copy
+            // (DEC-344).
+            if crate::pi_package_sync::owned_by_jev_assets(relative) {
+                continue;
+            }
+            paths.insert(relative.to_path_buf());
         }
     }
     Ok(paths)

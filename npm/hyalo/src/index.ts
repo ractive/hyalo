@@ -1,4 +1,5 @@
 export {
+  backlinks,
   HyaloAbortError,
   HyaloError,
   HyaloParseError,
@@ -14,9 +15,12 @@ export {
   read,
   set,
   summary,
+  tags,
   task,
+  terms,
 } from "./api.js";
 export type {
+  BacklinksCallOptions,
   ConfigCallOptions,
   DiagnosticsCallback,
   ExecutionOptions,
@@ -26,7 +30,9 @@ export type {
   ReadCallOptions,
   SetOptions,
   SummaryCallOptions,
+  TagsCallOptions,
   TaskOptions,
+  TermsCallOptions,
   TransportOptions,
 } from "./api.js";
 export type * from "./types.js";

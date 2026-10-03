@@ -7,7 +7,10 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::is_self_link;
 
+/// One inbound link reported by `hyalo backlinks`.
 #[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 struct BacklinkItem {
     /// Vault-relative file containing the authored link.
     source: String,
@@ -38,8 +41,10 @@ struct BacklinkItem {
     /// The frontmatter key this occurrence was written under, for a
     /// `kind: "frontmatter"` entry (iter-262). Absent for a body link.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     property: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     /// Label reported for this result.
     label: Option<String>,
 }
@@ -180,6 +185,8 @@ pub(crate) fn run(
 
 /// Serialized BacklinksResult command contract.
 #[derive(serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 struct BacklinksResult<'a> {
     /// Vault-relative target path.
     file: &'a str,

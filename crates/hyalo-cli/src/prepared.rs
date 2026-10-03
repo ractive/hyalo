@@ -640,9 +640,9 @@ impl PreparedInvocation {
                 lines,
                 frontmatter,
             },
-            Commands::Backlinks {
+            Commands::Backlinks(crate::cli::args::BacklinksArgs {
                 selection, limit, ..
-            } => PreparedCommand::Backlinks {
+            }) => PreparedCommand::Backlinks {
                 target: SingleTargetRequest::checked(resolve(
                     &selection,
                     true,

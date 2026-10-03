@@ -65,9 +65,10 @@ skills provide the IDE route.
 ## Updates and removal
 
 For a local marketplace checkout, update the checkout, then reinstall with
-`codex plugin add hyalo@hyalo` and start a new session. The plugin has its own
-version in `.codex-plugin/plugin.json`; maintainers bump it when distributing skill
-changes. Do not assume that replacing files refreshes an already-running session.
+`codex plugin add hyalo@hyalo` and start a new session. `.codex-plugin/plugin.json`
+carries the Hyalo workspace version and is bumped with every release
+([[decision-log#DEC-340: The Codex plugin manifest follows the workspace version (2026-10-04)|DEC-340]]).
+Do not assume that replacing files refreshes an already-running session.
 
 `hyalo deinit` removes configuration and all managed project integrations, including
 Codex. It retains unrelated skills, user-added companion files, and instruction
@@ -85,6 +86,21 @@ missing copies, changed files, and orphaned embedded assets fail CI.
 path. `check-bundled-skills` lints skills in their actual installed `.agents/skills`
 location. The crate embeds only files within its own package, so crates.io builds
 do not depend on the repository's plugin directory.
+
+The `hyalo-tidy` skill carries two optional Jev assets, `scripts/jev.mjs` (the
+helper bundle built from `npm/jev`) and `references/jev.md`. They are used only when
+the user explicitly asks for Jev in a tidy session; the helper has no write path and
+contacts the network only through `ask --allow-network` with `TYPESAFE_API_KEY`
+([[decision-log#DEC-345: Jev assistance for hyalo-tidy is opt-in, read-only and receipt-owned (2026-10-04)|DEC-345]]).
+`hyalo init --codex` installs both next to the tidy skill and records their exact
+content in `.agents/skills/hyalo-tidy/.hyalo-jev-assets.json`; an upgrade replaces
+only bytes that receipt owns, a user-modified file is preserved, and `hyalo deinit`
+removes only receipt-owned files. The crate embeds these assets from
+`crates/hyalo-cli/templates/jev/` alone, so `sync-codex-package` and
+`check-codex-package` skip `hyalo-tidy/{scripts,references}`; run
+`cargo run -p xtask -- sync-jev-assets` after changing `npm/jev` or the canonical
+reference, and `check-jev-assets` verifies every shipped copy
+([[decision-log#DEC-344: The crate embeds the Jev assets from templates/jev only (2026-10-04)|DEC-344]]).
 
 Validate actual loading using a fresh Codex session and a scratch vault. Check a
 natural-language search, a requested metadata change followed by lint, and an

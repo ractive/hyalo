@@ -76,3 +76,37 @@ test("all CLI-installed skill bundles execute without the source package", async
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });
+
+test("undeclared policy types are a policy error naming the types, not an unavailable Hyalo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hyalo-jev-types-")), oldCwd = process.cwd();
+  try {
+    await mkdir(join(root, "vault"));
+    await writeFile(join(root, ".hyalo.toml"), 'dir = "vault"\n[schema.types.docs]\nrequired = ["title"]\n');
+    await writeFile(join(root, "vault/note.md"), "---\ntitle: Experiment\n---\n# Results\nWe measured latency.\n");
+    process.chdir(root);
+    const undeclared = policy({ version: 1, types: [...p.types, { value: "memo", description: "Short internal notes." }] });
+    await expect(prepare(selection(["note.md"]), undeclared, hyaloReader(binary))).rejects.toThrow("policy types not declared in [schema.types]: research, memo");
+    const declared = await prepare(selection(["note.md"]), policy({ version: 1, types: [{ value: "docs", description: "Instructions." }] }), hyaloReader(binary));
+    expect(declared.documents).toHaveLength(1);
+  } finally { process.chdir(oldCwd); await rm(root, { recursive: true, force: true }); }
+});
+
+test("oversized and empty sections defer with explicit reasons", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hyalo-jev-sections-")), oldCwd = process.cwd();
+  try {
+    await mkdir(join(root, "vault"));
+    await writeFile(join(root, ".hyalo.toml"), 'dir = "vault"\n');
+    const tags = policy({ version: 1, tags: [{ value: "performance", description: "Measurements of performance." }] });
+    await writeFile(join(root, "vault/big.md"), "---\ntitle: Big\n---\n# Intro\nShort.\n# Results\n" + "x".repeat(20_000) + "\n");
+    await writeFile(join(root, "vault/empty.md"), "---\ntitle: Empty\n---\n# Intro\nShort.\n# Results\n\n# Next\nMore.\n");
+    await writeFile(join(root, "vault/whole.md"), "---\ntitle: Whole\n---\n# Results\n" + "x".repeat(20_000) + "\n");
+    process.chdir(root);
+    const m = await prepare(selection([{ file: "big.md", section: "Results" }, { file: "empty.md", section: "Results" }, "whole.md"]), tags, hyaloReader(binary));
+    expect(m.documents).toHaveLength(0);
+    expect(m.deferred.map(d => d.reason)).toEqual([
+      expect.stringMatching(/^section too large \(\d+ bytes > 18000\)$/),
+      "section empty",
+      "document too large; select a relevant section",
+    ]);
+  } finally { process.chdir(oldCwd); await rm(root, { recursive: true, force: true }); }
+});

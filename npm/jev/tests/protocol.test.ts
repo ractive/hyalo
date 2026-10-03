@@ -27,3 +27,16 @@ test("rejects malformed answers; unknown and uncertain choices defer", () => {
   expect(decisions({ ...valid, answers: { ...valid.answers, type: unknown } }, request.questions, bindings).decisions[0]?.status).toBe("defer");
   expect(decisions({ ...valid, answers: { ...valid.answers, type: { ...valid.answers.type, confidence: .84 } } }, request.questions, bindings).decisions[0]?.status).toBe("defer");
 });
+test("additive provider fields are ignored while known fields stay validated", () => {
+  const { request, bindings } = payload(fixture().documents[0]!, p), valid = response(request);
+  const extended = {
+    ...valid, request_id: "req_123", usage: { ...valid.usage, cached_tokens: 5 },
+    answers: Object.fromEntries(Object.entries(valid.answers).map(([id, a]) => [id, { ...(a as object), explanation: "ignored", nested: { more: true } }])),
+  };
+  const result = decisions(extended, request.questions, bindings);
+  expect(result.decisions.map(d => d.status)).toEqual(["suggestion", "suggestion"]);
+  expect(result.usage).toEqual({ input_tokens: 100, output_tokens: 20 });
+  // Unknown keys never relax validation of the keys the helper relies on.
+  expect(() => decisions({ ...extended, usage: { ...extended.usage, output_tokens: "20" } }, request.questions, bindings)).toThrow("usage");
+  expect(() => decisions({ ...extended, answers: { ...extended.answers, type: { ...(extended.answers.type as object), choice: "intruder" } } }, request.questions, bindings)).toThrow();
+});
