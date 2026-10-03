@@ -500,7 +500,7 @@ impl FieldTerm {
 
 /// A node of the compiled query.
 #[derive(Debug, Clone, PartialEq)]
-enum Node {
+pub(super) enum Node {
     And(Vec<Node>),
     Or(Vec<Node>),
     Not(Box<Node>),
@@ -530,7 +530,7 @@ struct QueryWord {
 /// One normalized query shared by indexed scoring, disk fallback and snippets.
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
-    root: Option<Node>,
+    pub(super) root: Option<Node>,
     words: Vec<QueryWord>,
     source: String,
 }
@@ -1218,7 +1218,7 @@ impl Bm25InvertedIndex {
 
     /// Dictionary terms a `prefix*` term expands to (most frequent first,
     /// then alphabetical), capped at [`MAX_PREFIX_EXPANSION`].
-    fn expand_prefix(&self, candidates: &[String]) -> Vec<&str> {
+    pub(super) fn expand_prefix(&self, candidates: &[String]) -> Vec<&str> {
         let mut terms = self.prefix_matches(candidates);
         terms.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         terms.truncate(MAX_PREFIX_EXPANSION);
