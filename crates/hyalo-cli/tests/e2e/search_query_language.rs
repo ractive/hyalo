@@ -91,7 +91,8 @@ fn parentheses_group_and_negate() {
         vec!["notes/rust-tokio.md", "notes/tokio-only.md"]
     );
     // A parenthesis inside a word is literal.
-    assert!(files(&tmp, "main()", &[]).is_empty());
+    let got = files(&tmp, "main()", &[]);
+    assert!(got.is_empty(), "expected empty, got {got:?}");
 }
 
 #[test]

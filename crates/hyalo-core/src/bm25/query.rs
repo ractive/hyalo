@@ -1484,7 +1484,8 @@ mod tests {
         ]);
         assert_eq!(hits(&index, "conf*"), vec!["a.md", "b.md"]);
         assert_eq!(hits(&index, "confl*"), vec!["b.md"]);
-        assert!(index.capped_prefixes(&compile("conf*")).is_empty());
+        let got = index.capped_prefixes(&compile("conf*"));
+        assert!(got.is_empty(), "expected empty, got {got:?}");
 
         let many: Vec<String> = (0..300).map(|i| format!("zeta{i:03}")).collect();
         let big = Bm25InvertedIndex::build_from_tokens(vec![PreTokenizedInput {
@@ -1510,7 +1511,8 @@ mod tests {
         assert_eq!(hits(&index, "(rust OR tokio) -async"), vec!["2.md", "3.md"]);
         assert_eq!(hits(&index, "-(rust OR async) tokio"), vec!["3.md"]);
         // A query with no positive leaf matches nothing.
-        assert!(hits(&index, "-rust").is_empty());
+        let got = hits(&index, "-rust");
+        assert!(got.is_empty(), "expected empty, got {got:?}");
     }
 
     struct MapFields(HashMap<&'static str, (&'static str, Vec<&'static str>, Vec<String>)>);
@@ -1664,7 +1666,8 @@ mod tests {
             corrected_query(&q, &suggestions).as_deref(),
             Some("stem -zzz unrelated")
         );
-        assert!(index.suggest(&compile("zzzzqqq")).is_empty());
+        let got = index.suggest(&compile("zzzzqqq"));
+        assert!(got.is_empty(), "expected empty, got {got:?}");
         assert!(corrected_query(&compile("x"), &[]).is_none());
     }
 
@@ -1674,6 +1677,7 @@ mod tests {
         let all = index.dictionary(None);
         assert_eq!(all[0], ("link", 2));
         assert_eq!(index.dictionary(Some("AL")), vec![("alpha", 1)]);
-        assert!(index.dictionary(Some("zz")).is_empty());
+        let got = index.dictionary(Some("zz"));
+        assert!(got.is_empty(), "expected empty, got {got:?}");
     }
 }
