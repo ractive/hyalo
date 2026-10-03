@@ -692,6 +692,15 @@ var require_resolve_platform = __commonJS({
 // src/api.ts
 var import_resolve_platform = __toESM(require_resolve_platform());
 import { spawn } from "node:child_process";
+var HYALO_ERROR_BRAND = /* @__PURE__ */ Symbol.for("@ractive-ch/hyalo/error");
+function brand(error) {
+  Object.defineProperty(error, HYALO_ERROR_BRAND, { value: true, enumerable: false });
+}
+function isHyaloBranded(error, names) {
+  if (typeof error !== "object" || error === null) return false;
+  if (error[HYALO_ERROR_BRAND] !== true) return false;
+  return names === void 0 || names.has(error.name);
+}
 var HyaloError = class extends Error {
   exitCode;
   stdout;
@@ -700,8 +709,9 @@ var HyaloError = class extends Error {
   /** Committed paths and index disposition, retained even after output failure. */
   effects;
   category;
-  constructor(result, envelope) {
-    super(envelope?.error ?? `hyalo exited with code ${result.code}`);
+  constructor(result, envelope, message) {
+    super(message ?? envelope?.error ?? `hyalo exited with code ${result.code}`);
+    brand(this);
     this.name = "HyaloError";
     this.exitCode = result.code;
     this.stdout = result.stdout;
@@ -715,6 +725,7 @@ var HyaloSpawnError = class extends Error {
   cause;
   constructor(cause) {
     super(cause instanceof Error ? cause.message : String(cause));
+    brand(this);
     this.name = "HyaloSpawnError";
     this.cause = cause;
   }
@@ -725,6 +736,7 @@ var HyaloParseError = class extends Error {
   cause;
   constructor(message, result, cause) {
     super(message);
+    brand(this);
     this.name = "HyaloParseError";
     this.stdout = result.stdout;
     this.stderr = result.stderr;
@@ -735,6 +747,7 @@ var HyaloTimeoutError = class extends Error {
   timeoutMs;
   constructor(timeoutMs) {
     super(`hyalo timed out after ${timeoutMs}ms`);
+    brand(this);
     this.name = "HyaloTimeoutError";
     this.timeoutMs = timeoutMs;
   }
@@ -742,16 +755,25 @@ var HyaloTimeoutError = class extends Error {
 var HyaloAbortError = class extends Error {
   constructor() {
     super("hyalo execution was aborted");
+    brand(this);
     this.name = "HyaloAbortError";
   }
 };
 var HyaloTransportError = class extends Error {
   constructor(message) {
     super(message);
+    brand(this);
     this.name = "HyaloTransportError";
   }
 };
 var DEFAULT_TIMEOUT_MS = 6e4;
+var KILL_GRACE_MS = 2e3;
+var PASSTHROUGH_ERRORS = /* @__PURE__ */ new Set([
+  "HyaloAbortError",
+  "HyaloTimeoutError",
+  "HyaloSpawnError",
+  "HyaloTransportError"
+]);
 var RESERVED_OUTPUT_KEYS = /* @__PURE__ */ new Set([
   "format",
   "jq",
@@ -873,41 +895,70 @@ function nativeTransport(binaryPath) {
       const stdout = [];
       const stderr = [];
       let settled = false;
-      const cleanup = () => {
-        clearTimeout(timer);
-        options.signal?.removeEventListener("abort", abort);
+      let termination;
+      let killTimer;
+      const onStdout = (chunk) => {
+        stdout.push(chunk);
       };
-      const fail = (error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
+      const onStderr = (chunk) => {
+        stderr.push(chunk);
       };
-      const abort = () => {
-        child.kill();
-        fail(new HyaloAbortError());
-      };
-      const timer = setTimeout(() => {
-        child.kill();
-        fail(new HyaloTimeoutError(options.timeoutMs));
-      }, options.timeoutMs);
-      options.signal?.addEventListener("abort", abort, { once: true });
-      child.stdout.on("data", (chunk) => stdout.push(chunk));
-      child.stderr.on("data", (chunk) => stderr.push(chunk));
-      child.stdin.on("error", (error) => {
-        if (!isClosedStdinWriteError(error)) fail(new HyaloSpawnError(error));
-      });
-      child.on("error", (error) => fail(new HyaloSpawnError(error)));
-      child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve({
+      const onClose = (code) => {
+        if (termination !== void 0) {
+          const error = termination;
+          finish(() => reject(error));
+          return;
+        }
+        finish(() => resolve({
           stdout: Buffer.concat(stdout).toString("utf8"),
           stderr: Buffer.concat(stderr).toString("utf8"),
           code: code ?? 2
-        });
+        }));
+      };
+      const finish = (settle) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        options.signal?.removeEventListener("abort", abort);
+        child.stdout.off("data", onStdout);
+        child.stderr.off("data", onStderr);
+        child.off("close", onClose);
+        settle();
+      };
+      const fail = (error) => finish(() => reject(error));
+      const terminate = (error) => {
+        if (settled || termination !== void 0) return;
+        termination = error;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", abort);
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+          killTimer = setTimeout(() => {
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.stdin.destroy();
+            fail(error);
+          }, KILL_GRACE_MS);
+        }, KILL_GRACE_MS);
+      };
+      const abort = () => terminate(new HyaloAbortError());
+      const timer = setTimeout(() => {
+        terminate(new HyaloTimeoutError(options.timeoutMs));
+      }, options.timeoutMs);
+      options.signal?.addEventListener("abort", abort, { once: true });
+      child.stdout.on("data", onStdout);
+      child.stderr.on("data", onStderr);
+      child.stdin.on("error", (error) => {
+        if (!isClosedStdinWriteError(error) && termination === void 0) {
+          fail(new HyaloSpawnError(error));
+        }
       });
+      child.on("error", (error) => {
+        if (termination === void 0) fail(new HyaloSpawnError(error));
+      });
+      child.on("close", onClose);
       if (options.stdin === void 0) child.stdin.end();
       else child.stdin.end(options.stdin);
     });
@@ -941,9 +992,7 @@ async function execute(argv, options = {}) {
       stdin: options.stdin
     });
   } catch (error) {
-    if (error instanceof HyaloAbortError || error instanceof HyaloTimeoutError || error instanceof HyaloSpawnError || error instanceof HyaloTransportError) {
-      throw error;
-    }
+    if (isHyaloBranded(error, PASSTHROUGH_ERRORS)) throw error;
     throw new HyaloSpawnError(error);
   }
 }
@@ -1000,7 +1049,20 @@ async function mutationReport(argv, options = {}) {
   const args = [...argv];
   const terminator = args.indexOf("--");
   args.splice(terminator === -1 ? args.length : terminator, 0, "--internal-mutation-report");
-  const envelope = await jsonCall(args, options);
+  let envelope;
+  try {
+    envelope = await jsonCall(args, options);
+  } catch (error) {
+    if (isHyaloBranded(error, /* @__PURE__ */ new Set(["HyaloError"])) && error.exitCode === 2 && /unexpected argument '--internal-mutation-report'/.test(error.stderr)) {
+      const failure = error;
+      throw new HyaloError(
+        { code: failure.exitCode, stdout: failure.stdout, stderr: failure.stderr },
+        void 0,
+        "hyalo is too old for typed mutations: hyalo_set and hyalo_task need hyalo >= 0.24.0 (the installed binary rejects --internal-mutation-report); upgrade hyalo"
+      );
+    }
+    throw error;
+  }
   if (!("effects" in envelope)) throw new HyaloParseError("hyalo returned no internal mutation report", { code: 0, stdout: JSON.stringify(envelope), stderr: "" });
   return envelope;
 }
@@ -1015,6 +1077,39 @@ function read(options = {}) {
 function summary(options = {}) {
   const values = options;
   return jsonCall(summaryArgv(values), values);
+}
+function terms(options = {}) {
+  const values = options;
+  const argv = ["terms"];
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  if (values.prefix !== void 0 && values.prefix !== null) argv.push("--", String(values.prefix));
+  return jsonCall(argv, values);
+}
+function tags(options = {}) {
+  const values = options;
+  const argv = ["tags", "summary"];
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  return jsonCall(argv, values);
+}
+function backlinks(options = {}) {
+  const values = options;
+  const argv = ["backlinks"];
+  addFlag(argv, "--file", values.file);
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--files-from", values.files_from);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  if (values.file_positional !== void 0 && values.file_positional !== null) {
+    argv.push("--", String(values.file_positional));
+  }
+  return jsonCall(argv, values);
 }
 function config(options = {}) {
   const values = options;
@@ -1056,7 +1151,7 @@ async function lint(file, options = {}) {
   argv.push("--format=text", "--no-hints");
   if (file !== void 0) argv.push("--", file);
   const result = await execute(argv, options);
-  if (result.code !== 0 && result.code !== 1) {
+  if (result.code !== 0 && result.code !== 1 || result.code === 1 && !result.stdout.trim()) {
     throw new HyaloError(result, parseErrorEnvelope(result));
   }
   if (result.code === 0) await reportDiagnostics(result, options);
@@ -1069,7 +1164,7 @@ function raw(argv, options = {}) {
 // src/pi-runtime.ts
 async function configForPi(options = {}) {
   const result = await raw(["config", "--format=json", "--no-hints"], options);
-  if (result.code !== 0) throw new HyaloError(result);
+  if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
   if (!result.stdout.trim()) throw new HyaloParseError("hyalo returned empty JSON", result);
   let parsed;
   try {
@@ -1097,6 +1192,7 @@ export {
   HyaloSpawnError,
   HyaloTimeoutError,
   HyaloTransportError,
+  backlinks,
   config,
   configForPi,
   createPiTransport,
@@ -1107,5 +1203,7 @@ export {
   read,
   set,
   summary,
-  task
+  tags,
+  task,
+  terms
 };

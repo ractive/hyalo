@@ -30,7 +30,7 @@ ESM and CommonJS consumers can import the same API directly from the installed
 package:
 
 ```ts
-import { config, find, read, summary } from "@ractive-ch/hyalo";
+import { backlinks, config, find, read, summary, tags, terms } from "@ractive-ch/hyalo";
 
 const matches = await find({
   pattern: "error handling",
@@ -41,9 +41,25 @@ const matches = await find({
 const note = await read({ file: [matches.results[0].file] });
 const vault = await summary({ recent: 5, depth: 1 });
 const settings = await config();
+const dictionary = await terms({ prefix: "error" });
+const tagCounts = await tags({ glob: ["projects/**"] });
+const inbound = await backlinks({ file_positional: matches.results[0].file });
 ```
 
-`find`, `read`, `summary`, and `config` force `--format json --no-hints` and
+| Function | Command | Result |
+| --- | --- | --- |
+| `find` | `hyalo find` | `Envelope<FindResult>` |
+| `read` | `hyalo read` | `Envelope<ReadResult>` |
+| `summary` | `hyalo summary` | `Envelope<SummaryResult>` |
+| `config` | `hyalo config` | `Envelope<ConfigResult>` |
+| `terms` | `hyalo terms [PREFIX]` | `Envelope<TermsResult>` |
+| `tags` | `hyalo tags summary` | `Envelope<TagsResult>` |
+| `backlinks` | `hyalo backlinks` | `Envelope<BacklinksResult>` |
+| `set`, `task` | `hyalo set`, `hyalo task toggle` | `ProcessResult` (text) |
+| `lint` | `hyalo lint` | `ProcessResult` (text; exit 1 = findings) |
+| `raw`, `execute` | any argv | `ProcessResult` |
+
+The typed functions force `--format json --no-hints` and
 return `Envelope<T>`. They reject `format`, `jq`, `count`, hint controls, and
 filename-only projections at runtime because those flags would break the typed
 result contract. Use `raw(argv)` when a command needs text, jq, or another
@@ -57,7 +73,9 @@ without a shell. `binaryPath` selects an explicit Cargo/Homebrew/test binary;
 `PATH`. Pi reports killed children through the same timeout and abort error
 classes. Its process API does not accept stdin, so the adapter rejects `stdin`
 instead of running with an empty input. Every call also accepts `cwd`,
-`timeoutMs`, and `AbortSignal`.
+`timeoutMs`, and `AbortSignal`. A timeout or abort sends SIGTERM, escalates to
+SIGKILL after a two-second grace period, and rejects only once the child has
+closed, so a retry never overlaps a command that is still running.
 
 The Pi bundle projects only the vault directory and session-summary opt-in from
 configuration. It accepts current config envelopes, pre-`[pi]` envelopes, and
@@ -75,10 +93,19 @@ categories distinguish source conflicts, I/O and finalization. Inspect effects
 before retrying, especially task toggles: a nonzero result can follow a committed
 write. Successful public `set()` and `task()` retain their `ProcessResult` streams.
 
+`lint()` resolves with exit 0 (clean) and exit 1 (findings, always on stdout).
+Exit 1 with empty stdout is a refusal — a missing file or a malformed
+`.hyalo.toml` — and throws `HyaloError` with the parsed envelope, like any other
+failure. The ESM, CommonJS and Pi bundles each carry their own copy of the error
+classes, so `instanceof` only holds within one copy; compare `error.name` when an
+error may cross bundles.
+
 The bundled Pi runtime also exposes the internal `mutationReport()` accessor.
 It executes once with JSON/no hints and returns actual effects alongside the
 usual results. Its hidden CLI transport flag is not a public option or generated
 argument field; ordinary success envelopes do not acquire this extra metadata.
+A binary older than 0.24.0 rejects that flag with a usage error; the accessor
+turns it into a `HyaloError` whose message says hyalo is too old.
 
 Successful typed calls forward nonempty stderr to the caller's stderr by default.
 To collect it instead, pass `onDiagnostics`:

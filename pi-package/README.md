@@ -44,7 +44,9 @@ command.
 The extension shells out to the installed `hyalo` binary and must stay
 compatible with *released* hyalo versions:
 
-- The typed tools (`hyalo_find` etc.) require **hyalo ≥ 0.21** (the next
-  release after 0.20); the `[pi]` config section requires hyalo ≥ 0.20.
-- On older binaries the typed tools report hyalo errors; the generic `hyalo`
-  tool still works.
+- The typed tools require **hyalo ≥ 0.24**: `hyalo_set` and `hyalo_task` pass
+  the internal `--internal-mutation-report` flag, first shipped in 0.24.0
+  (`hyalo_find`/`hyalo_read` work from 0.21); the `[pi]` config section
+  requires hyalo ≥ 0.20.
+- On an older binary `hyalo_set`/`hyalo_task` fail with "hyalo is too old for
+  typed mutations"; the generic `hyalo` tool still works.

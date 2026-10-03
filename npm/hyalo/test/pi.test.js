@@ -224,6 +224,59 @@ test('Pi observed mutation reports unavailable config and retries the lookup', a
   } finally { await fs.rm(scratch, { recursive: true, force: true }); }
 });
 
+test('Pi lint refusals are unavailable, write guardrails lint the vault-relative path, old binaries are named', async () => {
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'hyalo-pi-refusal-'));
+  try {
+    const outfile = await bundleSourceExtension(scratch, 'refusal');
+    const tools = new Map();
+    const handlers = new Map();
+    const calls = [];
+    let lintMode = 'refusal';
+    let mutationMode = 'ok';
+    const pi = {
+      exec: async (_command, argv) => {
+        calls.push(argv);
+        if (argv[0] === 'config') return { code: 0, stderr: '', killed: false,
+          stdout: JSON.stringify({ results: { dir: path.join(scratch, 'kb'), pi: {} }, hints: [] }) };
+        if (argv[0] === 'lint') {
+          if (lintMode === 'refusal') return { code: 1, stdout: '', killed: false,
+            stderr: JSON.stringify({ error: 'file not found', path: 'note.md' }) };
+          return { code: 1, stderr: '', killed: false, stdout: 'sub/note.md:1: HYALO002 finding' };
+        }
+        if (mutationMode === 'old') return { code: 2, stdout: '', killed: false,
+          stderr: "error: unexpected argument '--internal-mutation-report' found\n" };
+        return { code: 0, stderr: '', killed: false,
+          stdout: JSON.stringify({ results: { modified: ['note.md'] }, hints: [], effects: {
+            paths: [{ file: 'note.md', state: 'committed' }],
+          } }) };
+      },
+      registerTool: (tool) => tools.set(tool.name, tool),
+      registerCommand() {}, on: (event, handler) => handlers.set(event, handler), sendMessage() {},
+    };
+    (await import(pathToFileURL(outfile).href)).default(pi);
+
+    const refused = await tools.get('hyalo_set').execute('id', { file: 'note.md', property: 'status=done' });
+    const refusedText = refused.content.map((item) => item.text).join('\n');
+    assert.match(refusedText, /post-write hyalo lint was unavailable for note\.md/);
+    assert.match(refusedText, /file not found/);
+    assert.doesNotMatch(refusedText, /found issues/);
+
+    lintMode = 'findings';
+    const absolute = path.join(scratch, 'kb', 'sub', 'note.md');
+    const observed = await handlers.get('tool_result')({
+      toolName: 'write', isError: false, input: { path: absolute }, content: [],
+    }, { signal: undefined });
+    assert.equal(calls.filter((argv) => argv[0] === 'lint').at(-1).at(-1), 'sub/note.md');
+    assert.match(observed.content.at(-1).text, /hyalo lint found issues in sub[\\/]note\.md/);
+
+    mutationMode = 'old';
+    const old = await tools.get('hyalo_task').execute('id', { file: 'note.md', mode: 'all' });
+    const oldText = old.content.map((item) => item.text).join('\n');
+    assert.match(oldText, /failed with exit code 2/);
+    assert.match(oldText, /too old.*>= 0\.24\.0/);
+  } finally { await fs.rm(scratch, { recursive: true, force: true }); }
+});
+
 test('Pi typed diagnostics and set guardrail use the real hyalo binary', async () => {
   const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'hyalo-pi-real-'));
   try {

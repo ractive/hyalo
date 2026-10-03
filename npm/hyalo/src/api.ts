@@ -5,6 +5,8 @@ import type { Envelope } from "./generated/Envelope.js";
 import type { MutationReportEnvelope } from "./generated/MutationReportEnvelope.js";
 import type { ErrorEnvelope } from "./generated/ErrorEnvelope.js";
 import type {
+  BacklinksOptions,
+  BacklinksResult,
   ConfigOptions,
   ConfigResult,
   FindOptions,
@@ -13,6 +15,10 @@ import type {
   ReadResult,
   SummaryOptions,
   SummaryResult,
+  TagsOptions,
+  TagsResult,
+  TermsOptions,
+  TermsResult,
 } from "./types.js";
 
 export interface ProcessResult {
@@ -61,6 +67,27 @@ export type FindCallOptions = FindOptions & ExecutionOptions;
 export type ReadCallOptions = ReadOptions & ExecutionOptions;
 export type SummaryCallOptions = SummaryOptions & ExecutionOptions;
 export type ConfigCallOptions = ConfigOptions & ExecutionOptions;
+export type TermsCallOptions = TermsOptions & ExecutionOptions;
+export type TagsCallOptions = TagsOptions & ExecutionOptions;
+export type BacklinksCallOptions = BacklinksOptions & ExecutionOptions;
+
+/**
+ * Brand shared by every copy of the error classes. The ESM, CommonJS and Pi
+ * bundles each carry their own class objects, so `instanceof` fails across
+ * them; `Symbol.for` resolves to the same registry symbol in every copy.
+ */
+const HYALO_ERROR_BRAND = Symbol.for("@ractive-ch/hyalo/error");
+
+function brand(error: Error): void {
+  Object.defineProperty(error, HYALO_ERROR_BRAND, { value: true, enumerable: false });
+}
+
+/** @internal True for an error constructed by any copy of this module, optionally of the given class names. */
+export function isHyaloBranded(error: unknown, names?: ReadonlySet<string>): error is Error {
+  if (typeof error !== "object" || error === null) return false;
+  if ((error as { [HYALO_ERROR_BRAND]?: unknown })[HYALO_ERROR_BRAND] !== true) return false;
+  return names === undefined || names.has((error as Error).name);
+}
 
 export class HyaloError extends Error {
   readonly exitCode: number;
@@ -71,8 +98,9 @@ export class HyaloError extends Error {
   readonly effects?: ErrorEnvelope["effects"];
   readonly category?: ErrorEnvelope["category"];
 
-  constructor(result: ProcessResult, envelope?: ErrorEnvelope) {
-    super(envelope?.error ?? `hyalo exited with code ${result.code}`);
+  constructor(result: ProcessResult, envelope?: ErrorEnvelope, message?: string) {
+    super(message ?? envelope?.error ?? `hyalo exited with code ${result.code}`);
+    brand(this);
     this.name = "HyaloError";
     this.exitCode = result.code;
     this.stdout = result.stdout;
@@ -88,6 +116,7 @@ export class HyaloSpawnError extends Error {
 
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause));
+    brand(this);
     this.name = "HyaloSpawnError";
     this.cause = cause;
   }
@@ -100,6 +129,7 @@ export class HyaloParseError extends Error {
 
   constructor(message: string, result: ProcessResult, cause?: unknown) {
     super(message);
+    brand(this);
     this.name = "HyaloParseError";
     this.stdout = result.stdout;
     this.stderr = result.stderr;
@@ -112,6 +142,7 @@ export class HyaloTimeoutError extends Error {
 
   constructor(timeoutMs: number) {
     super(`hyalo timed out after ${timeoutMs}ms`);
+    brand(this);
     this.name = "HyaloTimeoutError";
     this.timeoutMs = timeoutMs;
   }
@@ -120,6 +151,7 @@ export class HyaloTimeoutError extends Error {
 export class HyaloAbortError extends Error {
   constructor() {
     super("hyalo execution was aborted");
+    brand(this);
     this.name = "HyaloAbortError";
   }
 }
@@ -127,11 +159,20 @@ export class HyaloAbortError extends Error {
 export class HyaloTransportError extends Error {
   constructor(message: string) {
     super(message);
+    brand(this);
     this.name = "HyaloTransportError";
   }
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+/** Time a cancelled child gets to exit after SIGTERM before SIGKILL, and after SIGKILL before its pipes are abandoned. */
+const KILL_GRACE_MS = 2_000;
+const PASSTHROUGH_ERRORS: ReadonlySet<string> = new Set([
+  "HyaloAbortError",
+  "HyaloTimeoutError",
+  "HyaloSpawnError",
+  "HyaloTransportError",
+]);
 const RESERVED_OUTPUT_KEYS = new Set([
   "format",
   "jq",
@@ -267,46 +308,77 @@ function nativeTransport(binaryPath?: string): HyaloTransport {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let settled = false;
+      let termination: Error | undefined;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const cleanup = () => {
-        clearTimeout(timer);
-        options.signal?.removeEventListener("abort", abort);
+      const onStdout = (chunk: Buffer) => { stdout.push(chunk); };
+      const onStderr = (chunk: Buffer) => { stderr.push(chunk); };
+      const onClose = (code: number | null) => {
+        if (termination !== undefined) {
+          const error = termination;
+          finish(() => reject(error));
+          return;
+        }
+        finish(() => resolve({
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          code: code ?? 2,
+        }));
       };
-      const fail = (error: unknown) => {
+      // Error listeners stay attached after settling (guarded by `settled`),
+      // so a late EPIPE or kill failure can never become an unhandled event.
+      const finish = (settle: () => void) => {
         if (settled) return;
         settled = true;
-        cleanup();
-        reject(error);
+        clearTimeout(timer);
+        clearTimeout(killTimer);
+        options.signal?.removeEventListener("abort", abort);
+        child.stdout.off("data", onStdout);
+        child.stderr.off("data", onStderr);
+        child.off("close", onClose);
+        settle();
       };
-      const abort = () => {
-        child.kill();
-        fail(new HyaloAbortError());
+      const fail = (error: unknown) => finish(() => reject(error));
+      // Cancellation settles only once the child has closed, so a retry can
+      // never overlap a mutation that is still running. SIGTERM first, SIGKILL
+      // after the grace period; a grandchild holding the pipes open after
+      // SIGKILL cannot keep the call pending forever.
+      const terminate = (error: Error) => {
+        if (settled || termination !== undefined) return;
+        termination = error;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", abort);
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+          killTimer = setTimeout(() => {
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.stdin.destroy();
+            fail(error);
+          }, KILL_GRACE_MS);
+        }, KILL_GRACE_MS);
       };
+      const abort = () => terminate(new HyaloAbortError());
       const timer = setTimeout(() => {
-        child.kill();
-        fail(new HyaloTimeoutError(options.timeoutMs));
+        terminate(new HyaloTimeoutError(options.timeoutMs));
       }, options.timeoutMs);
 
       options.signal?.addEventListener("abort", abort, { once: true });
-      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.stdout.on("data", onStdout);
+      child.stderr.on("data", onStderr);
       child.stdin.on("error", (error: NodeJS.ErrnoException) => {
         // A command may reject argv and close stdin before a large input has
         // finished writing. Its exit status/stderr is the useful result;
         // Unix reports EPIPE and Windows reports EOF for the same closed peer.
-        if (!isClosedStdinWriteError(error)) fail(new HyaloSpawnError(error));
+        if (!isClosedStdinWriteError(error) && termination === undefined) {
+          fail(new HyaloSpawnError(error));
+        }
       });
-      child.on("error", (error) => fail(new HyaloSpawnError(error)));
-      child.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve({
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
-          code: code ?? 2,
-        });
+      child.on("error", (error) => {
+        if (termination === undefined) fail(new HyaloSpawnError(error));
       });
+      child.on("close", onClose);
       if (options.stdin === undefined) child.stdin.end();
       else child.stdin.end(options.stdin);
     });
@@ -351,19 +423,15 @@ export async function execute(
       stdin: options.stdin,
     });
   } catch (error) {
-    if (
-      error instanceof HyaloAbortError ||
-      error instanceof HyaloTimeoutError ||
-      error instanceof HyaloSpawnError ||
-      error instanceof HyaloTransportError
-    ) {
-      throw error;
-    }
+    // Brand check, not `instanceof`: a transport built against another copy of
+    // this module (ESM, CommonJS or the Pi bundle) throws that copy's classes.
+    if (isHyaloBranded(error, PASSTHROUGH_ERRORS)) throw error;
     throw new HyaloSpawnError(error);
   }
 }
 
-function parseErrorEnvelope(result: ProcessResult): ErrorEnvelope | undefined {
+/** @internal Parse the trailing JSON error envelope of a failed call. */
+export function parseErrorEnvelope(result: ProcessResult): ErrorEnvelope | undefined {
   for (const raw of [result.stderr, result.stdout]) {
     const text = raw.trim();
     if (!text) continue;
@@ -436,7 +504,25 @@ export async function mutationReport<T>(argv: readonly string[], options: Execut
   const args = [...argv];
   const terminator = args.indexOf("--");
   args.splice(terminator === -1 ? args.length : terminator, 0, "--internal-mutation-report");
-  const envelope = await jsonCall<T>(args, options as unknown as Record<string, unknown>);
+  let envelope: Envelope<T>;
+  try {
+    envelope = await jsonCall<T>(args, options as unknown as Record<string, unknown>);
+  } catch (error) {
+    if (
+      isHyaloBranded(error, new Set(["HyaloError"])) &&
+      (error as HyaloError).exitCode === 2 &&
+      /unexpected argument '--internal-mutation-report'/.test((error as HyaloError).stderr)
+    ) {
+      const failure = error as HyaloError;
+      throw new HyaloError(
+        { code: failure.exitCode, stdout: failure.stdout, stderr: failure.stderr },
+        undefined,
+        "hyalo is too old for typed mutations: hyalo_set and hyalo_task need hyalo >= 0.24.0 " +
+          "(the installed binary rejects --internal-mutation-report); upgrade hyalo",
+      );
+    }
+    throw error;
+  }
   if (!("effects" in envelope)) throw new HyaloParseError("hyalo returned no internal mutation report", { code: 0, stdout: JSON.stringify(envelope), stderr: "" });
   return envelope as MutationReportEnvelope<T>;
 }
@@ -454,6 +540,45 @@ export function read(options: ReadCallOptions = {}): Promise<Envelope<ReadResult
 export function summary(options: SummaryCallOptions = {}): Promise<Envelope<SummaryResult>> {
   const values = options as unknown as Record<string, unknown>;
   return jsonCall<SummaryResult>(summaryArgv(values), values);
+}
+
+/** `hyalo terms [PREFIX]`: BM25 dictionary terms with their document frequency. */
+export function terms(options: TermsCallOptions = {}): Promise<Envelope<TermsResult>> {
+  const values = options as unknown as Record<string, unknown>;
+  const argv = ["terms"];
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  if (values.prefix !== undefined && values.prefix !== null) argv.push("--", String(values.prefix));
+  return jsonCall<TermsResult>(argv, values);
+}
+
+/** `hyalo tags summary`: unique frontmatter tags with file counts. */
+export function tags(options: TagsCallOptions = {}): Promise<Envelope<TagsResult>> {
+  const values = options as unknown as Record<string, unknown>;
+  const argv = ["tags", "summary"];
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  return jsonCall<TagsResult>(argv, values);
+}
+
+/** `hyalo backlinks`: every authored link that points at one file. */
+export function backlinks(options: BacklinksCallOptions = {}): Promise<Envelope<BacklinksResult>> {
+  const values = options as unknown as Record<string, unknown>;
+  const argv = ["backlinks"];
+  addFlag(argv, "--file", values.file);
+  addFlag(argv, "--glob", values.glob);
+  addFlag(argv, "--files-from", values.files_from);
+  addFlag(argv, "--limit", values.limit);
+  addFlag(argv, "--index", values.index);
+  addGlobals(argv, values);
+  if (values.file_positional !== undefined && values.file_positional !== null) {
+    argv.push("--", String(values.file_positional));
+  }
+  return jsonCall<BacklinksResult>(argv, values);
 }
 
 export function config(options: ConfigCallOptions = {}): Promise<Envelope<ConfigResult>> {
@@ -515,7 +640,9 @@ export async function lint(
   argv.push("--format=text", "--no-hints");
   if (file !== undefined) argv.push("--", file);
   const result = await execute(argv, options);
-  if (result.code !== 0 && result.code !== 1) {
+  // Findings always reach stdout, so exit 1 with empty stdout is a refusal
+  // (a missing file, a malformed .hyalo.toml), never a lint with no findings.
+  if ((result.code !== 0 && result.code !== 1) || (result.code === 1 && !result.stdout.trim())) {
     throw new HyaloError(result, parseErrorEnvelope(result));
   }
   if (result.code === 0) await reportDiagnostics(result, options);
