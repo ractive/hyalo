@@ -10,6 +10,8 @@ import {
   raw as hyaloRaw,
   read as hyaloRead,
   summary as hyaloSummary,
+  type HyaloTransport,
+  type PiConfigInfo,
 } from "../lib/hyalo-api.js";
 
 const HYALO_TIMEOUT_MS = 60_000;
@@ -45,7 +47,7 @@ function renderSuccess(text: string, diagnostics: readonly string[] = []) {
  * uniform tool result. One path — no behavioral divergence between tools.
  */
 async function runHyalo(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
   argv: string[],
   signal?: AbortSignal,
 ) {
@@ -99,11 +101,20 @@ async function runTyped(
       stdout?: string;
       message?: string;
       guardrail?: string;
+      envelope?: { error?: string };
     };
     if (typeof value.exitCode === "number") {
+      // A message that is neither the generic exit-code text nor the envelope's
+      // own error (already in stderr) explains the failure, e.g. "hyalo is too old".
+      const explanation = value.message !== undefined &&
+        value.message !== `hyalo exited with code ${value.exitCode}` &&
+        value.message !== value.envelope?.error
+        ? [{ type: "text" as const, text: value.message }]
+        : [];
       return {
         content: [
           { type: "text" as const, text: `hyalo ${command} failed with exit code ${value.exitCode}` },
+          ...explanation,
           ...(value.stderr ? [{ type: "text" as const, text: `Stderr:\n${value.stderr}` }] : []),
           ...(value.stdout ? [{ type: "text" as const, text: `Stdout:\n${value.stdout}` }] : []),
           ...(value.guardrail ? [{ type: "text" as const, text: value.guardrail }] : []),
@@ -193,11 +204,11 @@ function buildCommand(params: HyaloToolArgs): string[] {
  * the rest of the process.
  */
 type HyaloConfigLookup =
-  | { status: "available"; config: Awaited<ReturnType<typeof hyaloConfig>> }
+  | { status: "available"; config: PiConfigInfo }
   | { status: "unavailable"; text: string };
 
 async function loadHyaloConfig(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
 ): Promise<HyaloConfigLookup> {
   const cached = loadHyaloConfig.cache;
   if (cached !== undefined) return { status: "available", config: cached };
@@ -214,10 +225,10 @@ async function loadHyaloConfig(
   }
 }
 // Module-level cache slot (survives across event handler invocations).
-loadHyaloConfig.cache = undefined as Awaited<ReturnType<typeof hyaloConfig>> | undefined;
+loadHyaloConfig.cache = undefined as PiConfigInfo | undefined;
 
 async function findVaultDir(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
 ): Promise<{ status: "available"; vaultDir: string | null } | { status: "unavailable"; text: string }> {
   const lookup = await loadHyaloConfig(transport);
   return lookup.status === "available"
@@ -231,22 +242,22 @@ type LintGuardResult =
   | { status: "unavailable"; text: string };
 
 async function lintVaultFile(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
   filePath: string,
   signal: AbortSignal | undefined,
 ): Promise<LintGuardResult> {
   try {
+    // lint() throws on a refusal (exit 1 with empty stdout: a missing file, a
+    // malformed .hyalo.toml) and on any other failing exit code.
     const { stdout, code } = await hyaloLint(filePath, { transport, signal, timeoutMs: 30_000 });
-    if (code !== 0 && code !== 1) {
-      return { status: "unavailable", text: `hyalo lint exited with code ${code}` };
-    }
     // Clean single-file output is "N file checked, no issues".
     if (code === 0 && /no issues/.test(stdout)) return { status: "clean" };
     return { status: "findings", text: stdout.trim() };
   } catch (error) {
+    const value = error as { message?: string; stderr?: string };
     return {
       status: "unavailable",
-      text: error instanceof Error ? error.message : String(error),
+      text: value.stderr?.trim() || value.message || String(error),
     };
   }
 }
@@ -259,7 +270,7 @@ const SURVIVING_EFFECTS = new Set([
 ]);
 
 async function lintMutationEffects(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
   effects: { paths?: Array<{ file: string; state: string }> } | undefined,
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
@@ -295,7 +306,7 @@ async function lintMutationEffects(
 }
 
 async function runObservedMutation(
-  transport: ReturnType<typeof createPiTransport>,
+  transport: HyaloTransport,
   argv: string[],
   signal: AbortSignal | undefined,
   onDiagnostics: (stderr: string) => void,
@@ -600,10 +611,12 @@ export default function (pi: ExtensionAPI) {
     const fileAbs = path.resolve(process.cwd(), rawPath);
     if (fileAbs !== vaultAbs && !fileAbs.startsWith(vaultAbs + path.sep)) return;
 
-    const lintOutput = await lintVaultFile(transport, rawPath, ctx.signal);
+    // hyalo resolves a bare path against the vault and warns about absolute
+    // ones, so lint the vault-relative form with forward slashes.
+    const relative = path.relative(vaultAbs, fileAbs).split(path.sep).join("/");
+    const lintOutput = await lintVaultFile(transport, relative, ctx.signal);
     if (lintOutput.status === "clean") return;
 
-    const relative = path.relative(vaultAbs, fileAbs);
     const message = lintOutput.status === "findings"
       ? `⚠ hyalo lint found issues in ${relative} ` +
         `(write succeeded, but fix the violations now — e.g. 'hyalo set' for ` +
