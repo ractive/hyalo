@@ -70,6 +70,12 @@ must all match the target:
 - `hyalo-core = { path = ..., version = "X.Y.Z" }`
 - `hyalo-mdlint = { path = ..., version = "X.Y.Z" }`
 
+The JSON manifests listed under "Version-sync prerequisites" in
+`docs/releasing.md` (root and pi `package.json`, the vendored pi copy, the
+Codex `plugin.json`, `npm/hyalo/package.json`) must match too — the xtask gates
+fail otherwise — and `npm-registry.yml`'s default `version` input is bumped
+alongside.
+
 Often the bump already happened during the dev cycle (e.g. 0.18.0 was bumped
 in the changelog-conversion PR long before release day) — then just verify.
 If a bump is needed: edit the three fields, run `cargo build --release`

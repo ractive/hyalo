@@ -119,7 +119,7 @@ Version 0.23.0 adds a typed TypeScript API with ESM and CommonJS entrypoints
 alongside the CLI. Import `find`, `read`, `summary`, and `config` directly from
 `@ractive-ch/hyalo`; see the [API documentation](npm/hyalo/README.md).
 npm selects exactly one native platform dependency at the same version.
-The earlier 0.22.0 distribution contains the CLI launcher only.
+The npm-only 0.22.0 release (no GitHub release) shipped the CLI launcher only.
 
 ### Manual download
 
@@ -285,8 +285,7 @@ pi install git:github.com/ractive/hyalo
 From **hyalo ≥ 0.21** on, pin the release tag matching your binary instead
 (recommended — the extension's expected output shapes track the binary, so a
 matched tag avoids extension/binary drift; the tag form needs ≥ v0.21.0,
-earlier tags predate the root package manifest; the `@v0.21.0` examples
-below work once v0.21.0 is tagged):
+earlier tags predate the root package manifest):
 
 ```sh
 pi install git:github.com/ractive/hyalo@v0.21.0
