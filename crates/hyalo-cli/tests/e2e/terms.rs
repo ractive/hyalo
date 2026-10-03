@@ -249,3 +249,49 @@ Häuser
     assert_eq!(json["results"][0]["term"], "haus");
     assert_eq!(json["results"][0]["docs"], 1);
 }
+
+/// A snapshot built under one default stemming language must not serve its
+/// stems after `[search] language` changes: `terms --index` falls back to the
+/// disk scan and agrees with it (same guard as `find`).
+#[test]
+fn index_built_with_other_language_falls_back_to_disk() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "running houses\n");
+    let index = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(index.status.success(), "{index:?}");
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[search]\nlanguage = \"german\"\n",
+    )
+    .unwrap();
+    let terms = |indexed: bool| -> Vec<String> {
+        let mut cmd = hyalo_no_hints();
+        cmd.arg("--dir")
+            .arg(tmp.path())
+            .args(["terms", "--format", "json", "--limit", "0"]);
+        if indexed {
+            cmd.arg("--index");
+        }
+        let output = cmd.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut out: Vec<String> = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["term"].as_str().unwrap().to_owned())
+            .collect();
+        out.sort();
+        out
+    };
+    let disk = terms(false);
+    // German stemming keeps `running`; the English index stored `run`.
+    assert!(disk.contains(&"running".to_owned()), "{disk:?}");
+    assert!(!disk.contains(&"run".to_owned()), "{disk:?}");
+    assert_eq!(terms(true), disk);
+}

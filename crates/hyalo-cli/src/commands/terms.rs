@@ -10,7 +10,7 @@
 //! builds its persisted dictionary.
 
 use anyhow::Result;
-use hyalo_core::bm25::{Bm25InvertedIndex, TOKENIZER_VERSION};
+use hyalo_core::bm25::{Bm25InvertedIndex, TOKENIZER_VERSION, parse_language, resolve_language};
 use hyalo_core::index::{ScanOptions, VaultIndex as _};
 use serde::Serialize;
 
@@ -18,7 +18,8 @@ use crate::commands::{ScannedIndexOutcome, build_scanned_index};
 use crate::dispatch::{CommandContext, resolve_limit};
 use crate::output::CommandOutcome;
 
-/// One dictionary term and the number of files whose body contains it.
+/// One dictionary term and the number of files whose authored title or body
+/// contains it (the BM25 corpus indexes both).
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
@@ -77,10 +78,25 @@ pub(crate) fn run(
     // Fast path: an up-to-date snapshot's persisted BM25 dictionary, when no
     // --glob narrows the corpus (a glob needs a fresh scan scoped to the
     // matched files — the persisted index covers the whole vault).
+    // The persisted stems are only reusable when every document was stemmed
+    // with the language a fresh scan would use now (same guard as `find`): a
+    // `[search] language` changed after `create-index`, or mixed
+    // `bm25_language` metadata, falls back to the disk scan.
     if glob.is_empty()
         && let Some(snap) = ctx.snapshot_index.as_ref()
         && let Some(bm25) = snap.bm25_index()
         && bm25.tokenizer_version() == TOKENIZER_VERSION
+        && bm25.doc_count() == snap.entries().len()
+        && bm25.document_paths().all(|path| {
+            snap.get(path).is_some_and(|entry| {
+                let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                entry
+                    .bm25_language
+                    .as_deref()
+                    .and_then(|s| parse_language(s).ok())
+                    == Some(resolve_language(fm_lang, None, ctx.config_language))
+            })
+        })
     {
         let dict: Vec<(String, usize)> = bm25
             .dictionary(prefix)
