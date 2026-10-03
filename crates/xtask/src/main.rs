@@ -1,7 +1,6 @@
 use clap::{Parser, Subcommand};
 
 mod artifact;
-mod behavioral_contracts;
 mod bench_scale;
 mod bundled_skills;
 mod codex_package;
@@ -14,7 +13,6 @@ mod mutation_journal;
 mod npm_package;
 mod pi_package_sync;
 mod pi_runtime;
-mod stubs;
 mod ts_types;
 mod typed_output;
 mod workspace;
@@ -68,12 +66,6 @@ enum Commands {
     /// Gate (iter-274, BUG-29): every `--jq` recipe in a shipped document
     /// executes against this repo's own knowledgebase without a jq error.
     CheckJqRecipes(artifact::ArtifactArgs),
-    /// Unsupported legacy placeholder. Exits non-zero and is not a quality gate.
-    CheckDeadPrimitives(stubs::LegacyGateArgs),
-    /// Unsupported legacy placeholder. Exits non-zero and is not a quality gate.
-    CheckTodoAnnotations(stubs::LegacyGateArgs),
-    /// Run the focused cross-iteration behavioral safety contract suite.
-    CheckBehavioralContracts,
     /// Gate (ARCH-3, iter-226): every mutating command records index
     /// maintenance through MutationJournal; no direct index persistence.
     CheckMutationJournal,
@@ -103,9 +95,6 @@ fn main() {
         Commands::CheckCodexPackage => codex_package::run(false),
         Commands::SyncCodexPackage => codex_package::run(true),
         Commands::CheckJqRecipes(args) => jq_recipes::run(&args),
-        Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
-        Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
-        Commands::CheckBehavioralContracts => behavioral_contracts::run(),
         Commands::CheckMutationJournal => mutation_journal::run(),
         Commands::BenchScale(args) => bench_scale::run(&args),
     };

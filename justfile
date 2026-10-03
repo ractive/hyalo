@@ -8,6 +8,35 @@ check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace -q
+    @just gates
+
+# Every xtask gate CI's `quality-gates` job runs, in the same order.
+gates:
+    #!/usr/bin/env bash
+    # Keep this list in sync with .github/workflows/ci.yml `quality-gates`.
+    # xtask is built once and invoked directly rather than via
+    # `cargo run -p xtask`, which can deadlock on the nested cargo lock when a
+    # gate itself shells out to cargo; an absolute CARGO_MANIFEST_DIR lets
+    # xtask find the workspace root and CARGO names the cargo for nested runs.
+    # CI also runs `cargo deny check` in that job (cargo install cargo-deny).
+    set -euo pipefail
+    root="{{justfile_directory()}}"
+    cargo build -q -p xtask
+    export CARGO_MANIFEST_DIR="$root/crates/xtask"
+    export CARGO="${CARGO:-$(command -v cargo)}"
+    xtask="$root/target/debug/xtask"
+    "$xtask" check-feature-fanout
+    "$xtask" check-help-drift
+    "$xtask" check-command-reference
+    "$xtask" check-bundled-skills
+    "$xtask" check-pi-package-sync
+    "$xtask" check-ts-types
+    npm --prefix "$root/npm/hyalo" ci --ignore-scripts
+    "$xtask" check-pi-runtime
+    "$xtask" check-codex-package
+    "$xtask" check-jq-recipes
+    "$xtask" check-mutation-journal
+    "$xtask" check-typed-output
 
 fmt:
     cargo fmt --all
