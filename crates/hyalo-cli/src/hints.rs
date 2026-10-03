@@ -145,6 +145,8 @@ pub enum HintSource {
     /// `hyalo lint-rules show <ID>` (NEW-18, dogfood pre3). Was also a dead
     /// end despite inspecting one specific, actionable rule.
     LintRulesShow,
+    /// `hyalo terms` (iteration 302): suggest searching the top terms.
+    Terms,
 }
 
 /// One distinct frontmatter value a zero-result `find` scan saw for a filtered
@@ -313,6 +315,11 @@ pub struct HintContext {
     /// guessed; `None` on every non-empty result and whenever the probe found
     /// nothing within its budget.
     pub body_search_suggestion: Option<BodySearchSuggestion>,
+    /// Did-you-mean candidates for ranked-search terms with no postings,
+    /// collected by a zero-result `find PATTERN` (iteration 302).
+    pub search_suggestions: Vec<crate::output::SearchSuggestion>,
+    /// The ranked query with its best single-term correction applied.
+    pub corrected_query: Option<String>,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -388,6 +395,8 @@ impl HintContext {
             okf_profile_active: false,
             observed_property_values: std::collections::BTreeMap::new(),
             body_search_suggestion: None,
+            search_suggestions: Vec::new(),
+            corrected_query: None,
             resolved: None,
         }
     }
@@ -465,6 +474,7 @@ pub fn generate_hints_with_counters(
         HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data, total),
         HintSource::TagsSummary => hints_for_tags_summary(ctx, data, total),
         HintSource::Find => hints_for_find(ctx, data, total),
+        HintSource::Terms => summary::hints_for_terms(ctx, data, total),
         HintSource::Set | HintSource::Remove | HintSource::Append => hints_for_mutation(ctx, data),
         HintSource::Read => hints_for_read(ctx, data),
         HintSource::Backlinks => hints_for_backlinks(ctx, data, total),

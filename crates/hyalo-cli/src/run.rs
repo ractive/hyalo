@@ -174,6 +174,7 @@ fn effective_index_path_for(
         Commands::Find(FindArgs { index_flags, .. })
         | Commands::Summary(SummaryArgs { index_flags, .. })
         | Commands::Backlinks { index_flags, .. }
+        | Commands::Terms { index_flags, .. }
         | Commands::Set { index_flags, .. }
         | Commands::Remove { index_flags, .. }
         | Commands::Append { index_flags, .. }
@@ -1924,6 +1925,19 @@ fn run_inner() -> Result<(), AppError> {
                     | crate::cli::args::LintRulesAction::Remove { .. },
                 ) => None,
             },
+            Commands::Terms {
+                prefix,
+                glob,
+                limit,
+                ..
+            } => {
+                let mut ctx = HintContext::from_common(HintSource::Terms, &common);
+                ctx.glob.clone_from(glob);
+                ctx.has_limit = limit.is_some();
+                // Reuses the pattern slot to carry PREFIX into the "show all" hint.
+                ctx.body_pattern.clone_from(prefix);
+                Some(ctx)
+            }
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
@@ -2350,6 +2364,7 @@ fn run_inner() -> Result<(), AppError> {
         file_list_from_files_from: files_from_counters.is_some(),
         zero_result_values: std::collections::BTreeMap::new(),
         zero_result_body_search: None,
+        zero_result_search: None,
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -2415,6 +2430,23 @@ fn run_inner() -> Result<(), AppError> {
         // say so and hand over the equivalent `find -e`.
         hctx.body_search_suggestion = ctx.zero_result_body_search.take();
     }
+    // iter-302: a ranked `find` that matched nothing reports did-you-mean
+    // candidates in the envelope (always) and a corrected query as a hint.
+    let search_report = ctx.zero_result_search.take();
+    let search_suggestions: Option<Vec<crate::output::SearchSuggestion>> =
+        search_report.as_ref().map(|report| {
+            report
+                .suggestions
+                .iter()
+                .map(crate::output::SearchSuggestion::from_core)
+                .collect()
+        });
+    if let (Some(hctx), Some(report)) = (hint_ctx.as_mut(), search_report) {
+        if let Some(suggestions) = &search_suggestions {
+            hctx.search_suggestions.clone_from(suggestions);
+        }
+        hctx.corrected_query = report.corrected_query;
+    }
 
     let pipeline = OutputPipeline {
         user_format: output_plan.format(),
@@ -2426,6 +2458,7 @@ fn run_inner() -> Result<(), AppError> {
         internal_report: output_plan.internal_report(),
         files_from_counters: output_plan.counters().cloned(),
         github_path_prefix,
+        search_suggestions,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.

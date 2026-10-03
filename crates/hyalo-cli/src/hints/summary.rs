@@ -8,6 +8,7 @@ use super::{
     Hint, HintContext, LARGE_VAULT_FILE_COUNT, MAX_HINTS, SITE_URL_BROKEN_PERCENT,
     SITE_URL_MIN_BROKEN, build_command_no_glob, build_command_with_glob, status_priority,
 };
+use crate::hints::HintBuilder;
 
 pub(super) fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // Compute the large-vault create-index hint upfront so it can be
@@ -266,6 +267,44 @@ pub(super) fn hints_for_properties_summary(
         ));
     }
 
+    hints
+}
+
+/// `hyalo terms`: search the most frequent listed term, and offer the full
+/// listing when the default limit truncated it.
+pub(super) fn hints_for_terms(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+) -> Vec<Hint> {
+    let Some(entries) = data.as_array() else {
+        return vec![];
+    };
+    let mut hints = Vec::new();
+    if let Some(term) = entries
+        .first()
+        .and_then(|e| e.get("term"))
+        .and_then(serde_json::Value::as_str)
+    {
+        hints.push(Hint::new(
+            format!("Search for '{term}'"),
+            HintBuilder::cmd("find").arg(term).finish(ctx),
+        ));
+    }
+    if !ctx.has_limit
+        && let Some(t) = total
+        && (entries.len() as u64) < t
+    {
+        let mut args = vec!["terms"];
+        if let Some(prefix) = ctx.body_pattern.as_deref() {
+            args.push(prefix);
+        }
+        args.extend(["--limit", "0"]);
+        hints.push(Hint::new(
+            format!("Show all {t} terms (no limit)"),
+            build_command_with_glob(ctx, &args),
+        ));
+    }
     hints
 }
 

@@ -16,6 +16,18 @@ and this project adheres to
   types, approved tags, and existing folders. The bundled helper uses Bun or
   Node.js and a Typesafe API key; ordinary tidy needs neither. Agents review
   suggestions and preview changes through Hyalo before applying them.
+- Ranked search query language (DEC-333): `conf*` prefix terms matched against
+  the stemmed dictionary (capped at 256 terms with a `-q`-proof warning);
+  `title:`, `heading:`, `tag:` and `path:` field terms evaluated from index
+  metadata (a field-only query returns files sorted by path with score 0);
+  each term is stemmed in every language present in the vault, so a `language:
+  de` note is found by its German inflection; a zero-result query names close
+  dictionary terms, hints the corrected query and reports them under a
+  top-level `suggestions` key.
+- `hyalo terms [PREFIX]` lists the BM25 dictionary (stemmed terms) with
+  document frequency, most frequent first; `--limit` (default 50, 0
+  unlimited), `--index`/`--index-file`, `--jq` and `--count` work as
+  elsewhere.
 
 ### Fixed
 
@@ -25,6 +37,14 @@ and this project adheres to
 
 ### Changed
 
+- **Behaviour change: ranked search `OR` now binds tighter than the implicit
+  AND** (DEC-333). `find 'a b OR c'` means a AND (b OR c); it used to mean any
+  of the three, because one `OR` anywhere turned every positive term into an
+  alternative. Parentheses group (`(a OR b) -c`, nesting allowed) and `-`
+  negates a term, phrase or group. An unbalanced parenthesis, an empty group
+  `()` or a bare `*` exits 1 with the JSON error envelope instead of being
+  ignored. Queries without `OR`, or with `OR` between single terms only, are
+  unchanged.
 - Building hyalo from source now requires Rust 1.95 or newer, declared as
   `rust-version` in the workspace manifest. The code is clippy-clean on
   Rust 1.99.

@@ -19,6 +19,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   BM25 stemming, OR and CJK semantics; phrases must fit on one line. `--section` scopes
   snippets and frontmatter never qualifies. Title-only hits can have `matches: []`.
   Indexed searches read snippet text only for final results, after `--limit`.
+- **Query language** (DEC-333): implicit AND; `OR` binds tighter (`a b OR c` = a AND (b OR c));
+  `( … )` groups and nests; `-` negates a term, phrase or group; `conf*` expands over **stems**
+  (256 most frequent, `-q`-proof warning); `title:`/`heading:`/`tag:`/`path:` field terms combine
+  like words, and a field-only query returns files by path with `score: 0`, no snippets. An
+  unknown `foo:bar` is a plain word; unbalanced `(`/`()`/bare `*` exit 1. Terms are stemmed in
+  every vault language. Zero results carry `suggestions` (did-you-mean) and a corrected-query
+  hint; `hyalo terms [PREFIX]` lists the stemmed dictionary with document counts.
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
   the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor

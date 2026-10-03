@@ -27,6 +27,7 @@
 //! the filtered keys on the empty path costs no extra I/O.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use super::{Hint, HintBuilder, HintContext, HintSource, ObservedProperty};
 
@@ -177,10 +178,43 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
     {
         return "No types configured".to_owned();
     }
-    match filter_echo(ctx) {
+    let mut notice = match filter_echo(ctx) {
         Some(filters) => format!("No results for {filters}"),
         None => "No results".to_owned(),
+    };
+    for suggestion in &ctx.search_suggestions {
+        let _ = write!(
+            notice,
+            "\n'{}' occurs in no document; closest indexed stems: {}",
+            suggestion.term,
+            suggestion.describe_candidates()
+        );
     }
+    notice
+}
+
+/// Prefix for the zero-result `hyalo terms` hint: the first three letters of
+/// the first suggested (or, failing that, first plain) query word.
+fn terms_hint_prefix(ctx: &HintContext, pattern: &str) -> Option<String> {
+    let word = ctx
+        .search_suggestions
+        .first()
+        .map(|s| s.term.as_str())
+        .or_else(|| {
+            pattern.split_whitespace().find(|w| {
+                !w.starts_with('-')
+                    && !w.contains(':')
+                    && !w.eq_ignore_ascii_case("or")
+                    && !w.eq_ignore_ascii_case("and")
+            })
+        })?;
+    let prefix: String = word
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(3)
+        .collect::<String>()
+        .to_lowercase();
+    (!prefix.is_empty()).then_some(prefix)
 }
 
 /// The `K` and `V` of every `--property K=V` equality filter on the query.
@@ -229,21 +263,42 @@ fn did_you_mean<'a>(value: &str, observed: &'a [String]) -> Option<&'a str> {
 /// Rebuild the `find` command from `ctx`, skipping the filter at `skip_index`
 /// in the [`active_filters`] ordering. `None` skips nothing.
 fn rebuild_find(ctx: &HintContext, filters: &[ActiveFilter], skip_index: Option<usize>) -> String {
+    rebuild_find_with(ctx, filters, skip_index, str::to_owned)
+}
+
+/// Rebuild the `find` command, mapping every filter value through `map`.
+/// The body pattern (the rank-0 filter) goes last, after the global flags
+/// and a `--`, so a query beginning with `-` is never read as a flag.
+fn rebuild_find_with(
+    ctx: &HintContext,
+    filters: &[ActiveFilter],
+    skip_index: Option<usize>,
+    map: impl Fn(&str) -> String,
+) -> String {
     let mut b = HintBuilder::cmd("find");
+    let mut pattern = None;
     for (i, f) in filters.iter().enumerate() {
         if Some(i) == skip_index {
             continue;
         }
+        if f.rank == 0 && f.argv.len() == 1 {
+            pattern = Some(map(&f.argv[0]));
+            continue;
+        }
         for (n, token) in f.argv.iter().enumerate() {
-            // The flag name is a literal; only its value needs quoting.
+            // The flag name is a literal; only its value is mapped.
             if n == 0 && token.starts_with("--") {
                 b.push_raw(token);
             } else {
-                b.push_quoted(token);
+                b.push_quoted(&map(token));
             }
         }
     }
-    b.finish(ctx)
+    let b = b.with_globals(ctx);
+    match pattern {
+        Some(pattern) => b.raw("--").arg(&pattern).build(),
+        None => b.build(),
+    }
 }
 
 /// For a dot- or index-path filter key, the observation of its ROOT segment
@@ -297,6 +352,39 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         ));
     }
 
+    // 0b. Ranked search: a query term occurs in no document, and a close
+    //     dictionary term does (iteration 302). The hint is the same query
+    //     with the best single substitution applied.
+    if let (Some(corrected), Some(pattern)) = (&ctx.corrected_query, &ctx.body_pattern) {
+        let command = rebuild_find_with(ctx, &filters, None, |token| {
+            if token == pattern {
+                corrected.clone()
+            } else {
+                token.to_owned()
+            }
+        });
+        let description = ctx
+            .search_suggestions
+            .first()
+            .and_then(|s| {
+                s.candidates
+                    .first()
+                    .map(|c| format!("Did you mean '{}' instead of '{}'?", c.term, s.term))
+            })
+            .unwrap_or_else(|| "Did you mean this query?".to_owned());
+        hints.push(Hint::new(description, command));
+    }
+    // 0c. Ranked search with nothing found: show which indexed terms exist.
+    if !ctx.has_regex_search
+        && let Some(pattern) = &ctx.body_pattern
+        && let Some(prefix) = terms_hint_prefix(ctx, pattern)
+    {
+        hints.push(Hint::new(
+            format!("List indexed terms starting with '{prefix}'"),
+            HintBuilder::cmd("terms").arg(&prefix).finish(ctx),
+        ));
+    }
+
     // 1. Did-you-mean over the observed values of each filtered key.
     for (key, value) in equality_property_filters(ctx) {
         if hints.len() >= MAX_ZERO_RESULT_HINTS {
@@ -308,21 +396,17 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         let values = observation.typeable_values();
         if let Some(suggestion) = did_you_mean(value, &values) {
             let corrected = format!("{key}={suggestion}");
-            let mut b = HintBuilder::cmd("find");
-            for f in &filters {
-                for (n, token) in f.argv.iter().enumerate() {
-                    if n == 0 && token.starts_with("--") {
-                        b.push_raw(token);
-                    } else if token == &format!("{key}={value}") {
-                        b.push_quoted(&corrected);
-                    } else {
-                        b.push_quoted(token);
-                    }
+            let original = format!("{key}={value}");
+            let command = rebuild_find_with(ctx, &filters, None, |token| {
+                if token == original {
+                    corrected.clone()
+                } else {
+                    token.to_owned()
                 }
-            }
+            });
             hints.push(Hint::new(
                 format!("Did you mean {key}={suggestion}?"),
-                b.finish(ctx),
+                command,
             ));
         }
     }

@@ -958,15 +958,34 @@ pub(crate) enum Commands {
             results include all per-line 'matches' and no 'score'). Mutually exclusive with PATTERN.\n\n\
             QUERY SYNTAX (for PATTERN):\n\
             - Multiple words: implicit AND — all terms required (e.g. 'rust programming' returns \
-            only documents containing both words)\n\
-            - OR keyword: explicit OR — either term matches (e.g. 'rust OR golang' returns docs with \
-            either word, ranked by combined BM25 score). Case-insensitive ('or' also works). When OR \
-            is present, all non-negated terms become OR alternatives.\n\
+            only documents containing both words). The AND keyword is accepted but optional.\n\
+            - OR keyword: either side matches, ranked by combined BM25 score. Case-insensitive \
+            ('or' also works). OR binds tighter than AND: 'rust async OR tokio' means rust AND \
+            (async OR tokio).\n\
+            - (group): parentheses group and nest, e.g. '(bm25 OR stemming) -tantivy'. A parenthesis \
+            inside a word is literal ('main()'). An unbalanced parenthesis, an empty group '()' or a \
+            bare '*' is a user error (exit 1, 'invalid search query').\n\
             - \"quoted phrase\": exact consecutive match after stemming (e.g. '\"javascript promises\"' \
             matches only documents with that exact phrase)\n\
-            - -term: exclude documents containing this term (e.g. 'rust -javascript' finds Rust docs \
-            that don't mention javascript; stemming applies, so '-running' also excludes 'run')\n\
-            - AND keyword: accepted but optional (implicit between terms)\n\
+            - -term, -\"phrase\", -(group): exclude matching documents (e.g. 'rust -javascript'; \
+            stemming applies, so '-running' also excludes 'run'). A query beginning with '-' or '(' \
+            must follow '--' so it is not read as a flag: hyalo find -- '-draft notes', \
+            hyalo find -- '(a OR b) -c'.\n\
+            - prefix*: every dictionary term starting with the prefix. Prefixes match STEMS, so \
+            'config*' matches 'configuration' (stem 'configur'); when the prefix as typed matches no \
+            stem, its own stem is tried ('configuration*' then searches 'configur'). Capped at the 256 \
+            most frequent terms, with a warning -q cannot silence. 'hyalo terms PREFIX' lists the \
+            dictionary.\n\
+            - Field terms: title:word, title:\"a phrase\", title:conf*, heading:install, tag:project \
+            (same prefix rule as --tag), path:iterations/ (case-insensitive substring of the \
+            vault-relative path). They combine with AND/OR/- like any term. A query of field terms \
+            only returns its files sorted by path with score 0 and no snippets. An unknown prefix \
+            ('foo:bar', URLs, 'std::fs') is a plain term.\n\
+            - Every term is stemmed in each language present in the vault (frontmatter 'language' \
+            plus --language/config), so a 'language: de' note matches its German inflections.\n\
+            - Zero results: query words found in no document get up to 3 close dictionary stems \
+            (fewest edits first) in the notice, a hint running the corrected query, a 'hyalo terms' \
+            hint, and a top-level JSON 'suggestions' key ([{term, candidates: [{term, docs}]}]).\n\
             - Combine freely: 'rust -java', 'rust OR golang', '\"error handling\" -panic'\n\n\
             LANGUAGE: The --language flag (or [search] language in .hyalo.toml, or frontmatter \
             'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
@@ -1107,6 +1126,8 @@ pub(crate) enum Commands {
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             hyalo find 'error handling'\n\
+            hyalo find -- '(bm25 OR stemming) -tantivy'\n\
+            hyalo find 'title:iteration tag:iteration link*'\n\
             hyalo find --property status=draft --tag project\n\
             hyalo find --property 'title~=/^Design/i'\n\
             hyalo find --property aliases=null            # present, but the value is a YAML null\n\
@@ -1304,6 +1325,40 @@ pub(crate) enum Commands {
         #[command(flatten)]
         selection: InputSelection,
         /// Maximum number of backlinks to return (0 = unlimited).
+        ///
+        /// Default cap is bypassed when --jq or --count is used
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
+    },
+    /// List BM25 dictionary terms (stemmed tokens) with document frequency (read-only)
+    #[command(
+        long_about = "List BM25 dictionary terms (stemmed tokens) with their document frequency.\n\n\
+            Reads the same stemming/tokenization pipeline `find` uses for full-text search, so this\n\
+            is the way to discover what a `find` query will actually match before running it.\n\
+            PREFIX (optional, lowercased) narrows the listing to terms starting with that stem.\n\n\
+            OUTPUT: JSON envelope {results: [{term, docs}], total, hints}. `docs` counts files\n\
+            whose title or body contains the stem (document frequency), not raw occurrences.\n\
+            Sorted by docs descending, then term alphabetically. Default limit 50.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
+            SIDE EFFECTS: None (read-only).\n\n\
+            INDEX: with --index/--index-file, reuses the snapshot's persisted dictionary when its\n\
+            tokenizer version is current and no --glob narrows the corpus; otherwise builds a\n\
+            fresh in-memory BM25 index from a disk scan, exactly like `create-index` does.\n\n\
+            EXAMPLES:\n\
+            hyalo terms\n\
+            hyalo terms run\n\
+            hyalo terms --limit 20\n\
+            hyalo terms --limit 0 --jq '.results | length'"
+    )]
+    Terms {
+        /// Only list terms starting with this (lowercased) prefix
+        prefix: Option<String>,
+        /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
+        #[arg(short, long)]
+        glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited).
         ///
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]

@@ -41,6 +41,7 @@ impl Commands {
             | Self::Read { .. }
             | Self::Summary { .. }
             | Self::Backlinks { .. }
+            | Self::Terms { .. }
             | Self::Config { .. }
             | Self::Completion { .. }
             // iter-256: rewritten to `<cmd> -h` before parsing, so never reached.

@@ -60,6 +60,7 @@ impl Capabilities {
             Commands::Find(_) => (Batch, true, true, false, false),
             Commands::Read(_) => (Single, false, false, false, false),
             Commands::Backlinks { .. } => (Single, true, false, false, false),
+            Commands::Terms { .. } => (Batch, true, false, false, false),
             Commands::Summary(_) | Commands::Set { .. } | Commands::Append { .. } => {
                 (Batch, false, false, true, false)
             }
@@ -145,6 +146,7 @@ impl Capabilities {
             | Commands::Task { .. }
             | Commands::Properties { .. }
             | Commands::Tags { .. }
+            | Commands::Terms { .. }
             | Commands::Links { .. } => IndexCapability::Read,
             Commands::Views { action } => {
                 if matches!(action, Some(ViewsAction::Run { .. })) {
