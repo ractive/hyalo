@@ -1,13 +1,9 @@
 # Configuration for cargo-deny — https://embarkstudios.github.io/cargo-deny/
 #
 # Run locally: cargo deny check
-# Runs automatically as a quality gate in the *release* pipeline only — the
-# `cargo deny check` step lives in the external, shared
-# `ractive/release-workflows` release.yml (this repo's own release.yml just
-# `uses:` it), which fires on `release: published` / `workflow_dispatch`. It
-# is NOT part of `ci.yml`/`quality-gates.yml`, so it does not gate ordinary
-# PRs — only a release cut (verified 2026-08-24, iter-222, by pulling the
-# shared workflow's content via `gh api`).
+# Runs on every PR and every push to main in ci.yml's `quality-gates` job
+# (EmbarkStudios/cargo-deny-action, SHA-pinned; iteration 305), and again in
+# the release pipeline (the shared `ractive/release-workflows` release.yml).
 
 [advisories]
 # No ignores (re-verified 2026-10-03). RUSTSEC-2025-0141 (bincode) and
