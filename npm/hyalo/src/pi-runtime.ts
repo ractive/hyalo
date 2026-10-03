@@ -2,6 +2,7 @@ import type { ExecutionOptions } from "./api.js";
 import {
   HyaloError,
   HyaloParseError,
+  parseErrorEnvelope,
   raw,
   reportDiagnostics,
 } from "./api.js";
@@ -19,7 +20,7 @@ export interface PiConfigInfo {
  */
 export async function configForPi(options: ExecutionOptions = {}): Promise<PiConfigInfo> {
   const result = await raw(["config", "--format=json", "--no-hints"], options);
-  if (result.code !== 0) throw new HyaloError(result);
+  if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
   if (!result.stdout.trim()) throw new HyaloParseError("hyalo returned empty JSON", result);
 
   let parsed: unknown;
@@ -48,6 +49,7 @@ export async function configForPi(options: ExecutionOptions = {}): Promise<PiCon
 }
 
 export {
+  backlinks,
   HyaloAbortError,
   HyaloError,
   HyaloParseError,
@@ -63,5 +65,24 @@ export {
   read,
   set,
   summary,
+  tags,
   task,
+  terms,
 } from "./api.js";
+export type {
+  BacklinksCallOptions,
+  ConfigCallOptions,
+  DiagnosticsCallback,
+  ExecutionOptions,
+  FindCallOptions,
+  HyaloTransport,
+  ProcessResult,
+  ReadCallOptions,
+  SetOptions,
+  SummaryCallOptions,
+  TagsCallOptions,
+  TaskOptions,
+  TermsCallOptions,
+  TransportOptions,
+} from "./api.js";
+export type * from "./types.js";

@@ -66,12 +66,37 @@ and this project adheres to
   (DEC-339). `[search.weights]` and `proximity_bonus` accept 0 to 1000.
 - `hyalo config` reports `results.search` (`language`, `code_blocks`,
   `weights`, `proximity_bonus`).
+- npm API: typed `terms()`, `tags()` (`tags summary`) and `backlinks()`
+  wrappers returning `Envelope<TermsResult>`, `Envelope<TagsResult>` and
+  `Envelope<BacklinksResult>`, with options and results generated from Rust.
 
 ### Fixed
 
 - Command help now advertises only supported selectors, global options, and
   output formats. Single-file commands no longer advertise `--glob`;
   `views set` rejects `--files-from` instead of silently discarding it.
+- npm API: `lint()` throws `HyaloError` with the parsed error envelope when
+  lint refuses (exit 1 with empty stdout: a missing file or a malformed
+  `.hyalo.toml`) instead of returning a clean-looking result; the Pi write
+  guardrail reports such a refusal as "lint unavailable". The config-gate
+  refusal now emits the JSON error envelope under the npm transport.
+- npm API: a timeout or abort sends SIGTERM, escalates to SIGKILL after two
+  seconds and rejects only after the child has closed, so a retry cannot
+  overlap a running command. Error classes are recognised across the ESM,
+  CommonJS and Pi bundles.
+- Pi: the post-write lint guardrail lints the vault-relative path; the typed
+  mutation tools need hyalo 0.24 or newer and say "hyalo is too old" on an
+  older binary (the README claimed 0.21).
+- Jev helper: a policy type missing from `[schema.types]` and a `.cmd`/`.bat`
+  `--hyalo` path exit 2 (invalid input) instead of 1 (unavailable); oversized
+  and empty sections defer with explicit reasons; unknown fields in a provider
+  response are ignored; `TYPESAFE_*` variables are stripped case-insensitively.
+
+### Removed
+
+- The unembedded copies of the hyalo-tidy Jev helper and reference under the
+  crate's pi and codex template trees (about 118 KB of the crate tarball); the
+  crate installs them from `templates/jev/` (DEC-344).
 
 ### Changed
 

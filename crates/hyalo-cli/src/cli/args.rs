@@ -1000,6 +1000,65 @@ pub(crate) struct SummaryArgs {
     pub index_flags: IndexFlags,
 }
 
+/// Arguments accepted by `hyalo backlinks`.
+#[derive(Debug, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct BacklinksArgs {
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub selection: InputSelection,
+    /// Maximum number of backlinks to return (0 = unlimited).
+    ///
+    /// Default cap is bypassed when --jq or --count is used
+    #[arg(short = 'n', long, value_parser = parse_limit)]
+    pub limit: Option<usize>,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
+/// Arguments accepted by `hyalo terms`.
+#[derive(Debug, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct TermsArgs {
+    /// Only list terms starting with this (lowercased) prefix
+    pub prefix: Option<String>,
+    /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
+    #[arg(short, long)]
+    pub glob: Vec<String>,
+    /// Maximum number of results to return (0 = unlimited).
+    ///
+    /// Default cap is bypassed when --jq or --count is used
+    #[arg(short = 'n', long, value_parser = parse_limit)]
+    pub limit: Option<usize>,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
+/// Arguments accepted by `hyalo tags summary`.
+#[derive(Debug, Clone, Default, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct TagsSummaryArgs {
+    /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
+    #[arg(short, long)]
+    pub glob: Vec<String>,
+    /// Maximum number of results to return (0 = unlimited).
+    ///
+    /// Default cap is bypassed when --jq or --count is used
+    #[arg(short = 'n', long, value_parser = parse_limit)]
+    pub limit: Option<usize>,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Search and filter markdown files — returns one compact object per file (see --fields)
@@ -1434,17 +1493,7 @@ pub(crate) enum Commands {
             hyalo backlinks --file notes/design.md\n\
             hyalo backlinks --file notes/design.md --limit 20"
     )]
-    Backlinks {
-        #[command(flatten)]
-        selection: InputSelection,
-        /// Maximum number of backlinks to return (0 = unlimited).
-        ///
-        /// Default cap is bypassed when --jq or --count is used
-        #[arg(short = 'n', long, value_parser = parse_limit)]
-        limit: Option<usize>,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Backlinks(BacklinksArgs),
     /// List BM25 dictionary terms (stemmed tokens) with document frequency (read-only)
     #[command(
         long_about = "List BM25 dictionary terms (stemmed tokens) with their document frequency.\n\n\
@@ -1465,20 +1514,7 @@ pub(crate) enum Commands {
             hyalo terms --limit 20\n\
             hyalo terms --limit 0 --jq '.results | length'"
     )]
-    Terms {
-        /// Only list terms starting with this (lowercased) prefix
-        prefix: Option<String>,
-        /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long)]
-        glob: Vec<String>,
-        /// Maximum number of results to return (0 = unlimited).
-        ///
-        /// Default cap is bypassed when --jq or --count is used
-        #[arg(short = 'n', long, value_parser = parse_limit)]
-        limit: Option<usize>,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Terms(TermsArgs),
     /// Move/rename a file and update all inbound and outbound links
     #[command(
         long_about = "Move or rename a markdown file and update all links across the vault.\n\n\
@@ -3712,18 +3748,7 @@ pub(crate) enum TagsAction {
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy."
     )]
-    Summary {
-        /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long)]
-        glob: Vec<String>,
-        /// Maximum number of results to return (0 = unlimited).
-        ///
-        /// Default cap is bypassed when --jq or --count is used
-        #[arg(short = 'n', long, value_parser = parse_limit)]
-        limit: Option<usize>,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Summary(TagsSummaryArgs),
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
         SCOPE: frontmatter `tags:` only — an inline `#body/tag` written in prose is left\n\

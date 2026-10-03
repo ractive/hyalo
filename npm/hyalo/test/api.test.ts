@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
   HyaloSpawnError,
   HyaloTimeoutError,
   HyaloTransportError,
+  backlinks,
   config,
   createPiTransport,
   execute,
@@ -21,12 +22,17 @@ import {
   read,
   set,
   summary,
+  tags,
   task,
+  terms,
+  type BacklinksResult,
   type ConfigResult,
   type Envelope,
   type FileObject,
   type HyaloTransport,
   type ReadResult,
+  type TagSummaryEntry,
+  type TermEntry,
   type VaultSummary,
 } from "../src/index.js";
 import { isClosedStdinWriteError, mutationReport } from "../src/api.js";
@@ -466,4 +472,128 @@ it("retains actual effects after malformed skips and post-write output failures"
   await expect(mutationReport(["set", "--glob", "repair-*.md", "--property", "status=again"], { ...real(), transport })).rejects.toMatchObject({
     category: "output_failure", effects: { paths: [{ file: "repair-good.md", state: "committed" }], index: "not_used" },
   });
+});
+
+describe("lint refusals", () => {
+  it("throws HyaloError with the parsed envelope when lint refuses a missing file", async () => {
+    const failure = await lint("missing.md", real()).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HyaloError);
+    expect(failure).toMatchObject({ exitCode: 1, stdout: "", envelope: { error: "file not found", path: "missing.md" } });
+  });
+
+  it("throws on lint under a malformed config and keeps exit-1 findings as results", async () => {
+    const cwd = path.join(scratch, "lint malformed config");
+    await mkdir(path.join(cwd, "vault"), { recursive: true });
+    await writeFile(path.join(cwd, ".hyalo.toml"), 'dir = "vault"\nnot = [valid\n');
+    await writeFile(path.join(cwd, "vault", "note.md"), "# Note\n");
+    const failure = await lint("note.md", { binaryPath: binary, cwd }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HyaloError);
+    expect((failure as HyaloError).exitCode).toBe(1);
+    expect((failure as HyaloError).stderr).toContain("malformed .hyalo.toml");
+    expect((failure as HyaloError).envelope?.error).toContain("a command whose exit code is a gate");
+    expect((failure as HyaloError).envelope?.hint).toContain("Fix the config file");
+
+    const envelope = JSON.stringify({ error: "file not found", path: "gone.md" });
+    await expect(lint("gone.md", { transport: async () => ({ code: 1, stdout: "", stderr: envelope }) }))
+      .rejects.toMatchObject({ name: "HyaloError", envelope: { error: "file not found" } });
+    await expect(lint("note.md", { transport: async () => ({ code: 1, stdout: "note.md:1: finding\n", stderr: "" }) }))
+      .resolves.toMatchObject({ code: 1 });
+  });
+});
+
+describe("terms, tags and backlinks", () => {
+  let graph = "";
+  beforeAll(async () => {
+    graph = path.join(scratch, "graph vault");
+    await mkdir(graph, { recursive: true });
+    await writeFile(path.join(graph, "target.md"), "---\ntags: [alpha, shared]\n---\n# Target\nkiwi kiwis\n");
+    await writeFile(path.join(graph, "source.md"), "---\ntags: [shared]\n---\n# Source\nSee [[target|the target]] and kiwi.\n");
+  });
+  const inGraph = () => ({ binaryPath: binary, cwd: graph }) as const;
+
+  it("returns typed envelopes from the real binary", async () => {
+    const dictionary = await terms({ prefix: "kiw", ...inGraph() });
+    expectTypeOf(dictionary).toEqualTypeOf<Envelope<TermEntry[]>>();
+    expect(dictionary.results).toEqual([{ term: "kiwi", docs: 2 }]);
+    const tagged = await tags(inGraph());
+    expectTypeOf(tagged).toEqualTypeOf<Envelope<TagSummaryEntry[]>>();
+    expect(tagged.results).toEqual(expect.arrayContaining([{ name: "shared", count: 2 }, { name: "alpha", count: 1 }]));
+    expect(tagged.total).toBe(2);
+    const inbound = await backlinks({ file_positional: "target.md", ...inGraph() });
+    expectTypeOf(inbound).toEqualTypeOf<Envelope<BacklinksResult>>();
+    expect(inbound.results.file).toBe("target.md");
+    expect(inbound.results.backlinks).toEqual([
+      expect.objectContaining({ source: "source.md", target: "target.md", kind: "wikilink", label: "the target" }),
+    ]);
+    expect(inbound.total).toBe(1);
+  });
+
+  it("builds argv with forced JSON before the positional terminator", async () => {
+    const calls: string[][] = [];
+    const transport: HyaloTransport = async (argv) => {
+      calls.push([...argv]);
+      return { code: 0, stdout: '{"results":[],"total":0,"hints":[]}', stderr: "" };
+    };
+    await terms({ prefix: "-run", glob: ["a/*.md"], limit: 0, transport });
+    await tags({ glob: ["b/*.md"], limit: 3, index: true, transport });
+    await backlinks({ file: ["note.md"], limit: 5, transport });
+    await backlinks({ file_positional: "-odd.md", transport });
+    expect(calls).toEqual([
+      ["terms", "--glob=a/*.md", "--limit=0", "--format=json", "--no-hints", "--", "-run"],
+      ["tags", "summary", "--glob=b/*.md", "--limit=3", "--index", "--format=json", "--no-hints"],
+      ["backlinks", "--file=note.md", "--limit=5", "--format=json", "--no-hints"],
+      ["backlinks", "--format=json", "--no-hints", "--", "-odd.md"],
+    ]);
+    await expect(terms({ count: true } as never)).rejects.toThrow(/'count' is reserved/);
+  });
+});
+
+describe("error branding and version detection", () => {
+  it("passes through branded errors from another module copy and wraps unbranded look-alikes", async () => {
+    const foreign = new Error("foreign timeout");
+    foreign.name = "HyaloTimeoutError";
+    Object.defineProperty(foreign, Symbol.for("@ractive-ch/hyalo/error"), { value: true });
+    await expect(raw(["find"], { transport: async () => { throw foreign; } })).rejects.toBe(foreign);
+    const lookalike = new Error("not ours");
+    lookalike.name = "HyaloTimeoutError";
+    const wrapped = await raw(["find"], { transport: async () => { throw lookalike; } }).catch((error: unknown) => error);
+    expect(wrapped).toBeInstanceOf(HyaloSpawnError);
+    expect((wrapped as HyaloSpawnError).cause).toBe(lookalike);
+  });
+
+  it("reports a binary without --internal-mutation-report as too old", async () => {
+    const stderr = "error: unexpected argument '--internal-mutation-report' found\n\nUsage: hyalo set [OPTIONS]\n";
+    await expect(mutationReport(["set", "--property=a=1", "--", "a.md"], { transport: async () => ({ code: 2, stdout: "", stderr }) }))
+      .rejects.toMatchObject({ name: "HyaloError", exitCode: 2, stderr, message: expect.stringMatching(/too old.*>= 0\.24\.0/) });
+    await expect(mutationReport(["set", "--property=a=1", "--", "a.md"], { transport: async () => ({ code: 2, stdout: "", stderr: "other usage error" }) }))
+      .rejects.toMatchObject({ message: "hyalo exited with code 2" });
+  });
+
+  it("parses the error envelope on the Pi config path", async () => {
+    const stderr = JSON.stringify({ error: "config refused", category: "user" });
+    await expect(configForPi({ transport: async () => ({ code: 1, stdout: "", stderr }) }))
+      .rejects.toMatchObject({ name: "HyaloError", message: "config refused", envelope: { error: "config refused" }, category: "user" });
+  });
+});
+
+describe("cancellation", () => {
+  it("escalates to SIGKILL after the grace period and settles only after the child closed", async () => {
+    const pidFile = path.join(scratch, "ignore-sigterm.pid");
+    const fixture = path.join(packageDir, "test/fixtures/ignore-sigterm.js");
+    const controller = new AbortController();
+    const pending = raw([fixture, pidFile], { binaryPath: process.execPath, timeoutMs: 30_000, signal: controller.signal });
+    const settled = pending.catch((error: unknown) => error);
+    let pid = 0;
+    for (let attempt = 0; attempt < 400 && pid === 0; attempt += 1) {
+      pid = Number(await readFile(pidFile, "utf8").catch(() => "0")) || 0;
+      if (pid === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(pid).toBeGreaterThan(0);
+    const abortedAt = Date.now();
+    controller.abort();
+    expect(await settled).toBeInstanceOf(HyaloAbortError);
+    // Windows has no catchable SIGTERM: kill() terminates at once there.
+    if (process.platform !== "win32") expect(Date.now() - abortedAt).toBeGreaterThanOrEqual(1_500);
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 20_000);
 });

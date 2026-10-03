@@ -21,15 +21,23 @@ export async function readJson(path: string): Promise<unknown> {
 }
 
 export type HyaloRead = (args: string[], allowFindings?: boolean) => Promise<Record<string, unknown>>;
+// Windows environment names are case-insensitive; strip every spelling of the
+// credential prefix so no child process inherits a TypeSafe credential.
+export function childEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const child = { ...env };
+  for (const key of Object.keys(child)) if (key.toUpperCase().startsWith("TYPESAFE_")) delete child[key];
+  return child;
+}
 export function hyaloReader(binary: string): HyaloRead {
   insist(isAbsolute(binary), "--hyalo must be an absolute executable path");
+  // Spawning without a shell cannot run the npm `hyalo.cmd` shim.
+  insist(!/\.(cmd|bat)$/i.test(binary), "--hyalo must be a native hyalo executable, not the npm .cmd/.bat shim");
   return async (args, allowFindings = false) => {
-    const allowed = args[0] === "read" || args[0] === "find" || args[0] === "config" || args[0] === "lint" || (args[0] === "types" && args[1] === "show");
+    const allowed = args[0] === "read" || args[0] === "find" || args[0] === "config" || args[0] === "lint" || (args[0] === "types" && (args[1] === "show" || args[1] === "list"));
     insist(allowed && !args.some(a => ["--fix", "--apply", "--index"].includes(a)), "read-only Hyalo command required");
     return new Promise((resolve, reject) => {
       // No shell and no credential inheritance. Diagnostics are never echoed.
-      const env = { ...process.env };
-      for (const key of Object.keys(env)) if (key.startsWith("TYPESAFE_")) delete env[key];
+      const env = childEnvironment(process.env);
       const child = spawn(binary, [...args, "--format", "json", "--no-hints"], { stdio: ["ignore", "pipe", "pipe"], env, windowsHide: true });
       const chunks: Buffer[] = []; let bytes = 0; let failure: Error | undefined;
       const stop = (error: Error) => { failure ??= error; child.kill("SIGKILL"); };

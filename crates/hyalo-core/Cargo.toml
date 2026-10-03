@@ -34,6 +34,12 @@ same-file = { workspace = true }
 toml = { workspace = true }
 rust-stemmers = { workspace = true }
 unicode-normalization = { workspace = true }
+# Test-only TypeScript contract export for dependent crates (`ts` feature,
+# enabled by hyalo-cli's dev-dependency); never part of a normal build.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+ts = ["dep:ts-rs"]
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = { workspace = true }

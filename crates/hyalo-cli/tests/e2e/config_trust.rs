@@ -517,6 +517,38 @@ fn malformed_config_refuses_links_auto_apply_even_under_quiet() {
     );
 }
 
+/// The npm transport sets `HYALO_INTERNAL_JSON_ERRORS=1` and runs `lint` with
+/// `--format text`; the config-gate refusal must still end in a JSON error
+/// envelope so the typed API can hand callers `error.envelope` (iteration 307).
+#[test]
+fn malformed_config_lint_refusal_emits_the_json_envelope_for_the_npm_transport() {
+    let tmp = TempDir::new().unwrap();
+    build_malformed_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .env("HYALO_INTERNAL_JSON_ERRORS", "1")
+        .args(["lint", "--format", "text", "--", "a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "a refusal prints no findings");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let start = stderr
+        .find("\n{")
+        .unwrap_or_else(|| panic!("no JSON envelope on stderr: {stderr}"))
+        + 1;
+    let envelope: serde_json::Value = serde_json::from_str(stderr[start..].trim())
+        .unwrap_or_else(|e| panic!("trailing envelope must parse ({e}): {stderr}"));
+    let error = envelope["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("a command whose exit code is a gate") && error.contains("malformed"),
+        "{envelope}"
+    );
+    assert!(envelope["hint"].as_str().is_some(), "{envelope}");
+}
+
 #[test]
 fn malformed_config_still_warns_on_a_read_under_quiet() {
     let tmp = TempDir::new().unwrap();

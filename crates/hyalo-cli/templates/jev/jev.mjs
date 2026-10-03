@@ -193,16 +193,21 @@ async function readJson(path) {
       stream.destroy();
   }
 }
+function childEnvironment(env) {
+  const child = { ...env };
+  for (const key of Object.keys(child))
+    if (key.toUpperCase().startsWith("TYPESAFE_"))
+      delete child[key];
+  return child;
+}
 function hyaloReader(binary) {
   insist(isAbsolute(binary), "--hyalo must be an absolute executable path");
+  insist(!/\.(cmd|bat)$/i.test(binary), "--hyalo must be a native hyalo executable, not the npm .cmd/.bat shim");
   return async (args, allowFindings = false) => {
-    const allowed = args[0] === "read" || args[0] === "find" || args[0] === "config" || args[0] === "lint" || args[0] === "types" && args[1] === "show";
+    const allowed = args[0] === "read" || args[0] === "find" || args[0] === "config" || args[0] === "lint" || args[0] === "types" && (args[1] === "show" || args[1] === "list");
     insist(allowed && !args.some((a) => ["--fix", "--apply", "--index"].includes(a)), "read-only Hyalo command required");
     return new Promise((resolve, reject) => {
-      const env = { ...process.env };
-      for (const key of Object.keys(env))
-        if (key.startsWith("TYPESAFE_"))
-          delete env[key];
+      const env = childEnvironment(process.env);
       const child = spawn(binary, [...args, "--format", "json", "--no-hints"], { stdio: ["ignore", "pipe", "pipe"], env, windowsHide: true });
       const chunks = [];
       let bytes = 0;
@@ -294,6 +299,13 @@ async function prepare(files, p, read) {
   insist(config.malformed === false && config.dir_out_of_bounds === false && !config.schema_error, "configuration requires repair");
   const root = await realpath(resolve(string(config.cwd), string(config.dir)));
   const excluded = await exclusionIdentities(root, p.exclude);
+  if (p.types.length) {
+    const declared = (await read(["types", "list"])).results;
+    insist(Array.isArray(declared), "invalid Hyalo response");
+    const known = new Set(declared.map((t) => object(t).type));
+    const undeclared = p.types.map((c) => c.value).filter((t) => !known.has(t));
+    insist(undeclared.length === 0, `policy types not declared in [schema.types]: ${undeclared.join(", ")}`);
+  }
   const schemas = Object.fromEntries(await Promise.all(p.types.map(async (c) => [c.value, object((await read(["types", "show", c.value])).results)])));
   for (const c of p.folders)
     await inside(root, c.value, true);
@@ -314,7 +326,12 @@ async function prepare(files, p, read) {
       const readArgs = selected.section === null ? ["--lines", "1:"] : ["--section", selected.section];
       const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
       insist(evidence.file === selected.file, "file resolution differs from selection");
-      const current = object(evidence.frontmatter ?? {}), content = string(evidence.content, 18000);
+      const current = object(evidence.frontmatter ?? {});
+      insist(typeof evidence.content === "string" && !evidence.content.includes("\x00"), "invalid evidence content");
+      const content = evidence.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
+      const body = selected.section === null ? content : content.replace(/^#[^\n]*\n?/, "");
+      insist(body.trim().length > 0, `${what} empty`);
+      insist(bytes <= 18000, `${what} too large (${bytes} bytes > 18000)`);
       insist(!credential || !JSON.stringify({ current, content }).includes(credential), "credential found in selected evidence");
       let missingType = false;
       if (!("type" in current) && p.types.length) {
@@ -949,10 +966,8 @@ function probability(value) {
 }
 function decisions(value, questions, bindings) {
   const response = object(value);
-  keys(response, ["model", "answers", "usage"]);
   insist(response.model === MODEL, "unexpected response model");
   const answers = object(response.answers), usage = object(response.usage);
-  keys(usage, ["input_tokens", "output_tokens"]);
   for (const field of ["input_tokens", "output_tokens"])
     insist(Number.isSafeInteger(usage[field]) && usage[field] >= 0, "invalid usage");
   insist(Object.keys(answers).length === Object.keys(questions).length && Object.keys(questions).every((id) => Object.hasOwn(answers, id)), "answer IDs differ from request");
@@ -960,12 +975,10 @@ function decisions(value, questions, bindings) {
     const answer = object(answers[id]), binding = bindings[id];
     insist(binding && answer.type === q.type, "answer type differs from request");
     if (q.type === "noul") {
-      keys(answer, ["type", "noul"]);
       const p = probability(answer.noul);
       return { field: binding.field, value: binding.value, probability: p, status: p >= 0.9 ? "suggestion" : p <= 0.1 ? "no-change" : "defer", ...p > 0.1 && p < 0.9 ? { reason: "uncertain" } : {} };
     }
     insist(q.type === "choice", "unsupported question type");
-    keys(answer, ["type", "choice", "confidence", "probabilities"]);
     const probabilities = object(answer.probabilities), choices = Object.keys(q.criteria);
     insist(Object.keys(probabilities).length === choices.length && choices.every((c) => Object.hasOwn(probabilities, c)), "probability labels differ from request");
     const values = choices.map((c) => probability(probabilities[c]));
