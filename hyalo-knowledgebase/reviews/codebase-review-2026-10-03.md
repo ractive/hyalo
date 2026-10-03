@@ -114,9 +114,11 @@ counted under `summary.skipped`/`excluded`.
   `TryFrom<RawPropertyConstraint>`.
 - **`summary --index --format text` prints a raw key dump** (all tags,
   `dead_ends:`, `dir:` …) instead of the compact layout; JSON parity is fine.
-- **batch `mv` dry run drops a source already inside the destination** —
-  `mv --tag beta --to other/` omits `other/UPPERCASE.md` from `moves` and
-  `collisions` is null; the documented contract lists collisions.
+- **batch `mv` dry run silently omits a source already at its destination**
+  — `mv --tag beta --to other/` drops `other/UPPERCASE.md` as a no-op
+  (`mv.rs:552-553`) without listing it anywhere. It is not a collision, so
+  `collisions` is rightly null, but the selection should be reported as a
+  skipped no-op rather than vanish from the plan.
 - **`lint --strict` promotes HYALO006/HYALO008 to errors** — the repository
   vault gives 19 HYALO008 errors under `--strict`. The short `--strict` help
   and `.claude/CLAUDE.md` say only schema warnings are promoted; the long
@@ -144,9 +146,11 @@ counted under `summary.skipped`/`excluded`.
   `init.rs:1398/1668` rebuild the whole file with `lines()` and push `\n`
   for every line, including lines outside the managed region. No CRLF test
   exists in init.rs; okf.rs has one for the same situation.
-- **`is_pid_alive` is always `true` off Unix** (`index.rs:2043-2045`), so
-  `find_stale_indexes` can never flag an orphaned index file on Windows. No
-  comment marks the gap; implement via `windows-sys` or document it.
+- **Stale-index liveness probe is unimplemented off Unix** —
+  `is_pid_alive` (`index.rs:2043-2045`) returns `true` for every non-zero
+  pid on non-Unix as a documented conservative fallback, so
+  `find_stale_indexes` can never flag an orphaned index file on Windows.
+  Implement a Windows probe via `windows-sys`.
 - **`MutationJournal::rename_entry`** (`journal.rs:216-249`) has no
   production caller and discards the result of an update-only refresh,
   re-introducing the fixed "unindexed entry dropped" bug class. Delete it.
@@ -398,7 +402,7 @@ counted under `summary.skipped`/`excluded`.
    actions refresh, stale deny ignores.
 2. Review follow-up iteration: F2, F3, F5, the two envelope bypasses, the
    `lint --fix` and `types set` durability regressions, the CRLF rewrite in
-   `init`, the remaining P2 Rust items, the batch `mv` collision gap, the
+   `init`, the remaining P2 Rust items, the silent batch `mv` no-op, the
    `summary --index` text layout, and the P3 hint fixes.
 3. JS follow-up: F4, the version floor, `pi-runtime.ts` envelope, timeout
    escalation, type re-exports; Jev exit-code classification, Windows shim
