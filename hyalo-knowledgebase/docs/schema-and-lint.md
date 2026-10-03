@@ -53,7 +53,7 @@ type = "list"
 | `string`  | Any string; optional `pattern` (regex) |
 | `date`    | ISO 8601 date (YYYY-MM-DD) |
 | `datetime` | ISO 8601 naive local datetime (YYYY-MM-DDThh:mm:ss); no `Z`/offset/fractional seconds |
-| `datetime-tz` | RFC 3339 timezone-aware datetime (YYYY-MM-DDThh:mm:ss with `Z` or `±hh:mm`); a naive value fails |
+| `datetime-tz` | RFC 3339 timezone-aware datetime (YYYY-MM-DDThh:mm:ss with `Z` or `±hh:mm`); no fractional seconds; a naive value fails |
 | `number`  | Integer or float |
 | `boolean` | true/false |
 | `list`    | YAML sequence |

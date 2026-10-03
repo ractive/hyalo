@@ -279,7 +279,15 @@ fn reads_hints_under_jq(argv: &[String]) -> Option<&str> {
         .and_then(|i| argv.get(i + 1))
         .map(String::as_str)
         .or_else(|| argv.iter().find_map(|a| a.strip_prefix("--jq=")))?;
-    filter.contains(".hints").then_some(filter)
+    // `.hints` as a whole key: `.results.hints_enabled` (hyalo config) is a
+    // different key and stays allowed.
+    let reads_key = filter.match_indices(".hints").any(|(at, key)| {
+        !filter[at + key.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    });
+    reads_key.then_some(filter)
 }
 
 /// The first token after `hyalo` that is not a flag or a flag value — the
@@ -777,6 +785,13 @@ mod tests {
         assert_eq!(reads_hints_under_jq(&argv), Some(".hints"));
         let argv = split_argv("hyalo find --jq '.results[].file'");
         assert_eq!(reads_hints_under_jq(&argv), None);
+        let argv = split_argv("hyalo config --jq '.results.hints_enabled'");
+        assert_eq!(reads_hints_under_jq(&argv), None);
+        let argv = split_argv("hyalo config --jq '.results.hintsX, .hints | length'");
+        assert_eq!(
+            reads_hints_under_jq(&argv),
+            Some(".results.hintsX, .hints | length")
+        );
     }
 
     #[test]

@@ -90,7 +90,9 @@ and this project adheres to
   `[scan] exclude` or `.gitignore` omits it. No extension is inferred, the file
   is not added to discovery (no document count, graph membership, bare-name,
   alias or fuzzy candidacy), and a missing hidden target stays broken.
-  `summary` counts broken anchors even when the target is also broken.
+  `summary.links.broken_anchors` counts a broken fragment on a resolved target
+  (wikilink or markdown); a link whose target is missing counts under `broken`
+  only, never also under `broken_anchors`.
 - Command help now advertises only supported selectors, global options, and
   output formats. Single-file commands no longer advertise `--glob`;
   `views set` rejects `--files-from` instead of silently discarding it.

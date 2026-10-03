@@ -26,10 +26,12 @@ multiple Read + Edit calls.
 Install the published CLI with `cargo install hyalo-cli` or, on a supported Node.js
 platform, `npm install --global @ractive-ch/hyalo`.
 
-Since 0.23.0 the npm package also exports a typed TypeScript API (ESM and CommonJS):
-`import { find, read, summary, config } from "@ractive-ch/hyalo"`, with `raw` for any
-other command. Releases after 0.24.1 add typed `terms`, `tags` and `backlinks`; the
-installed package's README lists what your version exports.
+Since 0.23.0 the npm package also exports a typed TypeScript API (ESM and CommonJS). In
+0.24.1, `find`, `read`, `summary` and `config` (`import { find } from "@ractive-ch/hyalo"`)
+return typed envelopes, `set`, `task` and `lint` wrap those commands, and `raw` / `execute`
+run any argv. Releases
+after 0.24.1 add typed `terms`, `tags` and `backlinks`; the installed package's README
+lists what your version exports.
 
 Filters combine freely — content search + property conditions + tag + section + task status
 in a single call, something impossible with Grep/Glob alone:
@@ -568,7 +570,7 @@ Flags that only `--help` mentions, worth knowing:
   `musical` (the match needs a `/` boundary). `results.renamed_tags` lists every tag it
   actually touched with its file count.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
-  `--strict` promotes missing-type and undeclared-property warnings to errors.
+  `--strict` promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity).
 - **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
   `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
   or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
@@ -702,7 +704,7 @@ Flags that only `--help` mentions, worth knowing:
    - **HYALO003** — a well-known date key (`date`, `created`, `modified`, `updated`) holding a non-`YYYY-MM-DD` string; needs no schema
    - **HYALO004** — a schema-declared `datetime` / `datetime-tz` property holding an invalid datetime
    - **HYALO006** / **HYALO008** — broken link target / broken heading anchor; **HYALO007** — a list or map `title`
-   - HYALO003, 004, 006, 007 and 008 warn by default; `--strict` promotes them to errors unless their severity is configured explicitly
+   - HYALO003, 004, 006, 007 and 008 warn by default; `--strict` promotes them to errors unless their severity is configured explicitly (the schema's missing-type and undeclared-property warnings always become errors)
    - **HYALO005** — frontmatter that cannot be parsed (invalid YAML, duplicate keys, oversized scalar). Error by default and the file still counts in `files_checked`, so a corrupt file fails CI instead of vanishing silently. Severity is configurable via `[lint.rules.HYALO005]` but no profile downgrades it.
 
 ```bash
@@ -758,8 +760,10 @@ When two fixes want the same bytes one is deferred and reported as a conflict;
 Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix-rule`, etc.). The snapshot index does **not** accelerate the body pass.
 
 **Strict mode:** `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`)
-promotes the "no `type` property" and "undeclared property in frontmatter" warnings to
-errors, so lint exits non-zero on those cases. Useful in CI and `/hyalo-tidy` to fail
+promotes the "no `type` property" and "undeclared property in frontmatter" warnings,
+HYALO003/004/006/007/008 (date, datetime, broken link, non-scalar title, broken anchor) to
+errors, so lint exits non-zero on those cases; a HYALO rule keeps an explicitly configured
+severity, the SCHEMA warnings always become errors. Useful in CI and `/hyalo-tidy` to fail
 fast on schema drift.
 
 **GitHub PR annotations:** `hyalo lint --strict --format github` (lint-only) emits

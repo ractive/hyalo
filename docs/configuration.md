@@ -320,7 +320,8 @@ severity = "warn"
 - **`strict`** (default `false`) — behaves as if every `hyalo lint` passed
   `--strict`, which promotes the schema's missing-`type` and
   undeclared-property warnings, `HYALO003`, `HYALO004`, `HYALO006`, `HYALO007`
-  and `HYALO008` to errors unless a rule's severity is set explicitly below.
+  and `HYALO008` to errors. A HYALO rule keeps a severity set explicitly below;
+  the schema warnings (`SCHEMA`) always become errors and take no override.
   There is no command-line switch to turn a configured `strict = true` off.
 - **`max_violations_per_rule`** (default 3) and **`max_files`** (default 50) —
   caps for the summary output; `--max-per-rule` overrides the first per run

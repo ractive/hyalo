@@ -230,7 +230,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   now keep `broken_anchor` and `suggested_fragment`, so the four ways of selecting one file
   return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
   error is HYALO005's finding and is otherwise a counted skip.
-- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity)), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
 - **`SCHEMA` is a selectable rule** (iter-274): `hyalo lint --rule SCHEMA` (or `--rule-prefix
   SCHEMA`) runs the frontmatter/schema pass alone — the id its findings are already reported
   under, and the one `summary`'s schema hint points at. `lint-rules list`/`show` carry a

@@ -151,7 +151,8 @@ Check if type schemas are defined, then run lint in strict mode. `hyalo lint` co
 both frontmatter schema *and* the markdown body (stock mdbook-lint rules + HYALO native
 rules for things like bare `[]` checkboxes and `status: completed` with open tasks).
 `--strict` promotes the "no `type` property" and "undeclared property in frontmatter"
-warnings to errors so a tidy pass fails fast on schema drift:
+warnings and HYALO003/004/006/007/008 (dates, datetimes, broken links, non-scalar titles,
+broken anchors) to errors so a tidy pass fails fast on schema and link drift:
 ```bash
 hyalo types list --format text
 hyalo lint --strict --format text
