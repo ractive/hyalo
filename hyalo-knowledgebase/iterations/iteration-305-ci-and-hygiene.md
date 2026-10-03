@@ -3,7 +3,7 @@ title: "Iteration 305: CI gates and repository hygiene"
 type: iteration
 date: 2026-10-04
 tags: [iteration, ci, release, hygiene]
-status: in-progress
+status: completed
 branch: iter-305/ci-and-hygiene
 ---
 
@@ -36,12 +36,12 @@ releases. This iteration closes those without touching product code.
 
 ## Acceptance criteria
 
-- [ ] `cargo deny check` passes locally and in CI
+- [x] `cargo deny check` passes locally and in CI
 - [x] `just gates` (or its commands run directly) passes
 - [x] fmt, clippy `-D warnings` and `cargo test --workspace` pass
 - [x] Workflows validate (actionlint or YAML parse)
 - [x] `hyalo lint --strict` reports no new findings on the changed knowledgebase files
-- [ ] CI green on the PR
+- [x] CI green on the PR
 
 ## Notes
 
