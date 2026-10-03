@@ -69,9 +69,28 @@ and this project adheres to
 - npm API: typed `terms()`, `tags()` (`tags summary`) and `backlinks()`
   wrappers returning `Envelope<TermsResult>`, `Envelope<TagsResult>` and
   `Envelope<BacklinksResult>`, with options and results generated from Rust.
+- Lint rule `HYALO008` (`broken-heading-anchor`): a same-file or cross-file
+  heading fragment that matches no heading in the resolved target, including
+  configured frontmatter wikilinks. Warning by default, promoted by `--strict`
+  unless its severity is configured explicitly. `HYALO006` stays target-only,
+  so one link never reports both.
+- `links fix` repairs heading anchors: a broken slug that matches exactly one
+  heading after removing its leading decimal section number (`#success-metrics`
+  → `#6-success-metrics`) is planned in the dry run and written by plain
+  `--apply` together with safe target repairs. Ambiguous, stale, reference
+  definition and frontmatter cases are deferred with a reason. JSON reports
+  `anchor_fixable`/`anchor_fixes`, `anchors_applied`/`applied_anchor_fixes` and
+  `anchors_deferred`/`deferred_anchor_fixes` beside the target-repair fields.
 
 ### Fixed
 
+- An explicit Markdown link to an existing in-vault hidden file
+  (`.gitignore`, `.github/workflows/ci.yml`) resolves instead of being reported
+  broken by `find`, `HYALO006`, `summary` and `links fix`, also when
+  `[scan] exclude` or `.gitignore` omits it. No extension is inferred, the file
+  is not added to discovery (no document count, graph membership, bare-name,
+  alias or fuzzy candidacy), and a missing hidden target stays broken.
+  `summary` counts broken anchors even when the target is also broken.
 - Command help now advertises only supported selectors, global options, and
   output formats. Single-file commands no longer advertise `--glob`;
   `views set` rejects `--files-from` instead of silently discarding it.
