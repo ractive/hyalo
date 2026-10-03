@@ -6469,12 +6469,19 @@ the same question of a section instead of a file.
 - Sections are **flat**: a heading runs to the line before the next heading of
   any level. Text before the first heading is the preamble (heading null,
   level 0, path `[]`) and exists only when it holds tokens.
-- File-level matching runs first. A section is a hit only when it satisfies the
-  query's **positive** tree on its own: Not and Field nodes are pruned (they
-  already decided which files qualify), every AND term must occur in the
-  section, each OR group must be satisfied in the section, and a phrase may span
-  lines within a section but never two sections. `prefix*` expands against the
-  corpus dictionary with the same 256-term cap.
+- File-level matching runs first, against each file's **whole** body even
+  when `--section` is given (so `alpha -beta --section Keep` excludes a file
+  whose other section says beta). A section is then a hit only when the query
+  tree, rewritten for sections, holds on it: negation is pushed down with De
+  Morgan, so a word under an even number of negations stays a positive leaf
+  (`-(-alpha)` ranks sections holding alpha, `-(-a -b)` is a OR b); a word or
+  phrase under odd polarity and every field term become **per-file
+  constants**, evaluated once against the corpus and true for every section of
+  a file where they hold. Every AND term must occur in the section, each OR
+  group must be satisfied in it (`kiwi OR title:x` hits every section of a file
+  titled x, scoring 0 where kiwi is absent), and a phrase may span lines within
+  a section but never two sections. `prefix*` expands against the corpus
+  dictionary with the same 256-term cap.
 - Score = Σ over positive leaves of idf(t)·tfnorm, with the corpus N and n(t)
   (the same IDF as file-level ranking) and the section's token length as dl;
   avgdl is the mean token length over every eligible section of every matched
@@ -6482,7 +6489,15 @@ the same question of a section instead of a file.
   file matched only through its title yields no section hit.
 - Sort: score desc, then file, then line_start. `--limit` counts sections.
   `--section` restricts eligible sections to those whose heading line lies in
-  the `--section` scope (the preamble is then ineligible).
+  the `--section` scope (the preamble is then ineligible); it does not narrow
+  the text files qualify against.
+- A section's `line_end` counts every line read, including an oversized or
+  non-UTF-8 line that is skipped for tokenizing.
+- When files match at file level but no section holds all terms, the empty
+  answer says "N files match at file level, but no single section holds all
+  terms", hints the same query with `--granularity file`, keeps
+  `--granularity section` on the OR rewrite, and offers no `terms` lookup.
+- `--filenames-only` / `--filenames0` list each file once, first hit first.
 - `--sort`, `--reverse`, `--fields`, `--regexp` and a PATTERN with no word or
   phrase are user errors (exit 1, JSON error envelope).
 - Each matched file is read once, in parallel. `--index` gives the same answer:
@@ -6504,6 +6519,11 @@ paragraph to show) but can surprise.
   same text, double-counting it and flooding `--limit` with near-duplicates.
 - Per-section negation: `-x` would then admit a section of a file that mentions
   x elsewhere, contradicting the file-level answer for the same query.
+- Pruning negated subtrees and field terms outright (the first cut): it lost
+  the positive leaf of `-(-alpha)` and dropped `title:x` out of `title:x OR
+  kiwi`, so section mode answered differently from file mode.
+- Ranking `--section` text only at file level in section mode: a negated term
+  in another section would no longer exclude the file.
 - Per-section IDF (sections as the corpus): scores would no longer be comparable
   with file-level ranking, and it needs a second index.
 
@@ -6520,9 +6540,19 @@ status, type or directory) without paging through every result with `--jq`, and
   presorted-limit fast path included).
 - `tags`: exact tag strings, no prefix folding (`project/backend` is its own
   bucket); untagged files count under null.
-- `property:K`: top-level key only (no dot-paths). Each list element counts
-  once per file; a missing key, a null value or an empty list counts under null;
-  numbers and booleans are stringified, nested maps rendered as compact JSON.
+- `property:K`: resolved exactly like `--property` (a literal dotted key
+  first, then dot-path traversal into maps and lists). Buckets follow the
+  filter's semantics: strings fold case the way `K=V` equality does, so `Open`
+  and `open` share one bucket, shown in its most common spelling (ties: the
+  smallest), and a drill-down's count is the count the filter returns. Each
+  list element counts once per file; a missing key, a null value or an empty
+  list counts under null; numbers and booleans are stringified, nested maps
+  rendered as compact JSON and never offered as a drill-down (`K={...}` cannot
+  match).
+- A repeated spec (`type` twice, or `type` and `property:type`) is reported
+  once, under its first spelling.
+- An empty `--files-from` list still validates the specs (exit 1 on a bad one)
+  and reports the requested facets with empty buckets, without scanning.
 - `type` is an alias of `property:type` whose label stays `type`. `dir` is the
   first path segment, or `.` for the vault root.
 - Buckets sort by count desc, then value asc, null last; at most 50 per facet,
@@ -6537,8 +6567,9 @@ status, type or directory) without paging through every result with `--jq`, and
   match, so it can return more files than the bucket count), `--property K=V`
   (skipped when V would not replay literally: contains `=`, starts with `~`, is
   `null` or `[]`, or has surrounding whitespace), `--glob 'dir/**'` (skipped for
-  `.` or when the query already has `--file`/`--glob`). A bucket whose count
-  equals the total is skipped; the global hint cap grows by 3 per facet.
+  `.` or when the query already has `--file`/`--glob`). A bucket holding every
+  counted file is skipped (compared with the file count, also in section mode);
+  the global hint cap grows by 3 per facet.
 
 **Consequences.** Facets cost one pass over the matched files' frontmatter,
 which `find` already holds. A `--tag` drill-down can disagree with its bucket

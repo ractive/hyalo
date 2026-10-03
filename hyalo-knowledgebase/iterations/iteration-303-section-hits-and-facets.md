@@ -39,6 +39,18 @@ counts to `find`, building on the query AST of
 - [x] Docs sync: `find --help`, skill templates, pi/codex packages, `.claude/CLAUDE.md`, CHANGELOG
 - [x] Unit tests for section scoring and facet counting; e2e tests `search_section_hits.rs` and `find_facets.rs`
 
+### Review round (PR #363)
+
+- [x] `find -h` fits its 3072-byte ceiling under Windows CRLF (2949 bytes, 47 lines)
+- [x] Section mode qualifies files on their whole body; `--section` only picks eligible sections
+- [x] Negation pushed down with De Morgan; negated leaves and field terms are per-file constants (`-(-a)`, `kiwi OR title:x`)
+- [x] A section's `line_end` counts oversized and non-UTF-8 lines
+- [x] Empty `--files-from` still validates `--facet`/section arguments and reports empty facets
+- [x] Property buckets resolve dot-paths and fold case like `--property K=V`; structured values get no drill-down; repeated specs counted once
+- [x] Drill-down skip compares with the file count (also in section mode)
+- [x] Zero section hits with file-level matches: explanatory notice, `--granularity file` hint, OR hint keeps `--granularity section`, no `terms` hint
+- [x] `--filenames-only`/`--filenames0` list each file once
+
 ## Acceptance criteria
 
 - [x] `find PATTERN` without `--granularity` produces byte-identical output to iteration 302

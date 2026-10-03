@@ -854,11 +854,13 @@ type FindArgs = {
      * {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
      * are flat (a heading runs to the next heading of any level; text before the first
      * heading is a section with heading null and level 0). A section is a hit only when it
-     * satisfies the query's positive terms on its own; negations and field terms
-     * (title:/heading:/tag:/path:) apply to the whole file. Scores use the corpus IDF and
-     * section-length normalisation. --limit counts sections and --section restricts which
-     * sections are eligible. Requires PATTERN with at least one text term; --regexp, --sort,
-     * --reverse and --fields are rejected in section mode (exit 1).
+     * satisfies the query's positive words and phrases on its own; negated terms and field
+     * terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
+     * sections. Files qualify against their whole body, so --section only restricts which
+     * sections are eligible. Scores use the corpus IDF and section-length normalisation;
+     * --limit counts sections and --filenames-only lists each file once. Requires PATTERN
+     * with at least one text term; --regexp, --sort, --reverse and --fields are rejected in
+     * section mode (exit 1).
      */
     granularity?: Granularity;
     /**
@@ -866,13 +868,15 @@ type FindArgs = {
      *
      * Facet counts over the FULL match set, computed before --limit, emitted as a top-level
      * `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
-     * exact tag (no prefix buckets); `property:K` counts files per scalar value of
-     * frontmatter K (each element of a list counts, a missing or null value counts under a
-     * `null` bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
+     * exact tag (no prefix buckets); `property:K` counts files per value of frontmatter K,
+     * resolved like `--property` (dot-paths included) and folded the same way its `K=V`
+     * equality folds case, so `Open` and `open` share a bucket shown in the most common
+     * spelling (each element of a list counts, a missing or null value counts under a `null`
+     * bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
      * directory ("." for files at the vault root). Buckets sort by count (desc) then value and
-     * are capped at 50 per facet (`truncated: true`). In --granularity section mode the
-     * counts are files with at least one section hit. Works with every query, --jq and
-     * --count; an unknown spec is a user error (exit 1).
+     * are capped at 50 per facet (`truncated: true`). A repeated spec is reported once. In
+     * --granularity section mode the counts are files with at least one section hit. Works
+     * with every query, --jq and --count; an unknown spec is a user error (exit 1).
      */
     facet: Array<string>;
     /**
