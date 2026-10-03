@@ -106,6 +106,44 @@ only the schema is gone, replaced by an empty one. hyalo then:
   `remove`, `task toggle`, all reads — is unaffected, so a vault mid-schema-edit
   stays usable.
 
+## File discovery (`[scan]`) and `.gitignore`
+
+```toml
+[scan]
+include = [".claude/skills/**"]   # re-admit specific hidden dot-paths the walker otherwise skips
+exclude = ["Templates/**"]        # vault-relative globs invisible to every command
+verbose_skips = false             # stream per-file skip diagnostics instead of one summary line
+```
+
+Every command that discovers vault files — `find`, `summary`, `tags`,
+`properties`, `lint`, `links *`, `mv`, `backlinks`, `create-index`, `views`,
+`types`, `okf` and `madr` — walks the vault the same way, and that walk
+honours `.gitignore` (and other VCS ignore files) exactly as `git` itself
+would, in addition to `[scan] exclude` (iteration 306). A `.gitignore`-matched
+`.md` file:
+
+- never appears in an unscoped `find`, `summary`, or any other full-vault
+  listing;
+- is not a note-graph edge for `--orphan` / `--dead-end` (a link pointing at
+  it resolves as if the target did not exist from a whole-vault sweep's
+  point of view);
+- is counted under `hyalo summary`'s `results.files.excluded`, alongside
+  `[scan] exclude` drops — the two share one counter because both describe a
+  file the vault "lost" to an exclusion rule rather than to a read/parse
+  failure.
+
+`.gitignore` is honoured only inside something that looks like a git
+repository (a `.git` directory at or above the vault root); a bare directory
+with no `.git` marker ignores `.gitignore` entirely, the same as `git` would.
+
+A path you **name** — `--file`, a positional argument, or a `--files-from`
+list — is a promise (DEC-301) that survives gitignore exclusion: `find --file
+Secret.md` returns it even when `Secret.md` is gitignored, and it stays
+present under every `--fields` combination, including `--fields backlinks`
+and the fields `--orphan`/`--dead-end` imply — these used to rebuild the
+whole-vault file list from a plain gitignore-respecting walk and silently
+drop a named-but-ignored file.
+
 ## Case-insensitive link resolution
 
 `[links] case_insensitive` controls whether a link whose target differs only in

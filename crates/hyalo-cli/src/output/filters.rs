@@ -214,6 +214,17 @@ pub(super) const LINKS_AUTO_FILTER: &str = r#""\(.matched) unlinked mention\(if 
 /// silence. They print in dry-run mode too, where they are the whole point.
 pub(super) const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\nfiles updated: \(.total_files_updated), links updated: \(.total_links_updated)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)\(if (.frontmatter_links_skipped // []) | length > 0 then "\nfrontmatter wikilinks not rewritten (span a line break):\n" + ((.frontmatter_links_skipped) | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n")) else "" end)""#;
 
+/// `MvResult` under single-file `--on-conflict skip`:
+/// `{dry_run, from, skipped, to, total_files_updated, total_links_updated, updated_files}`.
+///
+/// Nothing was moved — `to` names the pre-existing file that blocked it, and
+/// the counters are always zero — so this is its own filter rather than a
+/// variant of [`MV_RESULT_FILTER`], whose "Moved `<from>` → `<to>`" headline
+/// would otherwise claim a move that did not happen (codebase review
+/// 2026-10-03 item 6: this shape fell through to the generic key-value dump
+/// before this filter existed).
+pub(super) const MV_SKIPPED_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)not moved: \(.from) (\(.to) already exists, --on-conflict skip)""#;
+
 /// `BatchMvResult`: `{applied, dry_run, moves, totals, updated_files}` plus the
 /// optional `conflicts` / `skipped` arrays.
 ///
@@ -221,7 +232,7 @@ pub(super) const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " el
 /// (iter-262, UX-4). Batch mode had no text filter at all before, so it fell
 /// back to the generic key-value dump and its counters were buried inside a
 /// `totals:` block.
-pub(super) const BATCH_MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.totals.moves) file\(if .totals.moves == 1 then "" else "s" end)\(.moves | if length > 0 then "\n" + (map("  \(.from) → \(.to)") | join("\n")) else "" end)\nfiles updated: \(.totals.files_changed), links updated: \(.totals.replacements)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)\(if ((.conflicts // []) | length) > 0 then "\nconflicts: " + ((.conflicts) | join(", ")) else "" end)\(if ((.collisions // []) | length) > 0 then "\ndestination collisions (not moved):\n" + ((.collisions) | map("  \(.source) → \(.destination)") | join("\n")) else "" end)\(if ((.skipped // []) | length) > 0 then "\nskipped: " + ((.skipped) | join(", ")) else "" end)""#;
+pub(super) const BATCH_MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.totals.moves) file\(if .totals.moves == 1 then "" else "s" end)\(.moves | if length > 0 then "\n" + (map("  \(.from) → \(.to)") | join("\n")) else "" end)\nfiles updated: \(.totals.files_changed), links updated: \(.totals.replacements)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)\(if ((.conflicts // []) | length) > 0 then "\nconflicts: " + ((.conflicts) | join(", ")) else "" end)\(if ((.collisions // []) | length) > 0 then "\ndestination collisions (not moved):\n" + ((.collisions) | map("  \(.source) → \(.destination)") | join("\n")) else "" end)\(if ((.skipped // []) | length) > 0 then "\nskipped: " + ((.skipped) | join(", ")) else "" end)\(if ((.skipped_noop // []) | length) > 0 then "\nalready at destination (not moved): " + ((.skipped_noop) | join(", ")) else "" end)""#;
 
 /// `ViewsListEntry`: `{filters, name}`
 /// Format: `name  key=value key=value ...` — compact one-line summary of the view and its filters.
@@ -323,9 +334,16 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // TaskDryRunResult
         "done,file,line,old_status,status,text" => Some(TASK_DRY_RUN_RESULT_FILTER),
-        // VaultSummary
+        // VaultSummary. `schema` (a configured `[schema]` block) and
+        // `index_format_version` (`summary --index`, iteration 306 / P2
+        // "summary --index --format text prints a raw key dump") are each
+        // independently optional, so all four key combinations must route to
+        // the same compact renderer — a signature this match doesn't
+        // recognize falls through to the raw generic key-dump below.
         "dead_ends,dir,files,links,orphans,properties,recent_files,status,tags,tasks"
-        | "dead_ends,dir,files,links,orphans,properties,recent_files,schema,status,tags,tasks" => {
+        | "dead_ends,dir,files,links,orphans,properties,recent_files,schema,status,tags,tasks"
+        | "dead_ends,dir,files,index_format_version,links,orphans,properties,recent_files,status,tags,tasks"
+        | "dead_ends,dir,files,index_format_version,links,orphans,properties,recent_files,schema,status,tags,tasks" => {
             Some(VAULT_SUMMARY_FILTER)
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
@@ -383,13 +401,28 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         | "dry_run,from,frontmatter_links_skipped,skipped_ambiguous,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)
         }
-        // BatchMvResult (`collisions` / `skipped` are omitted when empty;
-        // `total_files_updated` / `total_links_updated` were added in
-        // iteration 275 so batch and single-file JSON answer the same keys).
+        // MvResult under single-file `--on-conflict skip` (item 6): only
+        // `skipped` is ever populated here — the early return in `mv` that
+        // produces it happens before any rewrite planning, so
+        // `skipped_ambiguous`/`frontmatter_links_skipped` are always empty
+        // and omitted, leaving exactly this one signature.
+        "dry_run,from,skipped,to,total_files_updated,total_links_updated,updated_files" => {
+            Some(MV_SKIPPED_RESULT_FILTER)
+        }
+        // BatchMvResult (`collisions` / `skipped` / `skipped_noop` are each
+        // omitted when empty and vary independently, hence all eight
+        // signatures; `total_files_updated` / `total_links_updated` were
+        // added in iteration 275 so batch and single-file JSON answer the
+        // same keys; `skipped_noop` was added in the 2026-10-03 review,
+        // item 6, for a source already at its computed destination).
         "applied,dry_run,moves,total_files_updated,total_links_updated,totals,updated_files"
         | "applied,collisions,dry_run,moves,total_files_updated,total_links_updated,totals,updated_files"
         | "applied,dry_run,moves,skipped,total_files_updated,total_links_updated,totals,updated_files"
-        | "applied,collisions,dry_run,moves,skipped,total_files_updated,total_links_updated,totals,updated_files" => {
+        | "applied,collisions,dry_run,moves,skipped,total_files_updated,total_links_updated,totals,updated_files"
+        | "applied,dry_run,moves,skipped_noop,total_files_updated,total_links_updated,totals,updated_files"
+        | "applied,collisions,dry_run,moves,skipped_noop,total_files_updated,total_links_updated,totals,updated_files"
+        | "applied,dry_run,moves,skipped,skipped_noop,total_files_updated,total_links_updated,totals,updated_files"
+        | "applied,collisions,dry_run,moves,skipped,skipped_noop,total_files_updated,total_links_updated,totals,updated_files" => {
             Some(BATCH_MV_RESULT_FILTER)
         }
         // ViewsListEntry

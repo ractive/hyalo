@@ -435,7 +435,7 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
     }
 
     // 2. Name the values the key actually has, so the next query is informed.
-    for (key, _) in equality_property_filters(ctx) {
+    for (key, value) in equality_property_filters(ctx) {
         if hints.len() >= MAX_ZERO_RESULT_HINTS {
             break;
         }
@@ -460,11 +460,32 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 };
                 let files = observation.files;
                 let files_label = if files == 1 { "file" } else { "files" };
-                hints.push(Hint::new(
+                // F3-wording (iteration 306 review): `observation.values` is
+                // gathered from the WHOLE vault, independent of any other
+                // active filter (`--tag`, another `--property`, a body
+                // pattern). The queried value can therefore already be among
+                // them — a file sets `status=planned` but was excluded by,
+                // say, `--tag iteration` — in which case "but never to that
+                // value" is a lie the very list it is attached to disproves.
+                // Say what is actually true in each case.
+                let value_is_present = observation
+                    .values
+                    .iter()
+                    .any(|v| v.typeable && v.rendered == value);
+                let message = if value_is_present {
+                    format!(
+                        "`{key}={value}` matches {files} {files_label}, but another filter \
+                         excludes all of them; here is everything `{key}` is set to: {}{suffix}",
+                        shown.join(", ")
+                    )
+                } else {
                     format!(
                         "`{key}` is set in {files} {files_label}, but never to that value: {}{suffix}",
                         shown.join(", ")
-                    ),
+                    )
+                };
+                hints.push(Hint::new(
+                    message,
                     HintBuilder::cmd("find")
                         .flag_value("--property", key)
                         .flag_value("--fields", "properties")
@@ -629,6 +650,36 @@ mod tests {
                 .iter()
                 .any(|h| h.description.contains("No file has a `status`")),
             "the key exists — do not claim otherwise: {hints:?}"
+        );
+    }
+
+    /// Iteration 306 review (P3 nit): `find --property status=planned --tag
+    /// iteration` returned zero results while `status` genuinely carries
+    /// `planned` in 4 files — another active filter (`--tag`) excluded all of
+    /// them. The old wording said "but never to that value: planned (4)" in
+    /// the very same sentence that lists the value, contradicting itself.
+    #[test]
+    fn queried_value_present_but_excluded_by_another_filter_does_not_contradict_itself() {
+        let mut ctx = ctx_with(&["status=planned"], &["iteration"]);
+        observed_with(
+            &mut ctx,
+            "status",
+            &[("planned", 4, true), ("done", 1, true)],
+        );
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("but never to that value")),
+            "the value IS present; this wording is false here: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("status=planned")
+                    && h.description.contains("another filter")
+                    && h.description.contains("planned (4)")),
+            "should say the value matches but another filter excludes it: {hints:?}"
         );
     }
 

@@ -326,10 +326,25 @@ pub fn summary(
     }
     directories.sort_by(|a, b| b.count.cmp(&a.count).then(a.directory.cmp(&b.directory)));
 
+    // A `.gitignore`-excluded `.md` file is invisible to this walk exactly
+    // like a `[scan] exclude` drop is: the vault "lost" it to an exclusion
+    // rule, not to a read/parse failure, so it is folded into the same
+    // `excluded` total rather than a new field (iteration 306 / F5). Best
+    // effort: a vault directory the configured `dir` cannot re-walk (e.g. a
+    // moved vault read through `--index-file`) just contributes 0 here
+    // rather than failing the whole summary.
+    let gitignore_excluded =
+        hyalo_core::discovery::count_gitignore_dropped(dir).unwrap_or_else(|error| {
+            crate::warn::note(format!(
+                "could not measure .gitignore-excluded files for this summary: {error:#}"
+            ));
+            0
+        });
+
     let file_counts = FileCounts {
         total: total_files,
         skipped: skipped_files.len(),
-        excluded: hyalo_core::discovery::scan_excluded_count(),
+        excluded: hyalo_core::discovery::scan_excluded_count() + gitignore_excluded,
         directories,
     };
 

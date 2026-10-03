@@ -322,6 +322,25 @@ fn score_corpus(
     scored
 }
 
+/// Advisory for `find` with an empty-string `--pattern`/positional body
+/// query: "no filter" rather than a user error, but worth a note so a
+/// scripted caller does not mistake "matches everything" for a bug.
+///
+/// `is_terminal` is taken as an explicit parameter (mirroring
+/// `run::resolve_format_by_tty`) rather than calling `IsTerminal::is_terminal`
+/// inline, so both branches are unit-testable without a real TTY.
+///
+/// Iteration 306 review: this used a raw `eprintln!`, bypassing `-q` even on
+/// a terminal (`find --pattern '' -q` still printed it interactively).
+/// `crate::warn::note` keeps the existing terminal-only trigger — a piped or
+/// redirected run never gets this note at all — while making it
+/// `-q`-silenceable like every other advisory.
+fn note_empty_body_pattern(is_terminal: bool) {
+    if is_terminal {
+        crate::warn::note("empty body pattern treated as no pattern (matches all files)");
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(crate) fn find_prepared(
     index: &dyn VaultIndex,
@@ -359,9 +378,7 @@ pub(crate) fn find_prepared(
     // On an interactive terminal (stderr is a TTY) we emit a one-line note so
     // the user doesn't accidentally rely on this behaviour without knowing it.
     let pattern = if pattern.is_some_and(|p| p.trim().is_empty()) {
-        if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
-            eprintln!("note: empty body pattern treated as no pattern (matches all files)");
-        }
+        note_empty_body_pattern(std::io::IsTerminal::is_terminal(&std::io::stderr()));
         None
     } else {
         pattern
