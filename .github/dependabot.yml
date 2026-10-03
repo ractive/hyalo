@@ -7,7 +7,7 @@
 #
 # - github-actions: third-party actions are SHA-pinned with a `# vX.Y.Z`
 #   comment; Dependabot updates both. First-party reusable workflows
-#   (ractive/release-workflows, ractive/setup-hyalo) float on tags by design
+#   (ractive/release-workflows, ractive/setup-hyalo) are pinned by tag by design
 #   (see docs/releasing.md, "Pinning policy"), so their bumps are ignored here.
 # - npm/jev uses bun's text lockfile (bun.lock), which Dependabot supports
 #   through the `bun` ecosystem. Its bundle is embedded in the skill

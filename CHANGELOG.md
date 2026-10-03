@@ -616,8 +616,11 @@ is no `v0.23.0` git tag, GitHub release or crates.io version.
 
 ## [0.22.0] - 2026-09-07
 
-- npm-only launcher release: the first `@ractive-ch/hyalo` npm packages, built
-  from the 0.21.0 source (no git tag, GitHub release or crates.io version).
+### Added
+
+- npm-only release built from main at 8c05111a (workspace 0.22.0); its CLI
+  changes are listed under 0.24.0. No git tag, GitHub release or crates.io
+  version.
 
 ## [0.21.0] - 2026-08-28
 

@@ -89,11 +89,12 @@ backfills the Cloudsmith repos.
 
 Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment;
 Dependabot (`.github/dependabot.yml`) proposes the updates. First-party
-reusable workflows and actions — `ractive/release-workflows@v0.2.x` and
-`ractive/setup-hyalo@v1` — deliberately float on tags: they are owned and
-released together with hyalo, a tag move is a reviewed release of that repo,
-and the `lint-kb` jobs dogfood exactly what consumers run (DEC-051 for
-setup-hyalo). Dependabot is told to ignore them.
+reusable workflows and actions are referenced by tag, not SHA:
+`ractive/release-workflows` callers pin exact tags (`@v0.2.0`, `@v0.2.1`), and
+`ractive/setup-hyalo@v1` deliberately floats on its major tag so the `lint-kb`
+jobs dogfood exactly what consumers run (DEC-051). Both repos are owned and
+released together with hyalo, so a tag is a reviewed release of that repo.
+Dependabot is told to ignore them.
 
 ## Package repository hosting
 

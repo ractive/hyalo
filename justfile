@@ -18,7 +18,8 @@ gates:
     # `cargo run -p xtask`, which can deadlock on the nested cargo lock when a
     # gate itself shells out to cargo; an absolute CARGO_MANIFEST_DIR lets
     # xtask find the workspace root and CARGO names the cargo for nested runs.
-    # CI also runs `cargo deny check` in that job (cargo install cargo-deny).
+    # CI runs cargo deny via cargo-deny-action; locally:
+    # cargo install cargo-deny && cargo deny check
     set -euo pipefail
     root="{{justfile_directory()}}"
     cargo build -q -p xtask

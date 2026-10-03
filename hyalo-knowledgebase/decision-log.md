@@ -22,7 +22,8 @@ error field. Optional fields distinguish omission from explicit JSON `null`.
 while excluding actual test-only syntax. The serialization boundary retains
 alphabetical object ordering and the existing directory-hoist and file-counter
 conventions. The pi manifest gate also compares the canonical, root and embedded
-package versions with the Cargo workspace; the Codex plugin version is independent.
+package versions with the Cargo workspace; the Codex plugin version is independent
+(amended by DEC-340: the plugin now follows the workspace version).
 
 **Why:** Named contracts make field changes reviewable and prepare iteration 287's
 TypeScript API. They do not prove semantic correctness. Iteration 285 compares
@@ -36,7 +37,8 @@ execution evidence before removing them. See
 
 **Decision:** Ship Codex skills in `plugins/hyalo/skills/` and mirror them inside
 the CLI crate for embedding. `check-codex-package` verifies both directions and
-metadata; `sync-codex-package` refreshes the mirror. The plugin has its own version.
+metadata; `sync-codex-package` refreshes the mirror. The plugin has its own version
+(amended by DEC-340: the plugin now follows the workspace version).
 
 `init --codex` installs project skills and managed `AGENTS.md` guidance.
 `init --codex --codex-plugin` uses the separately installed plugin and removes
@@ -6626,6 +6628,6 @@ nothing the workspace test run does not: a deleted test is caught in review,
 not by a filter list that has to be edited in the same PR.
 
 **Consequences.** `just gates` and CI's `quality-gates` run the same eleven
-xtask gates; no xtask subcommand exists that is not a gate, a sync or a
-generator. Historical iteration notes that mention the removed names are left
+xtask gates (`check-jev-assets` runs in CI's jev-helper job and `bench-scale`
+is an on-demand benchmark); no placeholder subcommands remain. Historical iteration notes that mention the removed names are left
 as written.
