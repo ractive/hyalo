@@ -97,21 +97,36 @@ fn append_externally(tmp: &TempDir, rel: &str, line: &str) {
     writeln!(f, "{line}").unwrap();
 }
 
+/// Read the persisted snapshot entry's `size` field for `rel` directly from
+/// the `.hyalo-index` file. This is used instead of `find --index` as a
+/// probe: under DEC-339, a *read* command detects drift and repairs it in
+/// memory for that one run, which would mask whatever the snapshot file
+/// itself actually contains.
+fn persisted_entry_size(tmp: &TempDir, rel: &str) -> u64 {
+    use hyalo_core::index::{SnapshotIndex, VaultIndex};
+    let snapshot_path = tmp.path().join(".hyalo-index");
+    let snapshot = SnapshotIndex::load(&snapshot_path).unwrap().unwrap();
+    snapshot.get(rel).unwrap().size
+}
+
 /// The regression itself: `set` reports `0 modified` because the property is
-/// already at its target value, and the entry must *still* come out matching
-/// the bytes on disk.
+/// already at its target value, and the *persisted snapshot entry* must
+/// still come out matching the bytes on disk — not merely what an
+/// in-memory-repairing read would show.
 #[test]
 fn noop_set_with_index_refreshes_an_entry_the_disk_has_outgrown() {
     let tmp = bug2_vault();
     run(&tmp, &["create-index"]);
     append_externally(&tmp, "note.md", "zzqqx appended after the snapshot");
 
-    // Baseline: the snapshot cannot see the appended word (it answers BM25
-    // from cached tokens, never re-reading the file).
-    assert_eq!(
-        count(&tmp, &["find", "zzqqx", "--index"]),
-        0,
-        "precondition: the pre-mutation snapshot must not know the appended word"
+    let disk_size = std::fs::metadata(tmp.path().join("note.md")).unwrap().len();
+
+    // Precondition: the persisted snapshot entry predates the external
+    // append, so it disagrees with the file's current size.
+    assert_ne!(
+        persisted_entry_size(&tmp, "note.md"),
+        disk_size,
+        "precondition: the pre-mutation snapshot must not know about the appended bytes"
     );
 
     let set = run_json(
@@ -131,15 +146,13 @@ fn noop_set_with_index_refreshes_an_entry_the_disk_has_outgrown() {
     );
     assert_eq!(set["results"]["skipped"].as_array().unwrap().len(), 1);
 
+    // The repair is persisted to the snapshot file, not just in-memory for
+    // that one process.
     assert_eq!(
-        count(&tmp, &["find", "zzqqx", "--index"]),
-        1,
-        "the no-op `set` read the file, so its index entry must now match disk"
+        persisted_entry_size(&tmp, "note.md"),
+        disk_size,
+        "the no-op `set` read the file, so its persisted entry must now match disk"
     );
-
-    // And the repair is persisted, not just in-memory for that one process.
-    let reread = run_json(&tmp, &["find", "zzqqx", "--index", "--fields", "file"]);
-    assert_eq!(reread["results"][0]["file"], "note.md");
 }
 
 /// The same repair, observed through fields that can only come from the
@@ -201,12 +214,23 @@ fn noop_set_with_index_refreshes_size_and_lines_from_disk() {
 }
 
 /// `--dry-run` promises to touch nothing. The staleness repair is a write to
-/// the snapshot, so it must stay behind that promise too.
+/// the snapshot, so it must stay behind that promise too. Probed directly
+/// against the persisted snapshot entry (see `persisted_entry_size`) because
+/// `find --index` would itself repair the drift in memory for that one run
+/// without writing the file, which would not distinguish this case from a
+/// bug that *did* persist the repair.
 #[test]
 fn dry_run_set_leaves_a_stale_entry_alone() {
     let tmp = bug2_vault();
     run(&tmp, &["create-index"]);
     append_externally(&tmp, "note.md", "zzqqx appended after the snapshot");
+
+    let disk_size = std::fs::metadata(tmp.path().join("note.md")).unwrap().len();
+    let before = persisted_entry_size(&tmp, "note.md");
+    assert_ne!(
+        before, disk_size,
+        "precondition: the pre-mutation snapshot must not know about the appended bytes"
+    );
 
     run(
         &tmp,
@@ -221,8 +245,8 @@ fn dry_run_set_leaves_a_stale_entry_alone() {
     );
 
     assert_eq!(
-        count(&tmp, &["find", "zzqqx", "--index"]),
-        0,
+        persisted_entry_size(&tmp, "note.md"),
+        before,
         "--dry-run must not write the snapshot, stale entry or not"
     );
 }

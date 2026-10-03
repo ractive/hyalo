@@ -1,6 +1,26 @@
 use super::common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
+/// Overwrites `path` with different content of the same byte length, then
+/// restores the original mtime, so DEC-339 drift detection (size/mtime
+/// based) sees no change even though the body differs on disk.
+fn overwrite_same_length_preserving_mtime(path: &std::path::Path) {
+    let original = std::fs::read(path).unwrap();
+    let modified_at = std::fs::metadata(path).unwrap().modified().unwrap();
+    let replacement = vec![b'z'; original.len().saturating_sub(1)];
+    let mut new_content = replacement;
+    new_content.push(b'\n');
+    assert_eq!(new_content.len(), original.len());
+    assert_ne!(new_content, original);
+    std::fs::write(path, &new_content).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified_at)
+        .unwrap();
+}
+
 #[test]
 fn ranked_snippets_streaming_unicode_and_crlf_boundaries() {
     let tmp = TempDir::new().unwrap();
@@ -1469,7 +1489,11 @@ fn ranked_live_reads_allow_in_vault_symlink_destinations() {
 }
 
 #[test]
-fn ranked_live_reads_preserve_missing_target_diagnostics() {
+fn ranked_live_reads_repair_missing_target_in_memory() {
+    // The deleted note is now detected as drift and repaired in memory for
+    // this run (DEC-339), so both variants succeed and simply return no
+    // results for the deleted note's content; the repair note still names
+    // the witness path, and there is no "outside vault" diagnostic.
     let vault = indexed_ranked_fixture();
     std::fs::remove_file(vault.path().join("notes/note.md")).unwrap();
     for fallback in [false, true] {
@@ -1483,9 +1507,10 @@ fn ranked_live_reads_preserve_missing_target_diagnostics() {
             command.args(["--section", "Fruit"]);
         }
         let output = command.output().unwrap();
-        assert_eq!(output.status.success(), fallback, "{output:?}");
+        assert!(output.status.success(), "{output:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("notes/note.md"), "{stderr}");
+        assert!(stderr.contains("repaired in memory"), "{stderr}");
         assert!(!stderr.contains("outside vault"), "{stderr}");
     }
 }
@@ -1679,7 +1704,11 @@ fn ranked_partial_persisted_corpus_reuses_nonselected_tokens() {
             .unwrap()
     };
     let before = query();
-    std::fs::remove_file(vault.path().join("other.md")).unwrap();
+    // Overwrite with different content of the same byte length and restore
+    // the original mtime (DEC-339 drift detection keys on size/mtime, not
+    // content), so the run sees no drift and must answer from the persisted
+    // tokens rather than re-reading this nonselected body.
+    overwrite_same_length_preserving_mtime(&vault.path().join("other.md"));
     let after = query();
     assert!(after.status.success(), "{after:?}");
     assert_eq!(before.stdout, after.stdout);
@@ -1694,6 +1723,7 @@ fn ranked_partial_persisted_corpus_reuses_nonselected_tokens() {
     assert_eq!(before_warnings.len(), 1);
     assert!(before_warnings[0].contains("skipped 1 unreadable file"));
     assert_eq!(before_warnings, unreadable_warnings(&after));
+    assert!(!String::from_utf8_lossy(&after.stderr).contains("changed on disk"));
 }
 
 #[test]
@@ -1737,9 +1767,13 @@ fn ranked_language_fallback_reuses_compatible_persisted_document_tokens() {
             .unwrap()
     };
     let before = query();
-    std::fs::remove_file(vault.path().join("compatible.md")).unwrap();
+    // Same treatment as the sibling test above: change the bytes but keep
+    // size and mtime identical so drift detection stays quiet and the
+    // persisted tokens for this nonselected document are reused untouched.
+    overwrite_same_length_preserving_mtime(&vault.path().join("compatible.md"));
     let after = query();
     assert!(after.status.success(), "{after:?}");
     assert_eq!(before.stdout, after.stdout);
     assert!(!String::from_utf8_lossy(&after.stderr).contains("unreadable"));
+    assert!(!String::from_utf8_lossy(&after.stderr).contains("changed on disk"));
 }
