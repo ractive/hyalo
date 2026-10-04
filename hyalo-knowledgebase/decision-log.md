@@ -6800,7 +6800,8 @@ undocumented everywhere. The contract, now made consistent:
   `other.md`, but `other.md`'s own `[[MyNotes]]` is invisible to every
   whole-vault view;
 - `hyalo summary`'s `results.files.excluded` counts every such drop
-  alongside `[scan] exclude` drops (`discovery::count_gitignore_dropped_against`)
+  alongside `[scan] exclude` drops (counted in the discovery walk itself since
+  [[decision-log#DEC-349: `summary` counts gitignore drops in the walk that finds the files (2026-10-04)]])
   rather than undercounting silently, and only `.gitignore` drops at first —
   the review round's finding (6) is folded in below;
 - a path you **name** — `--file`, a positional argument, or `--files-from` —
@@ -6881,6 +6882,15 @@ drifts from the real walk's behaviour by even one edge case (nested
 silently misreport `results.files.excluded` in exactly the vaults this
 feature exists to serve, for a saving that is already one extra walk at
 `create-index` build time, not on every read.
+
+**Amended by DEC-349 (iteration 309).** The "extra walk" mechanism above
+(`count_gitignore_dropped_against` and `discover_files_ignoring_gitignore`) is
+gone: `summary` and `create-index` count the drops in the walk that finds the
+files. The rejected alternative is taken up in a narrower form: only the
+sources known before the walk (the vault root's, its ancestors' and the
+global excludes) are ported, a nested source falls back to the crate's own
+walk, and differential tests compare the result with the crate's. The
+contract itself is unchanged.
 
 ## DEC-343: `MutationJournal::rename_entry` deleted (2026-10-04)
 
@@ -7005,3 +7015,86 @@ which this decision does not introduce.
 **Rejected alternative.** Generating the rule and the skill pitfalls from the
 claims paragraph: the three texts address different readers and differ in
 length by design.
+
+## DEC-348: A wikilink's inner text is read from the original line (2026-10-04)
+
+**Decision.** The scanner still blanks inline code spans before it looks for
+links, and that cleaned line still decides *whether* a wikilink exists: a
+`[[x]]` inside a code span is never a link, and a span that opens inside the
+brackets and closes after them hides the `]]`. The text between `[[` and
+`]]` (target, `#fragment`, `|alias`) is now read from the original line at the
+same byte offsets, as markdown link labels already were. This covers
+`[[note#…]]`, `![[…]]`, same-file `[[#…]]` anchors, the span parser used by
+`mv` and `links fix`, the fragment-span parser used by anchor repair, and the
+lint and section-index visitors, which previously passed only the cleaned
+line.
+
+**Why.** The decision log's own headings carry inline code
+(``## DEC-068: `links auto --no-first-only` ships …``). A link to one
+reached resolution as `DEC-068:                              ships …` and
+matched no heading, while the `suggested_fragment` hyalo offered for a broken
+`#DEC-068` carried the backticks, so following hyalo's suggestion produced
+another broken link. GitHub-style slug generation was not involved: a
+markdown link with the slug `#dec-068-links-auto---no-first-only-ships-…`
+already resolved.
+
+**Consequences.** Whole-vault `hyalo lint --strict` exits 0 again: the 23
+bare `#DEC-NNN` anchors in the knowledgebase were rewritten to the full
+heading text, in the body and in one `related:` frontmatter value. A
+wikilink containing `]]` inside a code span between its brackets keeps its
+pathological target; no real vault writes one.
+
+**Rejected alternative.** Resolving the bare `#DEC-NNN` prefix as a heading
+match: Obsidian does not, and DEC-268 already reports the unique heading it
+prefixes as `suggested_fragment`.
+
+## DEC-349: `summary` counts gitignore drops in the walk that finds the files (2026-10-04)
+
+**Decision.** `discovery::discover_files_counting_gitignored` returns the
+vault's file list and the number of `.md` files the VCS ignore sources hide,
+from one directory walk where the layout allows it. The walk runs with the
+`ignore` crate's VCS rules disabled. `ignore_classify::PreknownIgnores` ports
+the crate's precedence (`ignore::dir::Ignore::matched_ignore`) for the
+sources known before the walk starts: the vault root's `.ignore`,
+`.gitignore` and `.git/info/exclude`, the same three in every ancestor
+(matched against the canonical absolute path exactly as the crate rebases
+it), and git's global excludes rooted at the working directory. Each entry is
+classified as the crate would: an ignored `.md` file is counted, an ignored
+directory is pruned and its `.md` files are counted by a walk of that subtree
+alone, and a `!negation` still beats the hidden filter. `summary` (disk scan)
+calls it once before resolving its index and memoizes the list, so the
+file collection and the case-insensitive link index reuse it.
+`create-index` calls it without the memo. `summary --index` still reads the
+count from the snapshot header (DEC-342).
+
+**Why.** Iteration 306's counting walk cost MDN's disk summary 1.55 s to
+1.70 s, paid even by a vault with no ignore file, and an existence check
+cannot avoid it: MDN sits inside a repository whose root `.gitignore`
+applies to every directory. The disk summary also walked a further time for
+its link index. Measured on `files/en-us`, release build, best of three:
+
+| | before | after |
+|---|---|---|
+| `summary` (disk) | 1.75 s | 1.04 s |
+| `create-index` | 2.95 s | 2.64 s |
+
+The JSON output of both `summary` runs is byte-identical, on MDN and on this
+knowledgebase.
+
+**Consequences.** The port covers only levels whose rules are fixed before
+the walk. A nested `.gitignore`, `.ignore`, `.git` or `.jj` below the root is
+seen while the walk is already classifying its siblings, so the file set then
+comes from the crate's rules-enabled walk and the first pass supplies the
+rules-disabled side of the count, two walks as before. A `.jj` directory or
+a `.git` worktree file at the root or above takes the crate route up front.
+Every other command still discovers files through the crate alone. Unit
+tests compare the file list and the count with the crate's two-walk result
+for root, ancestor, `.ignore`-only, whitelist-beats-hidden, nested, `.jj`
+and relative-root layouts.
+
+**Rejected alternatives.** Skipping the second walk when no ignore file
+exists: correct, but MDN and any vault inside a repository would still pay
+it. Running the second walk concurrently with parsing: it competes with the
+scan for the same cores and kernel time. Using the port for every command:
+it would make every command's file set depend on it, for no gain outside
+`summary` and `create-index`.
