@@ -7213,13 +7213,13 @@ section hits (`section.line_start`/`line_end`, DEC-334), lint and
 `task --line` already use. `read.rs::translate_file_range` converts the
 requested file-absolute range into the body-relative slice `read_body_lines`
 actually holds (`body_line = file_line - frontmatter_line_count`, clamped to
-1). When the requested window has no overlap with the body at all — entirely
-inside the frontmatter block, or starting past the end of the file — the read
-returns empty content *and* a `-q`-proof `warn_always` naming the file's line
-count and, when relevant, the frontmatter's extent, instead of answering with
-a silent empty string at exit 0. A window that partially overlaps the body
-(start inside the frontmatter, end inside the body) clamps into the body
-rather than warning — that is an ordinary slice, not an out-of-range one.
+1). A frontmatter line is a file line like any other: a window that falls
+inside the frontmatter block (`--lines 1:2` on a file with a 16-line block)
+returns those raw lines, and `--frontmatter --lines 1:2` returns them beside
+the parsed frontmatter. Only a window that starts past the end of the file
+has nothing to return; that read answers empty content *and* a `-q`-proof
+`warn_always` naming the file's line count, instead of a silent empty string
+at exit 0.
 The companion fix in `find`'s section-hit hint (DEC-334) stops subtracting
 the frontmatter offset before emitting its `--lines A:B` suggestion, since
 the hint and the command it builds now agree on what "line" means.
@@ -7236,12 +7236,12 @@ unknown flag.
 
 **Consequences.** `ReadArgs::lines`' `--help` text and the three `task --line`
 help blocks (`read`/`toggle`/`set`) no longer describe a numbering
-discrepancy that no longer exists. `--lines` combined with `--section`
-keeps its iter-253 behaviour unchanged: the extracted (and possibly
-multi-section-joined) text is its own addressable unit, and `--lines` stays
-relative to *that*, not to the file — a section's extracted text has no
-single file-absolute line range once multiple matched sections are joined
-with a blank-line separator. Disk and `--index` reads are unaffected (the
+discrepancy that no longer exists. `--lines` combined with `--section` is
+file-absolute too (the review of PR #376 caught the first cut leaving it
+section-relative): the requested window is intersected with each matched
+section's own file-absolute span, so a range copied from a section hit
+pastes in unchanged under `--section`, and a window that overlaps none of
+the matched sections warns the same way. Disk and `--index` reads are unaffected (the
 translation is pure arithmetic over counts both paths already compute).
 
 **Rejected alternatives.** Keep `--lines` body-relative and instead translate
