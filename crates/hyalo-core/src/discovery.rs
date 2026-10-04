@@ -2847,6 +2847,22 @@ fn resolve_target_inner(
         &normalized
     };
 
+    // BUG-15 (iteration 311): a bare site-absolute `/` -- or a site-absolute
+    // target that is *exactly* the configured `site_prefix` with nothing
+    // after it -- strips down to the empty string here. `/dir` already
+    // resolves to `dir/index.md` below; the empty remainder is the same rule
+    // one level up, at the vault root, and deserves the same answer instead
+    // of falling through to a malformed `/index.md` candidate (a literal
+    // leading slash joined onto an empty target).
+    if site_absolute && target.is_empty() {
+        return resolve_candidate_path(
+            canonical_dir,
+            DIRECTORY_INDEX_FILE,
+            case_index,
+            existence_index,
+        );
+    }
+
     // iter-277 (BUG-13): when the case index covers the whole vault it *is*
     // the file set, so existence is a hash lookup rather than a `stat` plus a
     // `canonicalize`. On MDN with `--site-prefix en-US/docs` almost every

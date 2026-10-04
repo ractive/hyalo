@@ -12,6 +12,7 @@ use crate::anchor::{fragment_matches_headings, numbered_heading_repair};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::index::VaultIndex;
 use crate::link_rewrite::{Replacement, RewritePlan, apply_replacements, execute_plans_partial};
+use crate::links::LinkKind;
 use crate::scanner::{LineClass, LineScanner, lines_with_rest};
 
 /// A reviewed fragment-only proposal. Counts describe the pre-apply source.
@@ -25,14 +26,34 @@ pub struct AnchorFixPlan {
     pub target: String,
     /// Original fragment, without `#`.
     pub old_fragment: String,
-    /// Actual generated heading slug, without `#`.
+    /// The fragment text `--apply` writes: the heading as written for a
+    /// wikilink (Obsidian matches heading text, never a GFM slug — BUG-1,
+    /// iteration 311, DEC-351), the GFM slug for a markdown link.
     pub new_fragment: String,
     /// The unique matching heading.
     pub heading: String,
+    /// The link syntax this fragment was written in — kept so the
+    /// publication pass can recompute `new_fragment` the same way the
+    /// planner did (see [`Self::new_fragment`]).
+    #[serde(skip)]
+    kind: LinkKind,
     #[serde(skip)]
     byte_offset: usize,
     #[serde(skip)]
     source_bytes: Rc<String>,
+}
+
+/// The fragment text to write for a `numbered_heading_repair` candidate,
+/// chosen by link syntax (BUG-1, iteration 311, DEC-351): Obsidian matches a
+/// wikilink fragment against heading TEXT, never a GFM slug, while a markdown
+/// fragment is a URL component and keeps the slug. Shared by the planner and
+/// by the publication pass's re-validation so the two can never disagree.
+fn fragment_for_kind(kind: LinkKind, heading: &str, slug: String) -> String {
+    if kind.is_wikilink() {
+        heading.to_owned()
+    } else {
+        slug
+    }
 }
 
 /// An anchor left untouched, with an explicit reason.
@@ -46,6 +67,12 @@ pub struct AnchorFixDeferral {
     pub fragment: String,
     /// Why no write is safe.
     pub reason: String,
+    /// The same unique-prefix suggestion `find --broken-links` would show
+    /// for this fragment (UX-7, iteration 311: one chooser,
+    /// `anchor::unique_heading_by_prefix`), so the two surfaces never
+    /// disagree about what a fix for this anchor would look like.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_fragment: Option<String>,
 }
 
 /// Independent fragment repair inventory.
@@ -100,7 +127,7 @@ pub fn plan_anchor_fixes_filtered(
                     site_prefix,
                     case_index,
                 )?;
-                Some((*line, link.target.as_str(), fragment, target))
+                Some((*line, link.target.as_str(), fragment, target, link.kind))
             })
             .chain(entry.self_anchors.iter().map(|anchor| {
                 (
@@ -108,9 +135,10 @@ pub fn plan_anchor_fixes_filtered(
                     "",
                     anchor.fragment.as_str(),
                     entry.rel_path.clone(),
+                    anchor.kind,
                 )
             }));
-        for (line, authored_target, fragment, target) in links {
+        for (line, authored_target, fragment, target, link_kind) in links {
             if !include(&entry.rel_path, authored_target) {
                 continue;
             }
@@ -137,14 +165,25 @@ pub fn plan_anchor_fixes_filtered(
                         reason:
                             "templated heading or fragment is unknowable; no anchor repair proposed"
                                 .to_owned(),
+                        // A templated heading is unknowable by definition, so
+                        // no prefix suggestion is offered for it either.
+                        suggested_fragment: None,
                     });
                 }
                 continue;
             }
             report.broken += 1;
+            // UX-7 (iteration 311): the same unique-prefix chooser
+            // `find --broken-links` uses, so a deferred anchor still carries
+            // a `suggested_fragment` when one exists -- the two commands
+            // never disagree about what the fix would look like.
+            let suggested_fragment =
+                crate::anchor::unique_heading_by_prefix(fragment, &target_entry.sections)
+                    .map(str::to_owned);
             let candidate = numbered_heading_repair(fragment, &target_entry.sections);
             let result = (|| -> Result<AnchorFixPlan, String> {
-                let (heading, new_fragment) = candidate.map_err(str::to_owned)?;
+                let (heading, slug) = candidate.map_err(str::to_owned)?;
+                let new_fragment = fragment_for_kind(link_kind, &heading, slug);
                 if entry
                     .sections
                     .iter()
@@ -171,6 +210,7 @@ pub fn plan_anchor_fixes_filtered(
                     old_fragment: fragment.to_owned(),
                     new_fragment,
                     heading,
+                    kind: link_kind,
                     byte_offset,
                     source_bytes: Rc::clone(source_bytes.as_ref().ok_or("source unavailable")?),
                 })
@@ -182,6 +222,7 @@ pub fn plan_anchor_fixes_filtered(
                     line,
                     fragment: fragment.to_owned(),
                     reason,
+                    suggested_fragment,
                 }),
             }
         }
@@ -396,10 +437,17 @@ fn apply_anchor_fixes_with_executor(
                     })
                     .as_ref()
                     .map_err(Clone::clone)?;
-                let candidate =
+                let (heading, slug) =
                     numbered_heading_repair(&plan.old_fragment, sections).map_err(str::to_owned)?;
-                if candidate.0 != plan.heading
-                    || candidate.1 != plan.new_fragment
+                // BUG-1 (iteration 311, DEC-351): re-derive the SAME
+                // kind-dependent fragment the planner chose (heading text for
+                // a wikilink, GFM slug for a markdown link) before comparing
+                // — the raw slug alone is the wrong half of the pair for a
+                // wikilink plan, which would make every wikilink anchor fix
+                // defer here as "target headings changed" even when nothing
+                // did.
+                if heading != plan.heading
+                    || fragment_for_kind(plan.kind, &heading, slug) != plan.new_fragment
                     || fragment_matches_headings(&plan.old_fragment, sections)
                     || !fragment_matches_headings(&plan.new_fragment, sections)
                 {
@@ -446,6 +494,11 @@ fn deferral(plan: &AnchorFixPlan, reason: &str) -> AnchorFixDeferral {
         line: plan.line,
         fragment: plan.old_fragment.clone(),
         reason: reason.to_owned(),
+        // These deferrals are publish-time revalidation failures of an
+        // already-planned fix (stale bytes, a conflicting target repair,
+        // headings that changed underneath it) -- not an unrepairable
+        // anchor, so there is nothing new to suggest here.
+        suggested_fragment: None,
     }
 }
 
@@ -492,11 +545,16 @@ mod tests {
         );
         let applied = apply_anchor_fixes(temp.path(), &report.fixes, &[]).unwrap();
         assert_eq!(applied.applied.len(), 4, "{applied:?}");
+        // BUG-1 (iteration 311, DEC-351): a markdown fragment (the `?q=1#...`
+        // destination and the self-anchor `(#local-section)`) keeps the GFM
+        // slug, exactly as before; a wikilink fragment (the path-form
+        // `[[target#...]]` and the self-anchor `[[#...]]`) now gets the
+        // heading TEXT instead, since that is what Obsidian actually matches.
         let expected = source
             .replace("?q=1#success-metrics", "?q=1#6-success-metrics")
-            .replace("[[target#success-metrics", "[[target#6-success-metrics")
+            .replace("[[target#success-metrics", "[[target#6. Success metrics")
             .replace("(#local-section)", "(#2-local-section)")
-            .replace("[[#local-section", "[[#2-local-section");
+            .replace("[[#local-section", "[[#2. Local section");
         assert_eq!(
             std::fs::read_to_string(temp.path().join("source.md")).unwrap(),
             expected

@@ -3,7 +3,7 @@ title: "Iteration 311: link repair and graph parity"
 type: iteration
 date: 2026-10-04
 tags: [iteration, links, anchors, mv, dogfooding]
-status: planned
+status: in-progress
 branch: iter-311/link-repair-and-graph-parity
 priority: 1
 related:
