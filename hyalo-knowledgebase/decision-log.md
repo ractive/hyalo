@@ -7241,6 +7241,25 @@ closes that gap structurally rather than by inspection.
 apply_anchor_fixes_with_executor}`. See
 [[iterations/iteration-311-link-repair-and-graph-parity]].
 
+### DEC-351 addendum: a heading containing `#` or `^` defers the wikilink fix (2026-10-05)
+
+A numbered heading can itself contain a literal `#` (`## 1. C# basics`) or
+`^` (`## 7. Caret ^ thing`). Writing either verbatim into a wikilink
+fragment produces `[[note#1. C# basics]]` or `[[note#7. Caret ^ thing]]`:
+hyalo's own matcher resolves both (the fragment text equals the heading
+text), but Obsidian's *parser* gives both characters special meaning inside
+a wikilink — `#` separates a nested-heading path (`[[note#H1#H2]]`,
+DEC-311) and `^` introduces a block reference (`[[note^block-id]]`) — so
+Obsidian would not read either fragment as the single heading string hyalo
+intended. The fix now defers such a heading rather than writing it,
+naming the offending character in the reason
+(`anchor_fix::plan_anchor_fixes_filtered`); the markdown form is unaffected
+because a GFM slug never contains `#` or `^` (punctuation is stripped
+before slugification). Rejected: stripping the character the way Obsidian's
+suggester might — there is no single, unambiguous rewrite (does `C#`
+become `C` or `C-sharp`?), and a silent rewrite of the author's own heading
+text is a bigger surprise than leaving the link to be fixed by hand.
+
 ## DEC-352: `mv` rewrites a bare attachment/embed link that resolves to a real file, and the vault-wide fallback stays (2026-10-04)
 
 **Decision.** `mv`'s outbound rewriter (`link_rewrite::plan_outbound_rewrites`
@@ -7325,9 +7344,19 @@ heading "repair" — it already resolves, so it is simply not broken).
 An `IndexEntry` grows one field, `explicit_anchor_ids: Vec<String>`,
 collected by a new `ExplicitAnchorScanner` visitor run alongside the
 existing `SectionScanner` during `create-index` and every disk scan.
-Defaulted and skipped-when-empty in the snapshot, so an older index keeps
-loading; a vault with no explicit HTML anchors pays one extra regex pass
-over lines that already contain `<y>` and nothing else.
+**Snapshot format bumps to v5** (`SNAPSHOT_FORMAT_VERSION`): a v4 snapshot
+is refused and rebuilt from scratch, exactly like iteration 304's v4 bump
+for tokenizer v4. A defaulted, skipped-when-empty field was considered and
+rejected — `create-index` is *incremental* (DEC-339): an entry whose
+on-disk `(size, mtime)` has not changed since the last snapshot is reused
+verbatim, never re-scanned, so a v4-snapshot entry would keep reporting
+`explicit_anchor_ids: []` forever even after upgrading the binary, no
+matter how many times `create-index` ran afterward. That is exactly the
+silent staleness DEC-339 and DEC-302 exist to rule out: `summary --index`
+would under-report `broken_anchors` and `find --broken-links --index`
+would call a real `<a id="x">` target broken, with no warning that the
+index was ever wrong. `hyalo config` reports the new `snapshot_format_version`
+(5); `summary --index` reports the snapshot's own `index_format_version`.
 
 **Why.** GitHub and MDN both let a document name an anchor explicitly,
 independent of the heading that happens to render there — `id=` is the

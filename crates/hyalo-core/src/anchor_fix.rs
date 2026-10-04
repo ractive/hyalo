@@ -188,6 +188,23 @@ pub fn plan_anchor_fixes_filtered(
             let result = (|| -> Result<AnchorFixPlan, String> {
                 let (heading, slug) = candidate.map_err(str::to_owned)?;
                 let new_fragment = fragment_for_kind(link_kind, &heading, slug);
+                // Review follow-up (BUG-1, DEC-351): a wikilink fragment is
+                // Obsidian syntax too, not just a free-text match. `#` inside
+                // the heading text (`## 1. C# basics`) collides with the
+                // `[[note#heading#sub-heading]]` nested-heading-path
+                // separator (DEC-311), and `^` (`## 7. Caret ^ thing`) is the
+                // block-reference marker (`[[note^block-id]]`) -- Obsidian's
+                // own parser, not hyalo's, would misread either one. The GFM
+                // slug a markdown link gets never contains these characters,
+                // so only the wikilink form is at risk.
+                if link_kind.is_wikilink()
+                    && let Some(unsafe_char) = new_fragment.chars().find(|c| matches!(c, '#' | '^'))
+                {
+                    return Err(format!(
+                        "heading text contains '{unsafe_char}', which Obsidian gives special \
+                         meaning inside a wikilink fragment; no anchor repair proposed"
+                    ));
+                }
                 if entry
                     .sections
                     .iter()
