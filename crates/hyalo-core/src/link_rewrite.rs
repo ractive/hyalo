@@ -344,6 +344,7 @@ pub fn plan_mv(
         .with_context(|| format!("reading {}", old_abs.display()))?;
 
     let (outbound_replacements, outbound_skipped) = plan_outbound_rewrites(
+        dir,
         &content,
         old_rel,
         old_stem,
@@ -591,37 +592,47 @@ pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str)
     (old_text != new_text).then_some(new_text)
 }
 
-/// Decide whether a markdown-link target should be considered for rewriting
-/// when a file moves.
-///
-/// Returns `false` (skip) for link targets that clearly do **not** point at a
-/// vault markdown file:
-/// - Site-absolute paths (start with `/`) — these are left untouched so that
-///   downstream site renderers can resolve them from their own root.
-/// - URL schemes (`http://`, `mailto:`, …) and fragment-only refs (`#anchor`).
-///   Windows drive-letter paths like `C:\notes\x.md` are **not** treated as
-///   URL schemes.
-/// - Bare tokens with no `.md` suffix *and* no path separator — these look
-///   like Obsidian wikilink labels or plain anchor text rather than file
-///   paths.
+/// How a markdown-link target classifies for outbound rewriting when a file
+/// moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutboundTargetKind {
+    /// Clearly not a vault file reference: empty, a pure `#fragment`,
+    /// site-absolute (starts with `/`), or a URL scheme (`http://`,
+    /// `mailto:`, …; a Windows drive letter like `C:\notes\x.md` is not a
+    /// scheme). Never rewritten.
+    Excluded,
+    /// Has a `.md` suffix or a path separator — unambiguously a file path.
+    /// Always rewritten.
+    PathLike,
+    /// A bare token with no path separator and no `.md` suffix (`img.png`,
+    /// `.gitignore`). Reads exactly like an Obsidian wikilink label or plain
+    /// anchor text, but a bare *attachment* name is written the same way
+    /// (BUG-3, iteration 311, DEC-352) — the caller resolves it against the
+    /// vault (filesystem, not this function, which has no vault access) and
+    /// rewrites only when it actually names a real file.
+    BareUnknown,
+}
+
+/// Classify a markdown-link target for outbound rewriting. See
+/// [`OutboundTargetKind`] for what each variant means.
 ///
 /// Any trailing `#fragment` on the target is ignored when classifying — the
-/// file portion is what matters. So `peer.md#intro` is still treated as an
-/// `.md` link, and `#anchor` alone is still a pure fragment.
+/// file portion is what matters. So `peer.md#intro` is still `PathLike`, and
+/// `#anchor` alone is still `Excluded`.
 ///
 /// Inbound rewriting already narrows by string-equality against the moved
 /// file's rel/stem, so this extra guard mostly protects outbound rewriting
 /// from blindly rebasing non-filesystem references.
-fn should_rewrite_outbound_target(target: &str) -> bool {
+fn classify_outbound_target(target: &str) -> OutboundTargetKind {
     if target.is_empty() || target.starts_with('#') {
-        return false;
+        return OutboundTargetKind::Excluded;
     }
     let (path_part, _) = split_target_fragment(target);
     if path_part.is_empty() {
-        return false;
+        return OutboundTargetKind::Excluded;
     }
     if path_part.starts_with('/') {
-        return false;
+        return OutboundTargetKind::Excluded;
     }
     // URL schemes: `http://`, `https://`, `mailto:`, `tel:`, …
     //
@@ -644,18 +655,18 @@ fn should_rewrite_outbound_target(target: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
         {
-            return false;
+            return OutboundTargetKind::Excluded;
         }
     }
-    // Bare token with no `.md` suffix and no path separator: treat as label.
+    // Bare token with no `.md` suffix and no path separator: ambiguous.
     let has_path_sep = path_part.contains('/') || path_part.contains('\\');
     let is_md = std::path::Path::new(path_part)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
     if !has_path_sep && !is_md {
-        return false;
+        return OutboundTargetKind::BareUnknown;
     }
-    true
+    OutboundTargetKind::PathLike
 }
 
 /// Per-file outcome of a partial-failure batch write ([`execute_plans_partial`]).
@@ -1234,6 +1245,7 @@ fn resolve_outbound_target(
 /// all other relative links remain valid.
 #[allow(clippy::too_many_arguments)]
 fn plan_outbound_rewrites(
+    dir: &Path,
     content: &str,
     old_rel: &str,
     old_stem: &str,
@@ -1342,10 +1354,33 @@ fn plan_outbound_rewrites(
                 continue;
             }
 
-            // Skip targets that aren't vault markdown paths (site-absolute,
-            // URL schemes, bare labels). See `should_rewrite_outbound_target`.
-            if !should_rewrite_outbound_target(&span.link.target) {
+            // Skip targets that aren't vault file references (site-absolute,
+            // URL schemes, fragment-only). A bare token with no path
+            // separator and no `.md` suffix (`img.png`, `.gitignore`) is
+            // ambiguous on text alone -- BUG-3 (iteration 311, DEC-352):
+            // it reads exactly like an Obsidian wikilink label, but when it
+            // actually names a real vault attachment relative to this file,
+            // it is a file reference like any other and must be rebased on a
+            // cross-directory move too, or the relative path left behind
+            // points nowhere. Resolved against the filesystem directly (not
+            // the catalog, which only tracks notes): the moved file's own
+            // directory is known here, which is exactly the vault-wide
+            // attachment fallback's narrower, safer twin -- it only widens
+            // which of *this file's own* bare attachment links get
+            // rewritten, never where a bare name resolves to on the read
+            // side.
+            let kind = classify_outbound_target(&span.link.target);
+            if kind == OutboundTargetKind::Excluded {
                 continue;
+            }
+            if kind == OutboundTargetKind::BareUnknown {
+                let (path_part, _) = split_target_fragment(&span.link.target);
+                let decoded = crate::discovery::percent_decode_path(path_part);
+                let candidate =
+                    normalize_target(Path::new(old_rel), decoded.as_deref().unwrap_or(path_part));
+                if !dir.join(&candidate).is_file() {
+                    continue;
+                }
             }
 
             let (resolved, style) =
@@ -1699,6 +1734,7 @@ pub fn plan_batch_mv(
 
         // Outbound: rewrite relative markdown links using the FULL rename map.
         let outbound_repls = plan_outbound_rewrites_batch(
+            dir,
             &content,
             old_rel,
             new_rel,
@@ -2241,7 +2277,9 @@ fn frontmatter_key_on_line(line: &str) -> Option<&str> {
 /// Outbound rewrite for batch mode: like `plan_outbound_rewrites` but uses the
 /// full rename map so that a link from moved file A to moved file B is rewritten
 /// to B's new path (not left dangling at B's old path).
+#[allow(clippy::too_many_arguments)]
 fn plan_outbound_rewrites_batch(
+    dir: &Path,
     content: &str,
     old_rel: &str,
     new_rel: &str,
@@ -2293,8 +2331,21 @@ fn plan_outbound_rewrites_batch(
             if span.kind != LinkKind::Markdown {
                 continue;
             }
-            if !should_rewrite_outbound_target(&span.link.target) {
+            // BUG-3 (iteration 311, DEC-352): see the sibling check in
+            // `plan_outbound_rewrites` for why a bare attachment name needs
+            // a filesystem probe, not just the text-only classification.
+            let kind = classify_outbound_target(&span.link.target);
+            if kind == OutboundTargetKind::Excluded {
                 continue;
+            }
+            if kind == OutboundTargetKind::BareUnknown {
+                let (path_part, _) = split_target_fragment(&span.link.target);
+                let decoded = crate::discovery::percent_decode_path(path_part);
+                let candidate =
+                    normalize_target(Path::new(old_rel), decoded.as_deref().unwrap_or(path_part));
+                if !dir.join(&candidate).is_file() {
+                    continue;
+                }
             }
 
             let (resolved, style) =
@@ -3616,41 +3667,50 @@ mod tests {
     }
 
     #[test]
-    fn should_rewrite_outbound_target_rules() {
-        assert!(!should_rewrite_outbound_target(""));
-        assert!(!should_rewrite_outbound_target("/en-US/docs/x"));
-        assert!(!should_rewrite_outbound_target("/page.md"));
-        assert!(!should_rewrite_outbound_target("#anchor"));
-        assert!(!should_rewrite_outbound_target("https://a.b/c"));
-        assert!(!should_rewrite_outbound_target("mailto:a@b.c"));
-        assert!(!should_rewrite_outbound_target("tel:+1"));
-        assert!(!should_rewrite_outbound_target("Note One"));
-        assert!(!should_rewrite_outbound_target("plain-label"));
+    fn classify_outbound_target_rules() {
+        use OutboundTargetKind::{BareUnknown, Excluded, PathLike};
+        assert_eq!(classify_outbound_target(""), Excluded);
+        assert_eq!(classify_outbound_target("/en-US/docs/x"), Excluded);
+        assert_eq!(classify_outbound_target("/page.md"), Excluded);
+        assert_eq!(classify_outbound_target("#anchor"), Excluded);
+        assert_eq!(classify_outbound_target("https://a.b/c"), Excluded);
+        assert_eq!(classify_outbound_target("mailto:a@b.c"), Excluded);
+        assert_eq!(classify_outbound_target("tel:+1"), Excluded);
+        // Ambiguous on text alone -- BUG-3 (iteration 311): the caller
+        // resolves these against the filesystem and only rewrites a bare
+        // token that names a real attachment.
+        assert_eq!(classify_outbound_target("Note One"), BareUnknown);
+        assert_eq!(classify_outbound_target("plain-label"), BareUnknown);
         // Rewritable:
-        assert!(should_rewrite_outbound_target("../notes/x.md"));
-        assert!(should_rewrite_outbound_target("sub/x.md"));
-        assert!(should_rewrite_outbound_target("x.md"));
-        assert!(should_rewrite_outbound_target("sub/label"));
+        assert_eq!(classify_outbound_target("../notes/x.md"), PathLike);
+        assert_eq!(classify_outbound_target("sub/x.md"), PathLike);
+        assert_eq!(classify_outbound_target("x.md"), PathLike);
+        assert_eq!(classify_outbound_target("sub/label"), PathLike);
         // Fragments: classify by the path portion, not the whole target.
-        assert!(
-            should_rewrite_outbound_target("x.md#intro"),
+        assert_eq!(
+            classify_outbound_target("x.md#intro"),
+            PathLike,
             "anchored .md link should be rewritable"
         );
-        assert!(
-            should_rewrite_outbound_target("sub/x.md#section-1"),
+        assert_eq!(
+            classify_outbound_target("sub/x.md#section-1"),
+            PathLike,
             "anchored nested .md link should be rewritable"
         );
-        assert!(
-            !should_rewrite_outbound_target("#anchor-with-dashes"),
+        assert_eq!(
+            classify_outbound_target("#anchor-with-dashes"),
+            Excluded,
             "fragment-only target must still be skipped"
         );
         // Windows drive-letter paths are filesystem paths, not URL schemes.
-        assert!(
-            should_rewrite_outbound_target("C:/notes/x.md"),
+        assert_eq!(
+            classify_outbound_target("C:/notes/x.md"),
+            PathLike,
             "Windows drive-letter forward-slash path should be rewritable"
         );
-        assert!(
-            should_rewrite_outbound_target("C:\\notes\\x.md"),
+        assert_eq!(
+            classify_outbound_target("C:\\notes\\x.md"),
+            PathLike,
             "Windows drive-letter backslash path should be rewritable"
         );
     }
@@ -3788,7 +3848,9 @@ mod tests {
     fn plan_mv_batch_self_referencing_frontmatter_link_rewritten() {
         // L-1 (batch): batch mode must also rewrite the moved file's own
         // frontmatter self-link.
+        let vault = create_vault(&[("a.md", "---\nrelated:\n  - \"[[a#intro]]\"\n---\nBody\n")]);
         let repls = plan_outbound_rewrites_batch(
+            vault.path(),
             "---\nrelated:\n  - \"[[a#intro]]\"\n---\nBody\n",
             "a.md",
             "a-renamed.md",

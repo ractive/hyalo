@@ -7205,6 +7205,108 @@ budgets, silent last-wins on duplicate keys, and it accepts kepano-obsidian's
 unmaintained pin that keeps the `NaN` corruption. Always parsing through
 `Spanned`: 2.1× the parse cost for a rule that almost no block needs.
 
+## DEC-351: a wikilink anchor fix writes the heading text; a markdown anchor fix keeps the GFM slug (2026-10-04)
+
+**Decision.** `links fix`'s fragment-only repair (`anchor_fix::plan_anchor_fixes_filtered`)
+chooses what to write by the link's own syntax, not by one shared slug:
+
+- A **wikilink** fragment (`[[note#frag]]`, including a same-file
+  `[[#frag]]`) is rewritten to the matching heading's exact text —
+  `[[note#Deploy Steps]]` with a numbered heading `## 3. Deploy Steps` becomes
+  `[[note#3. Deploy Steps]]`.
+- A **markdown** fragment (`[t](note.md#frag)`, including `(#frag)`) keeps
+  the GFM slug, as before — `3-deploy-steps`.
+
+Both are computed by one shared function, `fragment_for_kind(kind, heading,
+slug)`, called from both the planning pass and the publication pass's
+pre-write revalidation, so the two can never choose differently for the same
+candidate. `AnchorFixPlan` carries the link's `kind` (internal, not
+serialized) to make this possible; the JSON `new_fragment` field is whichever
+of the two the kind selected, and `heading` keeps the full heading text
+either way, for display.
+
+**Why.** Obsidian resolves a wikilink fragment by matching it against a
+heading's literal text — never a GitHub-flavoured slug. The anchor repair
+wrote the slug for every fragment regardless of syntax, so `links fix --apply`
+turned a hyalo-visible broken anchor into an Obsidian-visible one in every
+vault where it ran (dogfood BUG-1, HIGH). Fixing only the planner and not the
+publication pass's revalidation surfaced a second, latent bug: that pass
+re-ran `numbered_heading_repair` and compared its raw slug against
+`plan.new_fragment` — which is heading text for a wikilink — so every
+wikilink anchor fix would have deferred as "target headings changed" even
+when nothing had. Routing both passes through the same `fragment_for_kind`
+closes that gap structurally rather than by inspection.
+
+**Where:** `anchor_fix::{AnchorFixPlan, fragment_for_kind, plan_anchor_fixes_filtered,
+apply_anchor_fixes_with_executor}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+## DEC-352: `mv` rewrites a bare attachment/embed link that resolves to a real file, and the vault-wide fallback stays (2026-10-04)
+
+**Decision.** `mv`'s outbound rewriter (`link_rewrite::plan_outbound_rewrites`
+/ `plan_outbound_rewrites_batch`) now rebases a bare relative attachment or
+embed target — `[img](img.png)`, `![embed](img.png)`, `[cfg](.gitignore)` —
+on a cross-directory move, exactly like it already did for a `.md` sibling.
+The classifier (`classify_outbound_target`, renamed from
+`should_rewrite_outbound_target`) still treats a bare token with no path
+separator and no `.md` suffix as text-ambiguous (`OutboundTargetKind::BareUnknown`,
+formerly a flat `false`) — it genuinely cannot tell `img.png` apart from a
+plain wikilink-style label on the target string alone — but the caller now
+resolves a `BareUnknown` target against the **filesystem**, relative to the
+moving file's own directory, and only proceeds when a real file is there.
+A separate, pre-existing bug blocked even this: the span extractor
+(`links::extract_link_spans_with_original`) dropped CommonMark image syntax
+(`![alt](dest)`) entirely, so `mv` never saw an embed's destination at all,
+regardless of this fix. Images are now captured (`span.link.embed = true`,
+`span.full_start` restored to the `!`), read-only resolution (`find`, `links
+fix`) is unaffected since it already used a separate extractor.
+
+This is the single-file move's *own outbound* rewrite only. It does not touch
+how a bare attachment target is **resolved on read** — `find`,
+`backlinks`, and `links fix`'s own classification still resolve a bare
+attachment name vault-wide via the existing fallback (`resolve_attachment_from_source`),
+unchanged.
+
+**Rejected: narrowing the vault-wide attachment-resolution fallback itself.**
+The dogfood report's second half asked whether `find --file sub/e.md --fields
+links` reporting `img.png -> img.png attachment` (resolving the bare name
+from any directory) should be narrowed so a stale, unrewritten relative
+reference would show up broken instead of silently working. Rejected: this
+*is* how Obsidian resolves `![[img.png]]`-style attachment references — a
+bare name matches uniquely across the vault when the relative path does not
+first resolve. Narrowing it would make hyalo disagree with the editor the
+vault is written for, trading one kind of silent wrongness (a stale
+relative path happens to still "work") for another (a live relative
+reference the editor opens fine is reported broken by hyalo). The actual
+bug was that `mv` never *wrote* the rebased relative path in the first
+place; fixing that removes the scenario the narrowing would have been
+compensating for. The fallback itself is correct Obsidian semantics and
+stays exactly as it was.
+
+**Where:** `link_rewrite::{classify_outbound_target, OutboundTargetKind,
+plan_outbound_rewrites, plan_outbound_rewrites_batch}`,
+`links::extract_link_spans_with_original`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+### DEC-318 addendum: `summary.links.broken` folds in `alias_fixes` too (2026-10-04)
+
+`summary`'s link-health count (`LinkHealthSummary.broken`) was
+`report.broken.len() + report.ambiguous.len()`, omitting
+`report.alias_fixes` — the bucket a bare `[[alias]]` link lands in under
+DEC-308's default `aliases = false` (broken as Obsidian renders it, but with
+an exact rewrite `links fix` can plan). `find --broken-links` and HYALO006
+already counted it (both classify directly from `LinkResolution::Broken`,
+which alias resolution never escapes in that mode), so on the Obsidian Hub
+`summary` reported `154` while the other two reported `162` — the same eight
+alias links, present everywhere except the one place DEC-318 was supposed to
+guarantee parity. `summary.links.broken` now adds `report.alias_fixes.len()`,
+restoring the "one answer" DEC-318 promised: all three surfaces report `162`
+on the Obsidian Hub. `summary.orphans`/`dead_ends` are unaffected — a bare
+alias link was never a graph edge in either count, consistent with every
+other broken link.
+
+**Where:** `commands::summary` (the `link_health` block). See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
 ## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
 
 **Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the

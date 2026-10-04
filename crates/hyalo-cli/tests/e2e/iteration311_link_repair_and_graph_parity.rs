@@ -435,3 +435,93 @@ fn angle_bracket_placeholder_is_templated_not_fuzzy() {
         "a placeholder target must never be offered as a fuzzy candidate: {fix:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-3 (DEC-352): `mv` rewrites a bare relative attachment/embed link so the
+// relative path stays valid after a cross-directory move, exactly like the
+// `.md` sibling it already handled.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_rewrites_bare_attachment_and_embed_links_on_cross_directory_move() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "e.md",
+        "[note](my%20note.md)\n[img bare](img.png)\n![embed](img.png)\n[cfg](.gitignore)\n",
+    );
+    write_md(tmp.path(), "my note.md", "# My note\n");
+    write_md(tmp.path(), "img.png", "fake png\n");
+    write_md(tmp.path(), ".gitignore", "*.log\n");
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["mv", "e.md", "--to", "sub/e.md", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["results"]["total_links_updated"], 4, "{value:?}");
+
+    let content = std::fs::read_to_string(tmp.path().join("sub/e.md")).unwrap();
+    assert_eq!(
+        content,
+        "[note](../my%20note.md)\n[img bare](../img.png)\n![embed](../img.png)\n[cfg](../.gitignore)\n"
+    );
+}
+
+#[test]
+fn mv_does_not_rewrite_a_bare_token_that_names_no_real_attachment() {
+    // A bare token with no path separator and no `.md` suffix that does NOT
+    // resolve to a real file is a label/anchor-text, not a path -- it must
+    // stay untouched (the BareUnknown filesystem probe must not admit it).
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "e.md", "[label](plain-label)\n");
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["mv", "e.md", "--to", "sub/e.md", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["results"]["total_links_updated"], 0, "{value:?}");
+    let content = std::fs::read_to_string(tmp.path().join("sub/e.md")).unwrap();
+    assert_eq!(content, "[label](plain-label)\n");
+}
+
+#[test]
+fn batch_mv_rewrites_bare_attachment_links_too() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "notes/e.md", "[img](img.png)\n");
+    write_md(tmp.path(), "notes/img.png", "fake\n");
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "mv",
+            "--glob",
+            "notes/*.md",
+            "--to",
+            "archive/",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["results"]["total_links_updated"], 1, "{value:?}");
+    let content = std::fs::read_to_string(tmp.path().join("archive/e.md")).unwrap();
+    assert_eq!(content, "[img](../notes/img.png)\n");
+}
