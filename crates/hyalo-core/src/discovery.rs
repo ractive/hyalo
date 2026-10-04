@@ -2177,10 +2177,13 @@ fn classify_short_form_wikilink(
                 // correct wikilink into decomposed Unicode.
                 Some(LinkResolution::ShortFormValid)
             } else {
-                // Stem casing differs — propose the canonical stem (not a full path).
-                Some(LinkResolution::ShortFormStemMismatch(
-                    canonical_stem.to_string(),
-                ))
+                // Stem casing differs — propose the canonical stem (not a
+                // full path), NFC-normalised so a case-AND-composition
+                // difference never proposes decomposed Unicode (BUG-13
+                // review follow-up, DEC-354).
+                Some(LinkResolution::ShortFormStemMismatch(nfc_normalize(
+                    canonical_stem,
+                )))
             }
         }
         _ => Some(LinkResolution::ShortFormAmbiguous),
@@ -2227,7 +2230,11 @@ fn classify_link(
             // `links fix` propose rewriting a clean wikilink into decomposed
             // Unicode for no reason.
             if exact_fwd != canonical_fwd && !nfc_equal(&exact_fwd, &canonical_fwd) {
-                return LinkResolution::Resolved(Some(canonical_fwd));
+                // The genuine mismatch (case, or case-and-composition
+                // together) still gets reported, but the proposed text is
+                // NFC-normalised so the write is never decomposed Unicode
+                // (BUG-13 review follow-up, DEC-354).
+                return LinkResolution::Resolved(Some(nfc_normalize(&canonical_fwd)));
             }
         }
         return LinkResolution::Resolved(None);
@@ -2244,7 +2251,11 @@ fn classify_link(
         && let Some(canonical_path) =
             resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
     {
-        let canonical = canonical_path.replace('\\', "/");
+        // NFC-normalise before returning: this canonical text may become a
+        // written target, and the filesystem may have stored it decomposed
+        // (BUG-13 review follow-up, DEC-354) regardless of whether the
+        // mismatch that brought us here was case, a relocation, or both.
+        let canonical = nfc_normalize(&canonical_path.replace('\\', "/"));
         if is_case_only_variant(resolved_target, &canonical) {
             return LinkResolution::CaseMismatch(canonical);
         }
@@ -2252,6 +2263,26 @@ fn classify_link(
     }
 
     LinkResolution::Broken
+}
+
+/// NFC-normalise `s` when it carries any non-ASCII byte, otherwise return it
+/// unchanged (BUG-13 review follow-up, iteration 311, DEC-354).
+///
+/// Used wherever a canonical on-disk path or stem — which may be stored in
+/// decomposed (NFD) form, exactly as the filesystem wrote it — is about to
+/// become the text a fix *writes*. Without this, a link differing from the
+/// file in BOTH case and composition (`[[sub/café]]` against an on-disk
+/// `sub/Café.md` written with decomposed accents) would still correctly
+/// detect the case difference and propose a rewrite, but the proposed text
+/// would carry the file's raw decomposed bytes — the exact "rewrite a clean
+/// wikilink into decomposed Unicode" outcome DEC-354 exists to prevent, just
+/// reached from the case-mismatch path instead of the pure-composition one.
+fn nfc_normalize(s: &str) -> String {
+    if s.is_ascii() {
+        s.to_owned()
+    } else {
+        s.nfc().collect()
+    }
 }
 
 /// Whether `a` and `b` are the same text once both are NFC-normalised
