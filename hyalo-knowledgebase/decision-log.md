@@ -6956,3 +6956,52 @@ alters known fields still needs a helper release.
 
 **Rejected alternative.** Enabling Jev whenever `TYPESAFE_API_KEY` is set: a key in a
 shell profile would silently send vault contents off-machine.
+
+## DEC-346: `check-jq-recipes` reads every document a reader copies commands from (2026-10-04)
+
+**Decision.** The `check-jq-recipes` gate, which executes every backticked or
+fenced `hyalo … --jq '…'` command, now reads `README.md`, the root `CLAUDE.md`,
+`docs/*.md` and `hyalo-knowledgebase/docs/*.md` in addition to the shipped
+templates, the Pi skills and `.claude/CLAUDE.md`. It also refuses a recipe whose
+`--jq` filter reads `.hints`: `--jq` computes no hints (DEC-313), so such a
+recipe runs cleanly and silently answers `[]`, which executing it can never
+catch. The existing refusals — a mutating recipe without `--dry-run`, any
+recipe with `--apply` — apply to the new documents too.
+
+**Why.** [[reviews/codebase-review-2026-10-03]] found
+`docs/configuration.md` teaching `--jq '[.hints[] | select(.writes | not) | .cmd]'`,
+which always returns `[]`; it survived because `docs/` was outside the gate,
+and it would have survived inside it too, because the recipe exits 0. Coverage
+and the `.hints` check close both halves ([[iterations/iteration-308-docs-drift]]).
+
+**Consequences.** The gate now runs 47 recipes;
+`madr toc` stays reported as not exercisable in this vault. Plain, non-`--jq`
+examples are still not checked: user docs keep `--dry-run` on mutating
+examples by convention, and skills legitimately instruct agents to write.
+
+**Rejected alternative.** Checking every mutating `hyalo` line for
+`--dry-run`: 40 lines across the skills and the README match, most of them
+skill instructions that are meant to write.
+
+## DEC-347: The `.claude/CLAUDE.md` claims paragraph is the canonical behaviour summary (2026-10-04)
+
+**Decision.** The managed block of `.claude/CLAUDE.md` (between
+`<!-- hyalo:start -->` and `<!-- hyalo:end -->`) is the canonical summary of
+behaviour decisions. `crates/hyalo-cli/templates/rule-knowledgebase.md` and the
+pitfalls section of `crates/hyalo-cli/templates/skill-hyalo.md` restate parts
+of it for agents; a PR that changes a claim edits all three. The Pi and Codex
+skills follow when they carry the claim, and `docs/releasing.md` lists every
+hand-maintained documentation surface with the gate that protects it.
+
+**Why.** The review found two false claims (`required` semantics and the
+snapshot format version) that had been corrected or never written in one copy
+and stayed wrong in the others. No gate compares these texts with each other:
+the Pi and Codex copies are gated only against their vendored twins.
+
+**Consequences.** Documentation-only; no new gate. A future gate that diffs
+claims across the three texts would need a machine-readable claim format,
+which this decision does not introduce.
+
+**Rejected alternative.** Generating the rule and the skill pitfalls from the
+claims paragraph: the three texts address different readers and differ in
+length by design.

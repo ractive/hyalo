@@ -142,9 +142,9 @@ Only repair runs without Jev may add `--index`.
 Check if type schemas are defined, then run lint in strict mode. `hyalo lint` covers
 both frontmatter schema *and* the markdown body (stock mdbook-lint rules + HYALO native
 rules for things like bare `[]` checkboxes and `status: completed` with open tasks).
-`--strict` promotes the schema warnings ("no `type` property", "undeclared property in
-frontmatter") and HYALO003/004/006/007/008 (dates, title shape, broken links and
-anchors) to errors so a tidy pass fails fast on schema drift:
+`--strict` promotes the "no `type` property" and "undeclared property in frontmatter"
+warnings and HYALO003/004/006/007/008 (dates, datetimes, broken links, non-scalar titles,
+broken anchors) to errors so a tidy pass fails fast on schema and link drift:
 ```bash
 hyalo types list
 hyalo lint --strict

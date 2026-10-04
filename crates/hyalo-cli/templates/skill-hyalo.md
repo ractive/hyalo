@@ -26,9 +26,12 @@ multiple Read + Edit calls.
 Install the published CLI with `cargo install hyalo-cli` or, on a supported Node.js
 platform, `npm install --global @ractive-ch/hyalo`.
 
-The repository source also provides a typed TypeScript API with `find`, `read`,
-`summary`, and `config`. The public npm 0.22.0 package is CLI-only; API imports
-require a source build until a separate future release is authorized.
+Since 0.23.0 the npm package also exports a typed TypeScript API (ESM and CommonJS). In
+0.24.1, `find`, `read`, `summary` and `config` (`import { find } from "@ractive-ch/hyalo"`)
+return typed envelopes, `set`, `task` and `lint` wrap those commands, and `raw` / `execute`
+run any argv. Releases
+after 0.24.1 add typed `terms`, `tags` and `backlinks`; the installed package's README
+lists what your version exports.
 
 Filters combine freely — content search + property conditions + tag + section + task status
 in a single call, something impossible with Grep/Glob alone:
@@ -503,6 +506,15 @@ hyalo find --help        # every operator, sort key, field name and recipe
 
 What follows is only what those pages do not say — the behaviour that surprises people.
 
+Flags that only `--help` mentions, worth knowing:
+
+- `summary --recent N` (`-n`) sizes the recently-modified list; `summary --depth N` limits the directory listing (stats stay complete).
+- `find --filenames0` is the NUL-terminated `--filenames-only`, for `xargs -0`; `--desc` is an alias of `--reverse`.
+- `lint-rules list --enabled-only` / `--disabled-only` filter the rule table.
+- `links fix --expand-short-form` rewrites resolving bare `[[Name]]` links to `[[sub/Name]]` on `--apply` (breaks Obsidian's short-form style).
+- `task set --status '?'` (any single character) writes a custom checkbox status; `--dry-run` previews it.
+- `changelog add --wrap 80` wraps the new bullet at 80 columns with a hanging indent.
+
 ### Pitfalls
 
 - **Hidden paths resolve without discovery.** Explicit Markdown paths such as
@@ -558,8 +570,7 @@ What follows is only what those pages do not say — the behaviour that surprise
   `musical` (the match needs a `/` boundary). `results.renamed_tags` lists every tag it
   actually touched with its file count.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
-  `--strict` promotes schema warnings and HYALO003/004/006/007/008 (dates, title
-  shape, broken links and anchors) to errors.
+  `--strict` promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity).
 - **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
   `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
   or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
@@ -687,9 +698,13 @@ What follows is only what those pages do not say — the behaviour that surprise
 `hyalo lint` runs two passes in one invocation:
 
 1. **Frontmatter** — validates against the `[schema]` block in `.hyalo.toml`. No-op when no schema is configured.
-2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus the HYALO native rules:
+2. **Markdown body** — stock mdbook-lint rules (MD001..MD060, with gaps — `hyalo lint-rules list` has the set) plus the HYALO native rules:
    - **HYALO001** — bare `[]` should be `- [ ]` (autofixable)
    - **HYALO002** — `status: completed` requires all task checkboxes ticked (fires only when `[schema.types.*].properties.status` is declared as an enum containing `"completed"`)
+   - **HYALO003** — a well-known date key (`date`, `created`, `modified`, `updated`) holding a non-`YYYY-MM-DD` string; needs no schema
+   - **HYALO004** — a schema-declared `datetime` / `datetime-tz` property holding an invalid datetime
+   - **HYALO006** / **HYALO008** — broken link target / broken heading anchor; **HYALO007** — a list or map `title`
+   - HYALO003, 004, 006, 007 and 008 warn by default; `--strict` promotes them to errors unless their severity is configured explicitly (the schema's missing-type and undeclared-property warnings always become errors)
    - **HYALO005** — frontmatter that cannot be parsed (invalid YAML, duplicate keys, oversized scalar). Error by default and the file still counts in `files_checked`, so a corrupt file fails CI instead of vanishing silently. Severity is configurable via `[lint.rules.HYALO005]` but no profile downgrades it.
 
 ```bash
@@ -699,7 +714,7 @@ hyalo lint --fix --dry-run               # preview autofixes
 hyalo lint --fix                         # apply
 ```
 
-**Obsidian grammar (autofix safety).** Four stock rules are narrowed so `--fix` cannot
+**Obsidian grammar (autofix safety).** Five stock rules are narrowed so `--fix` cannot
 corrupt a vault; `hyalo lint-rules show <ID>` states each deviation:
 
 - **MD018** exempts tag lines — a single `#` plus a tag token is `#todo`, not a heading
@@ -711,6 +726,8 @@ corrupt a vault; `hyalo lint-rules show <ID>` states each deviation:
 - **MD001** reports a skipped heading level but is **not autofixable**: renumbering a
   deliberate `######` caption rewrites authored structure. Silence the warning with
   `hyalo lint-rules set MD001 --enabled false`.
+- **MD047** skips a file with no body at all: a frontmatter-only note ends with the newline
+  that closes its `---` block, so there is no line left to terminate.
 
 **Code blocks are content, not defects (iter-271).** A rule that lints prose does not fire on
 a line inside a fenced (```` ``` ```` / `~~~`) or indented code block, or inside an HTML
@@ -743,10 +760,10 @@ When two fixes want the same bytes one is deferred and reported as a conflict;
 Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix-rule`, etc.). The snapshot index does **not** accelerate the body pass.
 
 **Strict mode:** `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`)
-promotes the "no `type` property" and "undeclared property in frontmatter" warnings and
-HYALO003/004/006/007/008 (date formats, a non-scalar title, broken link targets and
-anchors) to errors, unless a rule's severity is configured, so lint exits non-zero on
-those cases. Useful in CI and `/hyalo-tidy` to fail
+promotes the "no `type` property" and "undeclared property in frontmatter" warnings,
+HYALO003/004/006/007/008 (date, datetime, broken link, non-scalar title, broken anchor) to
+errors, so lint exits non-zero on those cases; a HYALO rule keeps an explicitly configured
+severity, the SCHEMA warnings always become errors. Useful in CI and `/hyalo-tidy` to fail
 fast on schema drift.
 
 **GitHub PR annotations:** `hyalo lint --strict --format github` (lint-only) emits

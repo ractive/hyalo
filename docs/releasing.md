@@ -96,6 +96,39 @@ jobs dogfood exactly what consumers run (DEC-051). Both repos are owned and
 released together with hyalo, so a tag is a reviewed release of that repo.
 Dependabot is told to ignore them.
 
+## Documentation sources
+
+Behaviour is described by hand in several places. No gate compares their
+prose with each other or with the binary, so a behaviour change has to touch
+each surface that describes it in the same PR (DEC-347).
+
+| Surface | Path | What protects it |
+| --- | --- | --- |
+| Claude Code skill (installed by `init --claude`) | `crates/hyalo-cli/templates/skill-hyalo.md` | `check-bundled-skills` (skills profile), `check-jq-recipes` |
+| Knowledgebase rule (installed by `init --claude`) | `crates/hyalo-cli/templates/rule-knowledgebase.md` | `check-jq-recipes` |
+| Pi skill | `pi-package/skills/hyalo/SKILL.md` | `check-pi-package-sync` against its vendored twin in `crates/hyalo-cli/templates/pi/`, `check-bundled-skills`, `check-jq-recipes` |
+| Codex skill | `plugins/hyalo/skills/hyalo/SKILL.md` | `check-codex-package` against its vendored twin in `crates/hyalo-cli/templates/codex/` |
+| Behaviour claims paragraph | the `<!-- hyalo:start -->` … `<!-- hyalo:end -->` block of `.claude/CLAUDE.md` | `check-jq-recipes` |
+| User docs | `README.md`, `docs/*.md` | `check-jq-recipes` (DEC-346); `docs/ci.md`'s OKF block is executed |
+| Contributor guide | `CLAUDE.md` | `check-jq-recipes` (DEC-346) |
+| Knowledgebase docs | `hyalo-knowledgebase/docs/*.md` | `check-jq-recipes` (DEC-346), `hyalo lint --strict` |
+| Changelog | `CHANGELOG.md` | none — `[Unreleased]` is written by hand per PR |
+| Command help | `crates/hyalo-cli/src/cli/args.rs` | `check-help-drift`, `check-command-reference`, the `agent_discoverability` e2e size ceiling |
+
+The Pi and Codex skills are gated only against their vendored twins, never
+against the Claude template, so a claim corrected in one skill text stays
+wrong in the other two until someone edits them. Run `just sync-pi-package`
+or `just sync-codex-package` after editing a Pi or Codex skill.
+
+The claims paragraph in `.claude/CLAUDE.md` is the canonical summary of
+behaviour decisions. The knowledgebase rule and the pitfalls section of the
+Claude skill restate parts of it for agents; when a claim changes, edit all
+three in the same PR (DEC-347). `check-jq-recipes` executes every
+documented hyalo command carrying `--jq` in these documents and refuses a mutating recipe without
+`--dry-run` or a filter reading `.hints` (always `[]` under `--jq`, DEC-313).
+It does not check plain, non-`--jq` examples, so keep `--dry-run` on mutating
+examples in user docs by hand.
+
 ## Package repository hosting
 
 [![OSS hosting by Cloudsmith](https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=flat-square)](https://cloudsmith.com)

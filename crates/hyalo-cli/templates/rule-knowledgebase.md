@@ -38,8 +38,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `type`, `dir`; missing values under `null`; 50 buckets max with `truncated`).
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
-  the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor
-  `links fix --apply-fuzzy` applies). `--raw` adds the file's text; `results.malformed` /
+  the `[links.auto]` auto-link settings, and the confidence floor `links fix --apply-fuzzy`
+  applies (`links.fuzzy_min_confidence` in text, `results.links_fuzzy_min_confidence` in JSON).
+  `--raw` adds the file's text; `results.malformed` /
   `results.parse_error` flag a config that exists but does not parse.
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
 - **`results` key conventions**: the envelope owns `total`; inside `results`, `total` always means
@@ -186,7 +187,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   instead of whole.
 - **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`
-- **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`.
+- **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --dry-run`
+  previews; swap `--dry-run` for `--apply` to write.
   Persist the noisy-title exclusions instead of retyping them: `[links.auto] exclude_titles = [...]`,
   `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
   rather than replacing them, and a run whose config exclusions removed candidates reports
@@ -209,7 +211,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   Liquid/Jinja expressions, and raw HTML tags. When the matched text differs from
   the emitted target — including only by case — `--apply` writes `[[target|matched text]]`
   instead of silently rewriting the prose to the bare target.
-- **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
+- **Move/rename (single file)**: `hyalo mv old.md --to new.md --dry-run` previews; without
+  `--dry-run` a single-file move applies immediately (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
 - **`mv` destinations resolve like sources** (DEC-304, iter-273): a CWD-relative destination
   carrying the configured vault dir works from the project root — with `dir = "kb"`,
@@ -230,7 +233,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   now keep `broken_anchor` and `suggested_fragment`, so the four ways of selecting one file
   return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
   error is HYALO005's finding and is otherwise a counted skip.
-- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes schema warnings and HYALO003/004/006/007/008 to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity)), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
 - **`SCHEMA` is a selectable rule** (iter-274): `hyalo lint --rule SCHEMA` (or `--rule-prefix
   SCHEMA`) runs the frontmatter/schema pass alone — the id its findings are already reported
   under, and the one `summary`'s schema hint points at. `lint-rules list`/`show` carry a
@@ -381,7 +384,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   DEC-290. A mis-nested `[schema.note]` is answered with the `hyalo types set note` command that
   creates it properly.
 - **`required` is presence, not type** (DEC-312, iter-276): `required = ["title"]` means present
-  and non-empty; `title: 2024` passes `lint` and `set --validate`. Declare
+  and not vacuous — a YAML null or an empty list `[]` fails, an empty string `""` passes;
+  `title: 2024` passes `lint` and `set --validate`. Declare
   `[schema.types.<t>.properties.title] type = "string"` to require a string. `set` has no form
   that writes a YAML null (DEC-314) — `hyalo remove --property K` takes the key out; `set --help`
   documents the whole scalar coercion table.
@@ -462,8 +466,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   file's broken links (JSON keeps the full inventory); CommonMark autolinks
   (`<https://…>`, `<obsidian://…>`) are inventoried as `external`; `K!=V` tests a *value*,
   so a file lacking K entirely does not match — use `!K` for absence; and
-  `summary --index` reports the same `skipped` count as a disk scan (snapshot format v2, so
-  rebuild an older index).
+  `summary --index` reports the same `skipped` count as a disk scan (snapshots written by an
+  older format are refused, so rebuild an older index; `hyalo config` reports the current
+  `snapshot_format_version`).
 - **Link-kind histogram and missing images** (iter-277, G6): the whole external/attachment
   picture in one query, no new flag —
   `hyalo find --fields links --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`

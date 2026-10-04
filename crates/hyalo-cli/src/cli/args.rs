@@ -1880,8 +1880,10 @@ Repeatable (AND).\n\
     #[command(
         long_about = "Create .hyalo.toml and optionally set up Claude Code, Codex, and pi integrations.\n\n\
             Without flags, creates a .hyalo.toml config file.\n\
-            With --claude, also installs the hyalo skill for Claude Code.\n\
-            With --pi, also installs the hyalo skill for pi.\n\
+            With --claude, also installs the hyalo and hyalo-tidy skills, the knowledgebase\n\
+            rule and a managed .claude/CLAUDE.md block for Claude Code.\n\
+            With --pi, also installs the hyalo and hyalo-tidy skills, the extension and its API\n\
+            runtime for pi.\n\
             With --codex, installs project skills in .agents/skills and a managed AGENTS.md block.\n\
             Add --codex-plugin if the Hyalo plugin is installed: writes project guidance and\n\
             removes managed project skills to avoid duplicates. Neither option installs Codex\n\
@@ -1918,10 +1920,10 @@ Repeatable (AND).\n\
             hyalo init --profile changelog"
     )]
     Init {
-        /// Set up Claude Code integration (skill + CLAUDE.md hint)
+        /// Set up Claude Code integration (hyalo + hyalo-tidy skills, rule, CLAUDE.md hint)
         #[arg(long)]
         claude: bool,
-        /// Set up pi integration (skill + extension)
+        /// Set up pi integration (hyalo + hyalo-tidy skills, extension)
         #[arg(long)]
         pi: bool,
         /// Set up Codex project skills and managed AGENTS.md guidance
