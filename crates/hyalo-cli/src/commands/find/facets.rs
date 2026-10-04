@@ -41,12 +41,24 @@ impl FacetSpec {
             "type" => FacetKind::Property("type".to_owned()),
             "dir" => FacetKind::Dir,
             _ => match spec.strip_prefix("property:") {
-                Some(key) if !key.trim().is_empty() => FacetKind::Property(key.trim().to_owned()),
-                Some(_) => {
+                Some(key) if key.trim().is_empty() => {
                     return Err(format!(
                         "invalid facet '{raw}': property: needs a key, e.g. property:status"
                     ));
                 }
+                // BUG-18: a second ':' (`property:status:extra`) is not a key
+                // with a colon in it -- dot-paths use '.', not ':' -- it is
+                // almost always `property:` typed with the wrong separator,
+                // and silently treating `status:extra` as a literal key name
+                // produced a one-bucket, all-null facet. Reject it the same
+                // way an unrecognized spec is rejected, naming the four forms
+                // actually accepted.
+                Some(key) if key.contains(':') => {
+                    return Err(format!(
+                        "unknown facet '{raw}': expected tags, property:<KEY>, type or dir"
+                    ));
+                }
+                Some(key) => FacetKind::Property(key.trim().to_owned()),
                 None => {
                     return Err(format!(
                         "unknown facet '{raw}': expected tags, property:<KEY>, type or dir"
@@ -311,6 +323,22 @@ mod tests {
         assert!(FacetSpec::parse("property:").is_err());
         assert!(FacetSpec::parse("tag").is_err());
         assert!(FacetSpec::parse("status").is_err());
+    }
+
+    #[test]
+    fn parse_accepts_dot_paths_but_rejects_a_second_colon() {
+        // Dot-paths are legitimate keys (`--property`/`--sort property:`
+        // resolve them the same way); a *second* colon is not (BUG-18).
+        assert_eq!(
+            FacetSpec::parse("property:meta.owner").unwrap().kind,
+            FacetKind::Property("meta.owner".into())
+        );
+        let err = FacetSpec::parse("property:status:extra").unwrap_err();
+        assert_eq!(
+            err,
+            "unknown facet 'property:status:extra': expected tags, property:<KEY>, type or dir"
+        );
+        assert!(FacetSpec::parse("property::").is_err());
     }
 
     #[test]

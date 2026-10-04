@@ -149,13 +149,32 @@ pub(crate) fn run(
         }
         None => None,
     };
+    // BUG-5 / DEC-356 (review fix): keyed on the real argv shape -- a `-s…`
+    // or `-t…` token with a value concatenated onto it -- rather than on
+    // "no PATTERN" alone, which also matched a deliberate `--section`/`--tag`
+    // used without a PATTERN and had no way to catch the case where clap's
+    // short-flag read still produced a *valid* value (`-sqlite` -> `--section
+    // qlite`, one clean heading match, nothing to even warn about below).
+    let argv: Vec<String> = std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let dash_swallowed_argv = pattern.is_none() && super::argv_has_concatenated_short_flag(&argv);
     for t in &tag {
         if let Err(msg) = crate::commands::tags::validate_tag(t) {
+            // With no PATTERN, a leading-dash term the shell never saw as
+            // the body-search PATTERN is swallowed by clap as the short flag
+            // `-t` plus the rest of the token, e.g. `hyalo find
+            // '-tag:iteration snapshot'` silently becomes `--tag
+            // 'ag:iteration snapshot'`. An invalid-tag-character error with
+            // that argv shape in play is the signature of that confusion, so
+            // name the fix instead of leaving it a dead end.
+            let hint = dash_swallowed_argv
+                .then_some("to search for a term starting with '-', write `hyalo find -- '-term'`");
             return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &msg,
                 None,
-                None,
+                hint,
                 None,
             )));
         }
@@ -263,6 +282,7 @@ pub(crate) fn run(
                 &super::FindExtras {
                     section_mode,
                     facets: &facet_specs,
+                    dash_swallowed_argv,
                 },
                 &mut search_report,
             )?;
@@ -498,14 +518,17 @@ fn zero_result_body_search_with_reader(
 const MAX_OBSERVED_VALUES: usize = 50;
 
 /// Per-key tally while collecting: files carrying the key, then each rendered
-/// value with its count and whether it is typeable.
-type ObservedBucket = (u64, std::collections::BTreeMap<String, (u64, bool)>);
+/// value with its count, whether it is typeable, and whether the underlying
+/// value is a JSON string (BUG-16).
+type ObservedBucket = (u64, std::collections::BTreeMap<String, (u64, bool, bool)>);
 
-/// What every key named by an equality `--property` filter actually carries in
-/// the vault: how many files declare it, and its distinct values by frequency.
+/// What every value-bearing `--property` filter key actually carries in the
+/// vault: how many files declare it, and its distinct values by frequency.
 ///
-/// Only equality (`K=V`) filters are probed: an existence, absence, or regex
-/// filter has no misspelled value to correct. Non-scalar values (maps,
+/// BUG-16: every operator with an operand to be wrong about is probed —
+/// `=`, `!=`, `~=` and the four comparison operators alike — not just `=`.
+/// An existence (`K`), absence (`!K`), null/empty-list filter has no value to
+/// correct or list, so those are still skipped. Non-scalar values (maps,
 /// sequences) and YAML nulls are *counted and rendered* but flagged
 /// `typeable: false`, so they inform the reader without ever being offered as a
 /// did-you-mean correction the user cannot type back (iter-274, BUG-17). Before
@@ -523,9 +546,16 @@ fn observed_property_values(
         .filter_map(|f| match f {
             PropertyFilter::Scalar {
                 name,
-                op: FilterOp::Eq,
+                op:
+                    FilterOp::Eq
+                    | FilterOp::NotEq
+                    | FilterOp::Gt
+                    | FilterOp::Gte
+                    | FilterOp::Lt
+                    | FilterOp::Lte,
                 value: Some(_),
             } => Some(name.as_str()),
+            PropertyFilter::RegexMatch { key, .. } => Some(key.as_str()),
             _ => None,
         })
         .collect();
@@ -556,20 +586,25 @@ fn observed_property_values(
         .collect();
     for entry in index.entries() {
         for key in &keys {
-            let Some(value) = entry.properties.get(*key) else {
+            // BUG-16: resolve a dot-path exactly like the filter and
+            // `--sort property:`/`--facet property:` do, instead of a
+            // literal top-level `.get(key)` that can never see into a
+            // nested map (`versions.ghes`).
+            let Some(value) = hyalo_core::filter::resolve_prop(&entry.properties, key) else {
                 continue;
             };
+            let value = value.as_ref();
             let bucket = out.entry((*key).to_owned()).or_default();
             bucket.0 = bucket.0.saturating_add(1);
             let rendered = render_property_value(value);
-            let typeable = matches!(
-                value,
-                serde_json::Value::String(_)
-                    | serde_json::Value::Bool(_)
-                    | serde_json::Value::Number(_)
-            );
+            let is_string = matches!(value, serde_json::Value::String(_));
+            let typeable = is_string
+                || matches!(
+                    value,
+                    serde_json::Value::Bool(_) | serde_json::Value::Number(_)
+                );
             if bucket.1.len() < MAX_OBSERVED_VALUES || bucket.1.contains_key(&rendered) {
-                let slot = bucket.1.entry(rendered).or_insert((0, typeable));
+                let slot = bucket.1.entry(rendered).or_insert((0, typeable, is_string));
                 slot.0 = slot.0.saturating_add(1);
             }
         }
@@ -578,10 +613,11 @@ fn observed_property_values(
         .map(|(key, (files, values))| {
             let mut values: Vec<ObservedValue> = values
                 .into_iter()
-                .map(|(rendered, (count, typeable))| ObservedValue {
+                .map(|(rendered, (count, typeable, is_string))| ObservedValue {
                     rendered,
                     count,
                     typeable,
+                    is_string,
                 })
                 .collect();
             // Most frequent first so the named-values hint leads with what the
@@ -691,6 +727,52 @@ mod tests {
             crate::prepared::HintDemand::Requested,
         )
         .map(|s| format!("{}:{}", s.key, s.pattern))
+    }
+
+    // --- BUG-16: zero-result `--property` diagnostic resolves dot-paths ---
+
+    /// A dot-path key resolves through nested maps exactly like `--property`
+    /// and `--facet property:` do, instead of a literal top-level `.get(key)`
+    /// that can never see `versions.ghes` nested under `versions:`.
+    #[test]
+    fn observed_property_values_resolves_dot_paths() {
+        let tmp = probe_vault(&[
+            ("a.md", "---\nversions:\n  ghes: '3.9'\n---\n"),
+            ("b.md", "---\nversions:\n  ghes: '3.11'\n---\n"),
+            ("c.md", "---\nother: x\n---\n"),
+        ]);
+        let index = probe_index(tmp.path());
+        let filters =
+            vec![hyalo_core::filter::parse_property_filter("versions.ghes=nothing").unwrap()];
+        let observed = observed_property_values(&index, &filters);
+        let obs = observed
+            .get("versions.ghes")
+            .expect("versions.ghes must be observed via its dot-path");
+        assert_eq!(obs.files, 2);
+        let rendered: Vec<&str> = obs.values.iter().map(|v| v.rendered.as_str()).collect();
+        assert!(rendered.contains(&"3.9"), "{rendered:?}");
+        assert!(rendered.contains(&"3.11"), "{rendered:?}");
+    }
+
+    /// BUG-16: comparison and `!=` filters are value-bearing too, not just
+    /// plain equality -- `versions.ghes>=3.10` must still collect the values
+    /// `versions.ghes` actually holds, so the hint layer can name them.
+    #[test]
+    fn observed_property_values_covers_comparison_and_not_eq_filters() {
+        let tmp = probe_vault(&[
+            ("a.md", "---\nversions:\n  ghes: '3.9'\n---\n"),
+            ("b.md", "---\nversions:\n  ghes: '3.11'\n---\n"),
+        ]);
+        let index = probe_index(tmp.path());
+        for filter_text in ["versions.ghes>=3.10", "versions.ghes!=3.9"] {
+            let filters = vec![hyalo_core::filter::parse_property_filter(filter_text).unwrap()];
+            let observed = observed_property_values(&index, &filters);
+            let obs = observed
+                .get("versions.ghes")
+                .unwrap_or_else(|| panic!("{filter_text} must observe versions.ghes"));
+            assert_eq!(obs.files, 2, "{filter_text}");
+            assert!(obs.all_typed_values_are_strings(), "{filter_text}");
+        }
     }
 
     /// The motivating case: `DEC-NNN` lives in `##` headings, not in `title`.

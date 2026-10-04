@@ -216,6 +216,27 @@ pub fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option
     resolve_path(props.get(first)?, Some(rest))
 }
 
+/// [`resolve_prop`] for the plain `serde_json::Map` shape `find`'s display
+/// objects carry (`FileObject::properties`), rather than the `IndexMap` the
+/// scan-time property filter and `--facet property:` use.
+///
+/// BUG-6 / BUG-16: `--sort property:K` and the zero-result `--property`
+/// diagnostic read `properties.get(key)` directly here and never resolved a
+/// dot-path, unlike every other property surface (the filter itself,
+/// `--facet property:K`, `--property K=V`). Same traversal rules; see
+/// [`resolve_prop`].
+#[must_use]
+pub fn resolve_prop_in_object<'a>(
+    props: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<Cow<'a, Value>> {
+    if let Some(v) = props.get(key) {
+        return Some(Cow::Borrowed(v));
+    }
+    let (first, rest) = key.split_once('.')?;
+    resolve_path(props.get(first)?, Some(rest))
+}
+
 /// Walk `path` (a dot-separated remainder, `None` once exhausted) from `value`.
 ///
 /// See [`resolve_prop`] for the traversal rules. Recursion depth is bounded by

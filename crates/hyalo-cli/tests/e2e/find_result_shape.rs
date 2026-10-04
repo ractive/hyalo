@@ -192,6 +192,73 @@ fn sort_by_title_property_still_orders_by_the_frontmatter_value() {
     assert_eq!(files, vec!["b.md", "a.md"], "Alpha sorts before Zulu");
 }
 
+/// BUG-6: `--sort property:K` resolves a dot-path exactly like `--property
+/// K=V` and `--facet property:K` already do, instead of a literal
+/// `.get(key)` that only ever finds a top-level key -- and does not warn
+/// "no files have property" when every file actually carries it, nested.
+#[test]
+fn sort_by_dotted_property_resolves_the_nested_value() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\nversions:\n  ghes: beta\n---\n\n# A\n",
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\nversions:\n  ghes: alpha\n---\n\n# B\n",
+    );
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--sort",
+            "property:versions.ghes",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo should run");
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("no files have property"),
+        "the dot-path key is set on every file: {stderr}"
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = envelope["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["b.md", "a.md"], "alpha sorts before beta");
+
+    // --reverse flips it, still with no spurious warning.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--sort",
+            "property:versions.ghes",
+            "--reverse",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo should run");
+    assert!(output.status.success(), "{output:?}");
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = envelope["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["a.md", "b.md"]);
+}
+
 // ---------------------------------------------------------------------------
 // Auto-includes: every filter that implies a field still returns it
 // ---------------------------------------------------------------------------
@@ -603,11 +670,15 @@ fn read_of_a_large_file_hints_at_reading_less() {
     assert!(output.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let hints = envelope["hints"].as_array().expect("hints array");
+    // Review fix (SHOULD-FIX 6): `--lines` is file-absolute (DEC-355), so
+    // the hint offsets by the 3-line frontmatter block (`---`, `title:
+    // Big`, `---`) instead of suggesting a bare `1:80`, which would mix
+    // YAML into what is meant to be a body preview.
     assert!(
         hints.iter().any(|h| h["cmd"]
             .as_str()
-            .is_some_and(|c| c.contains("--lines 1:80"))),
-        "a large read should offer a line-range read: {hints:?}"
+            .is_some_and(|c| c.contains("--lines 4:83"))),
+        "a large read should offer a line-range read, offset past the frontmatter: {hints:?}"
     );
 
     // A read that already narrowed does not get told to narrow.
@@ -623,8 +694,37 @@ fn read_of_a_large_file_hints_at_reading_less() {
     assert!(
         !hints.iter().any(|h| h["cmd"]
             .as_str()
-            .is_some_and(|c| c.contains("--lines 1:80"))),
+            .is_some_and(|c| c.contains("Read only the first 80"))),
         "an already-narrowed read must not repeat the suggestion: {hints:?}"
+    );
+}
+
+/// Review fix (SHOULD-FIX 6), the companion case: a file with NO
+/// frontmatter still gets the plain `1:80` range (frontmatter_lines == 0
+/// is a no-op offset).
+#[test]
+fn read_of_a_large_file_with_no_frontmatter_hints_a_plain_range() {
+    let tmp = TempDir::new().unwrap();
+    let mut body = String::new();
+    for i in 0..600 {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "Line {i} of a document with no frontmatter block.");
+    }
+    write_md(tmp.path(), "big.md", &format!("# Big\n\n{body}"));
+
+    let output = super::common::hyalo()
+        .current_dir(tmp.path())
+        .args(["read", "big.md", "--format", "json", "--hints"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = envelope["hints"].as_array().expect("hints array");
+    assert!(
+        hints.iter().any(|h| h["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--lines 1:80"))),
+        "{hints:?}"
     );
 }
 

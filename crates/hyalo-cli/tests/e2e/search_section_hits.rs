@@ -506,7 +506,7 @@ fn read_hint_uses_section_when_heading_is_unique() {
 }
 
 #[test]
-fn read_hint_uses_body_relative_lines_when_heading_is_null() {
+fn read_hint_uses_file_absolute_lines_when_heading_is_null() {
     let tmp = nested_heading_vault();
     let output = hyalo()
         .arg("--dir")
@@ -534,9 +534,11 @@ fn read_hint_uses_body_relative_lines_when_heading_is_null() {
         })
         .unwrap_or_else(|| panic!("no read hint in {hints:?}"));
     let cmd = hint["cmd"].as_str().unwrap();
-    // File-absolute lines 4-5, minus the 3-line frontmatter -> body-relative 1-2.
+    // BUG-4 / DEC-355: `read --lines` is file-absolute, the same numbering
+    // `section.line_start`/`line_end` already report, so the hint no longer
+    // translates by the 3-line frontmatter block -- file lines 4-5 stay 4:5.
     assert!(cmd.contains("--lines"), "{cmd}");
-    assert!(cmd.contains("1:2"), "{cmd}");
+    assert!(cmd.contains("4:5"), "{cmd}");
     assert_eq!(hint["writes"], false, "{hint}");
 }
 

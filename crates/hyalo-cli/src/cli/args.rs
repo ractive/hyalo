@@ -950,11 +950,19 @@ pub(crate) struct ReadArgs {
     /// Nested subsections are included.
     #[arg(short, long, value_name = "HEADING")]
     pub section: Option<String>,
-    /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
+    /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, file-absolute)
     ///
-    /// The frontmatter block is not counted, so line 1 is the first line after it — even
-    /// with --frontmatter. Note that `task --line` counts differently: those numbers are
-    /// file-absolute, with the frontmatter included.
+    /// Counts from line 1 of the file, frontmatter included — the same numbering `find`'s
+    /// section hits, lint and `task --line` all print, so a range copied out of any of them
+    /// can be pasted here unchanged (DEC-355). A frontmatter line is a file line like any
+    /// other: a range that falls (even partially) inside the frontmatter block returns that
+    /// raw text, fence included — combine with --frontmatter to also get the parsed/raw
+    /// frontmatter under their own keys. Combined with --section, the range stays
+    /// file-absolute: it is intersected with the matched section's own file-absolute span,
+    /// so a range copied from a `find --granularity section` hit works whether or not
+    /// --section also narrowed the read. A window with no overlap at all — past the end of
+    /// the file, or (under --section) outside every matched section — warns instead of
+    /// returning an empty read silently.
     #[arg(short, long, value_name = "RANGE")]
     pub lines: Option<String>,
     /// Return YAML frontmatter only, or combine it with a body selector
@@ -1129,8 +1137,9 @@ pub(crate) enum Commands {
             must follow '--' so it is not read as a flag: hyalo find -- '-draft notes', \
             hyalo find -- '(a OR b) -c'.\n\
             - prefix*: every dictionary term starting with the prefix. Prefixes match STEMS, so \
-            'config*' matches 'configuration' (stem 'configur'); when the prefix as typed matches no \
-            stem, its own stem is tried ('configuration*' then searches 'configur'). Capped at the 256 \
+            'config*' matches 'configuration' (stem 'configur'); the prefix as typed is tried AND its \
+            own stem is, unioned, so 'configuration*' also searches 'configur' even when a one-off \
+            typo (e.g. 'configurationon') happens to share the raw prefix. Capped at the 256 \
             most frequent terms, with a warning -q cannot silence. 'hyalo terms PREFIX' lists the \
             dictionary.\n\
             - Field terms: title:word, title:\"a phrase\", title:conf*, heading:install, tag:project \
@@ -3579,10 +3588,9 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
         ///
         /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
-        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
-        /// so a line number copied out of any of them can be pasted here unchanged. Note that
-        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
-        /// block excluded.
+        /// file-absolute — the same one `find --fields tasks`, `lint`, `backlinks` and
+        /// `read --lines` (DEC-355) report — so a line number copied out of any of them can be
+        /// pasted here unchanged.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
         #[arg(
@@ -3621,10 +3629,9 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
         ///
         /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
-        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
-        /// so a line number copied out of any of them can be pasted here unchanged. Note that
-        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
-        /// block excluded.
+        /// file-absolute — the same one `find --fields tasks`, `lint`, `backlinks` and
+        /// `read --lines` (DEC-355) report — so a line number copied out of any of them can be
+        /// pasted here unchanged.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         #[arg(
@@ -3668,10 +3675,9 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
         ///
         /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
-        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
-        /// so a line number copied out of any of them can be pasted here unchanged. Note that
-        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
-        /// block excluded.
+        /// file-absolute — the same one `find --fields tasks`, `lint`, `backlinks` and
+        /// `read --lines` (DEC-355) report — so a line number copied out of any of them can be
+        /// pasted here unchanged.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         #[arg(

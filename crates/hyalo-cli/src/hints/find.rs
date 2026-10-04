@@ -80,7 +80,7 @@ pub(super) fn facet_drilldown_hints(ctx: &HintContext) -> Vec<Hint> {
 
 /// `hyalo read` hints for the top section hits (iteration 303, DEC-334):
 /// `--section '<heading>'` when that heading selects exactly one outline
-/// heading, else the hit's body-relative `--lines A:B`.
+/// heading, else the hit's file-absolute `--lines A:B` (DEC-355).
 fn section_read_hints(ctx: &HintContext) -> Vec<Hint> {
     ctx.section_reads
         .iter()
@@ -275,7 +275,21 @@ pub(super) fn hints_for_find(
                         && !w.eq_ignore_ascii_case("and")
                 })
                 .collect();
-            if !has_quotes && words.len() >= 2 {
+            // UX-1 / DEC-357: offering OR is pointless when every word in the
+            // query has zero postings — OR of nothing still matches nothing.
+            // Review fix (SHOULD-FIX 5): checked against
+            // `ctx.zero_posting_terms`, not `ctx.search_suggestions` --
+            // `suggest()` (which fills `search_suggestions`) silently drops
+            // a word with *no* close dictionary candidate either, so a
+            // truly hopeless word like `qqqzzz` was absent from
+            // `search_suggestions` and `any_word_has_docs` wrongly read that
+            // absence as "this word has matches".
+            let any_word_has_docs = words.iter().any(|w| {
+                !ctx.zero_posting_terms
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(w))
+            });
+            if !has_quotes && words.len() >= 2 && any_word_has_docs {
                 let or_query = words.join(" OR ");
                 hints.push(Hint::new(
                     "Try OR instead of AND (match any word)",

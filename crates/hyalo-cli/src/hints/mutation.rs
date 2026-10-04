@@ -99,9 +99,26 @@ pub(super) fn read_size_hints(ctx: &HintContext, data: &serde_json::Value) -> Ve
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let kib = size.unwrap_or(0) / 1024;
+    // Review fix (SHOULD-FIX 6): `--lines` is file-absolute (DEC-355), so a
+    // bare `1:80` on a file whose frontmatter block runs past 80 lines
+    // would preview YAML, not body prose -- the opposite of what this hint
+    // is for. `data["content"]` (present here: this hint only fires on an
+    // un-narrowed read, which always reads the whole body) is the whole
+    // body text, so `lines - content.lines()` is the frontmatter's own
+    // line count without a second read of the file.
+    let body_lines = data
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .map(|c| u64::try_from(c.lines().count()).unwrap_or(u64::MAX));
+    let frontmatter_lines = body_lines.map_or(0, |b| lines.saturating_sub(b));
+    let range = format!(
+        "{}:{}",
+        frontmatter_lines + 1,
+        frontmatter_lines.saturating_add(80)
+    );
     hints.push(Hint::new(
         format!("Read only the first 80 of {lines} lines ({kib} KB file)"),
-        build_command_with_file(ctx, &["read"], file, &["--lines", "1:80"]),
+        build_command_with_file(ctx, &["read"], file, &["--lines", &range]),
     ));
     hints.push(Hint::new(
         "List this file's sections, to read just one",

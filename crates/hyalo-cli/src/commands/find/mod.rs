@@ -230,6 +230,35 @@ pub(crate) struct FindExtras<'a> {
     pub(crate) section_mode: bool,
     /// Parsed `--facet` specs; empty when none was requested.
     pub(crate) facets: &'a [FacetSpec],
+    /// `true` when no PATTERN was given and the real process argv held a
+    /// `-s…`/`-t…` token with a concatenated value (BUG-5 / DEC-356, review
+    /// fix): the shape a leading-dash PATTERN takes once clap reads it as
+    /// `--section`/`--tag` plus the rest of the token instead. Computed once
+    /// from `std::env::args_os()` by the CLI entry point
+    /// (`argv_has_concatenated_short_flag`), not re-derived from whether the
+    /// resulting filter happened to match many headings or none -- that
+    /// conflated "the filter is unusual" with "the filter was never typed".
+    pub(crate) dash_swallowed_argv: bool,
+}
+
+/// `true` when `args` (a real or simulated argv, PROGRAM name included or
+/// not) contains a short-flag token for `--section` (`-s`) or `--tag`
+/// (`-t`) with a value concatenated onto the same token (`-ssnapshot`,
+/// `-tag:iteration`) rather than given separately (`-s Task`) or spelled
+/// long (`--section Task`) -- the exact shape clap produces when a
+/// leading-dash PATTERN the shell passed through untouched is read as a
+/// short flag plus the rest of the token (BUG-5 / DEC-356).
+///
+/// Pure over an argv slice, independent of `std::env::args_os()`, so the
+/// detection itself is unit-testable without spawning a process.
+pub(crate) fn argv_has_concatenated_short_flag(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let bytes = a.as_bytes();
+        !a.starts_with("--")
+            && bytes.len() > 2
+            && bytes[0] == b'-'
+            && matches!(bytes[1], b's' | b't')
+    })
 }
 
 /// How the hint layer addresses one section hit with `hyalo read`.
@@ -237,8 +266,8 @@ pub(crate) struct FindExtras<'a> {
 pub(crate) enum SectionSelector {
     /// `read --section '<heading>'`: the heading selects exactly one outline heading.
     Heading(String),
-    /// `read --lines A:B` (body-relative): the preamble, or a heading that
-    /// `--section` could not address unambiguously.
+    /// `read --lines A:B` (file-absolute, DEC-355): the preamble, or a
+    /// heading that `--section` could not address unambiguously.
     Lines(usize, usize),
 }
 
@@ -263,6 +292,16 @@ pub(crate) struct SearchReport {
     /// In section mode, how many files matched at file level (iteration 303):
     /// lets a zero-hit answer say the words exist but never share a section.
     pub(crate) section_file_matches: Option<u64>,
+    /// The ranked query compiled to no positive leaf at all -- every term
+    /// negated (UX-10 text polish): a zero-result answer says so instead of
+    /// pointing at `properties summary` as if the vocabulary were the issue.
+    pub(crate) pure_negative_query: bool,
+    /// Every positive query word with literally zero postings (review fix,
+    /// SHOULD-FIX 5) -- unlike `suggestions`, populated even when the word
+    /// has no close dictionary candidate either, so "Try OR instead of AND"
+    /// can tell a truly hopeless word (`qqqzzz`) from one `suggest()` simply
+    /// chose not to propose a correction for.
+    pub(crate) zero_posting_terms: Vec<String>,
 }
 
 /// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
@@ -318,6 +357,7 @@ fn score_corpus(
     if scored.is_empty() {
         report.suggestions = corpus.suggest(query);
         report.corrected_query = hyalo_core::bm25::corrected_query(query, &report.suggestions);
+        report.zero_posting_terms = corpus.words_without_postings(query);
     }
     scored
 }
@@ -613,6 +653,45 @@ pub(crate) fn find_prepared(
             }
         }
     };
+    search_report.pure_negative_query = compiled_query
+        .as_ref()
+        .is_some_and(|q| !q.has_positive_leaf());
+    // UX-6 / DEC-358: malformed-but-recoverable query input gets a
+    // `-q`-proof warning rather than being silently reinterpreted.
+    if let Some(query) = &compiled_query {
+        let warnings = query.warnings();
+        // Review fix (part of SHOULD-FIX 7): a query made ENTIRELY of
+        // operator keywords (`find OR`, `find "and or"`) already gets the
+        // more specific "was interpreted as a boolean operator, leaving an
+        // empty query" warning once the empty BM25 result is diagnosed
+        // below -- skip the generic dangling-operator one so the two do not
+        // both fire for the exact same cause.
+        let operator_only_query = pattern.is_some_and(query_is_operator_only);
+        if warnings.dangling_operator && !operator_only_query {
+            crate::warn::warn_always(
+                "'OR' with no term on one side was dropped -- it widens a match, \
+                 not narrows it, so a dangling 'OR' changes nothing",
+            );
+        }
+        if warnings.unterminated_quote {
+            crate::warn::warn_always(
+                "an opening '\"' was never closed -- the phrase ran to the end of the query",
+            );
+        }
+        for original in &warnings.clamped_slops {
+            crate::warn::warn_always(format!(
+                "slop '~{original}' exceeds the maximum of {}; clamped to {}",
+                hyalo_core::bm25::MAX_PHRASE_SLOP,
+                hyalo_core::bm25::MAX_PHRASE_SLOP
+            ));
+        }
+        for term in &warnings.misplaced_wildcard_terms {
+            crate::warn::warn_always(format!(
+                "'{term}': '*' only means a prefix wildcard as the last character of a word \
+                 (e.g. 'config*') -- here it is a literal character and was dropped"
+            ));
+        }
+    }
     let field_source = IndexFieldSource {
         index,
         language,
@@ -1703,9 +1782,13 @@ pub(crate) fn find_prepared(
     if let Some(SortField::Property(key)) = effective_sort_ref
         && !results.is_empty()
         && results.iter().all(|r| {
+            // BUG-6: resolve a dot-path exactly like `apply_sort` and
+            // `--property K=V` do -- a literal `.get(key)` here reported
+            // "no files have property 'versions.ghes'" for a key every
+            // sorted file actually carried, nested under `versions:`.
             r.properties
                 .as_ref()
-                .and_then(|p| p.get(key.as_str()))
+                .and_then(|p| hyalo_core::filter::resolve_prop_in_object(p, key))
                 .is_none()
         })
     {
@@ -1724,11 +1807,34 @@ pub(crate) fn find_prepared(
     // per-file note, which would spam a large result set) names how many
     // result files hit this so the asymmetry is visible without being noisy.
     if ambiguous_section_files > 0 {
+        // BUG-5 / DEC-356: with no PATTERN, `-section` (a leading-dash term
+        // the shell never saw as the body-search PATTERN) is swallowed by
+        // clap as `-s` plus the rest of the token, e.g. `hyalo find
+        // '-snapshot'` silently becomes `--section napshot`. Review fix:
+        // keyed on the real argv shape (`extras.dash_swallowed_argv`), not
+        // on "no PATTERN" alone -- a deliberate `hyalo find --section Task`
+        // with no PATTERN and a genuinely ambiguous heading is not this bug
+        // and should not get a hint about a dash it never typed.
+        let dash_hint = if extras.dash_swallowed_argv {
+            " -- to search for a term starting with '-', write `hyalo find -- '-term'`"
+        } else {
+            ""
+        };
         crate::warn::warn(format!(
             "--section matched more than one heading in {ambiguous_section_files} file(s) \
              -- each such file's results include content from every matched section \
-             (see `hyalo find --help`)"
+             (see `hyalo find --help`){dash_hint}"
         ));
+    } else if extras.dash_swallowed_argv && !section_filters.is_empty() {
+        // Review fix (SHOULD-FIX 3): the common case is a *single* matching
+        // heading, which never set `ambiguous_section_files` and so never
+        // warned at all -- `hyalo find '-sqlite'` (clap: `-s` + "qlite")
+        // silently returned the one file whose heading contains "qlite"
+        // with no sign a dash-prefixed PATTERN had been swallowed.
+        crate::warn::warn(
+            "--section matched a heading, but no PATTERN was given -- if '-term' was meant \
+             as the search pattern, write `hyalo find -- '-term'`",
+        );
     }
 
     // F-4: warn when a --sort property key holds more than one JSON type
@@ -1749,10 +1855,15 @@ pub(crate) fn find_prepared(
         // materialised (UX-4), then add the ones that did.
         let mut distinct_types: Vec<&'static str> = sort_property_types.clone();
         for r in &results {
-            if let Some(v) = r.properties.as_ref().and_then(|p| p.get(key.as_str()))
+            // BUG-6's sibling fix: resolve a dot-path here too, so a mixed-type
+            // warning (or its absence) is consistent with what was actually sorted.
+            if let Some(v) = r
+                .properties
+                .as_ref()
+                .and_then(|p| hyalo_core::filter::resolve_prop_in_object(p, key))
                 && !v.is_null()
             {
-                let t = json_value_type_name(v);
+                let t = json_value_type_name(&v);
                 if !distinct_types.contains(&t) {
                     distinct_types.push(t);
                 }
@@ -2012,12 +2123,10 @@ fn section_hits(
         })
         .collect();
     let mut files = Vec::with_capacity(collected.len());
-    let mut body_offsets: HashMap<String, usize> = HashMap::new();
     // Report the first failure in result order, independent of scheduling.
     for outcome in collected {
         match outcome {
             Ok((file, sections)) => {
-                body_offsets.insert(file.clone(), sections.body_offset());
                 files.push((file, sections));
             }
             Err(error) => {
@@ -2053,23 +2162,20 @@ fn section_hits(
 
     let mut items: Vec<serde_json::Value> = Vec::with_capacity(hits.len());
     for (file, hit) in hits {
-        let offset = body_offsets.get(&file).copied().unwrap_or(0);
         let outline = inputs
             .index
             .get(&file)
             .map_or(&[][..], |entry| entry.sections.as_slice());
+        // DEC-355: `read --lines` is file-absolute, exactly like the
+        // `line_start`/`line_end` reported right below — no translation
+        // needed (or wanted) here any more.
         let selector = hit
             .span
             .heading
             .as_deref()
             .and_then(|heading| unique_section_selector(outline, heading))
             .map_or_else(
-                || {
-                    SectionSelector::Lines(
-                        hit.span.line_start.saturating_sub(offset).max(1),
-                        hit.span.line_end.saturating_sub(offset).max(1),
-                    )
-                },
+                || SectionSelector::Lines(hit.span.line_start.max(1), hit.span.line_end.max(1)),
                 SectionSelector::Heading,
             );
         search_report.section_reads.push(SectionRead {

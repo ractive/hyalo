@@ -1890,11 +1890,19 @@ type ReadArgs = {
      */
     section?: string;
     /**
-     * Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
+     * Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, file-absolute)
      *
-     * The frontmatter block is not counted, so line 1 is the first line after it — even
-     * with --frontmatter. Note that `task --line` counts differently: those numbers are
-     * file-absolute, with the frontmatter included.
+     * Counts from line 1 of the file, frontmatter included — the same numbering `find`'s
+     * section hits, lint and `task --line` all print, so a range copied out of any of them
+     * can be pasted here unchanged (DEC-355). A frontmatter line is a file line like any
+     * other: a range that falls (even partially) inside the frontmatter block returns that
+     * raw text, fence included — combine with --frontmatter to also get the parsed/raw
+     * frontmatter under their own keys. Combined with --section, the range stays
+     * file-absolute: it is intersected with the matched section's own file-absolute span,
+     * so a range copied from a `find --granularity section` hit works whether or not
+     * --section also narrowed the read. A window with no overlap at all — past the end of
+     * the file, or (under --section) outside every matched section — warns instead of
+     * returning an empty read silently.
      */
     lines?: string;
     /**

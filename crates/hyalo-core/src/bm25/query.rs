@@ -86,6 +86,16 @@ impl FieldKind {
             _ => None,
         }
     }
+
+    /// The field name as written in a query, for error messages.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Heading => "heading",
+            Self::Tag => "tag",
+            Self::Path => "path",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,8 +118,10 @@ enum Lexeme {
         start: usize,
         end: usize,
     },
-    /// A quoted phrase and its `~N` slop (0 when absent).
-    Phrase(String, u32),
+    /// A quoted phrase, its `~N` slop (0 when absent), and the byte offset
+    /// of its content's first character in the query (for did-you-mean
+    /// rewrites of a misspelled word inside the phrase — DEC-357).
+    Phrase(String, u32, usize),
     Field {
         kind: FieldKind,
         value: FieldText,
@@ -119,35 +131,80 @@ enum Lexeme {
 /// Largest accepted phrase slop; a larger `~N` is clamped to it.
 pub const MAX_PHRASE_SLOP: u32 = 64;
 
+/// Non-fatal issues detected while parsing a query (UX-6 / DEC-358):
+/// malformed-but-recoverable input gets a `-q`-proof warning instead of a
+/// silent reinterpretation that returns a plausible-looking but wrong
+/// answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueryWarnings {
+    /// `OR` appeared with no left or right operand (`a OR`, `OR a`) and was
+    /// dropped rather than widening the match the way a present `OR` does.
+    pub dangling_operator: bool,
+    /// A `"` was opened but the query ended before a matching `"` closed it;
+    /// the historical behaviour (run the phrase to the end of the query)
+    /// still applies, this only reports that it happened.
+    pub unterminated_quote: bool,
+    /// Each `~N` that exceeded [`MAX_PHRASE_SLOP`], as typed (every one was
+    /// clamped to it).
+    pub clamped_slops: Vec<u32>,
+    /// Words with a `*` that is not the trailing prefix marker (`*foo`,
+    /// `sn*p`): the `*` there is a literal character, not a wildcard.
+    pub misplaced_wildcard_terms: Vec<String>,
+}
+
 /// Read an optional `~N` slop suffix directly after a closing quote (DEC-338).
-/// A `~` without digits is consumed and means 0.
-fn read_slop(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> u32 {
+/// A `~` without digits is consumed and means 0. Returns the (possibly
+/// clamped) slop and, when clamping happened, the value as typed.
+fn read_slop(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> (u32, Option<u32>) {
     if !matches!(chars.peek(), Some(&(_, '~'))) {
-        return 0;
+        return (0, None);
     }
     chars.next();
     let mut slop: u32 = 0;
+    let mut saw_digit = false;
     while let Some(&(_, c)) = chars.peek() {
         let Some(digit) = c.to_digit(10) else {
             break;
         };
+        saw_digit = true;
         slop = slop.saturating_mul(10).saturating_add(digit);
         chars.next();
     }
-    slop.min(MAX_PHRASE_SLOP)
+    if !saw_digit {
+        return (0, None);
+    }
+    if slop > MAX_PHRASE_SLOP {
+        (MAX_PHRASE_SLOP, Some(slop))
+    } else {
+        (slop, None)
+    }
+}
+
+/// `true` when the upcoming (unconsumed) chars are a `~` immediately
+/// followed by an alphabetic character -- a malformed slop suffix
+/// (`"a b"~abc`), not a word that happens to follow a phrase. Called only
+/// right after a *closing* `"` (review fix: the original check scanned
+/// every `"` in the query, including an *opening* one, so `"~home dir"` --
+/// an ordinary phrase whose content starts with `~` -- was rejected before
+/// it was even lexed).
+fn peek_malformed_slop(chars: &std::iter::Peekable<std::str::CharIndices<'_>>) -> bool {
+    let mut lookahead = chars.clone();
+    matches!(lookahead.next(), Some((_, '~')))
+        && matches!(lookahead.next(), Some((_, c)) if c.is_alphabetic())
 }
 
 /// Read a quoted phrase body after its opening quote. An unterminated quote
-/// runs to the end of the query (the historical behaviour).
-fn read_phrase(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> String {
+/// runs to the end of the query (the historical behaviour); the returned
+/// `bool` says whether a closing `"` was actually found.
+fn read_phrase(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> (String, bool) {
     let mut phrase = String::new();
     for (_, c) in chars.by_ref() {
         if c == '"' {
-            break;
+            return (phrase, true);
         }
         phrase.push(c);
     }
-    phrase
+    (phrase, false)
 }
 
 /// Read one word. A `(` inside a word is literal and so is the `)` that
@@ -180,8 +237,14 @@ fn read_word(
     (query[start..end].to_owned(), start, end)
 }
 
-fn lex(query: &str) -> Vec<Lexeme> {
+/// Error text shared by every malformed-slop site (plain phrase, negated
+/// phrase, field phrase).
+const MALFORMED_SLOP_MESSAGE: &str =
+    "'~' after a phrase takes a number of extra words, e.g. \"a b\"~3 -- not a word";
+
+fn lex(query: &str) -> Result<(Vec<Lexeme>, QueryWarnings), QuerySyntaxError> {
     let mut out = Vec::new();
+    let mut warnings = QueryWarnings::default();
     let mut chars = query.char_indices().peekable();
     while let Some(&(_, ch)) = chars.peek() {
         if ch.is_whitespace() {
@@ -199,10 +262,22 @@ fn lex(query: &str) -> Vec<Lexeme> {
             }
             '"' => {
                 chars.next();
-                let phrase = read_phrase(&mut chars);
-                let slop = read_slop(&mut chars);
+                let content_start = chars.peek().map_or(query.len(), |&(i, _)| i);
+                let (phrase, terminated) = read_phrase(&mut chars);
+                // Review fix (MUST-FIX 1): checked only right after a
+                // *closing* quote was actually found, on the unconsumed
+                // chars that follow it -- not by scanning the whole query
+                // for any `"`, which misfired on an *opening* quote whose
+                // phrase content happened to start with `~` (`"~home
+                // dir"`).
+                if terminated && peek_malformed_slop(&chars) {
+                    return Err(QuerySyntaxError::new(MALFORMED_SLOP_MESSAGE));
+                }
+                let (slop, clamped_from) = read_slop(&mut chars);
+                warnings.unterminated_quote |= !terminated;
+                warnings.clamped_slops.extend(clamped_from);
                 if !phrase.is_empty() {
-                    out.push(Lexeme::Phrase(phrase, slop));
+                    out.push(Lexeme::Phrase(phrase, slop, content_start));
                 }
             }
             '-' => {
@@ -215,11 +290,17 @@ fn lex(query: &str) -> Vec<Lexeme> {
                     // `Not`, or it would negate whatever term comes next.
                     Some(&(_, '"')) => {
                         chars.next();
-                        let phrase = read_phrase(&mut chars);
-                        let slop = read_slop(&mut chars);
+                        let content_start = chars.peek().map_or(query.len(), |&(i, _)| i);
+                        let (phrase, terminated) = read_phrase(&mut chars);
+                        if terminated && peek_malformed_slop(&chars) {
+                            return Err(QuerySyntaxError::new(MALFORMED_SLOP_MESSAGE));
+                        }
+                        let (slop, clamped_from) = read_slop(&mut chars);
+                        warnings.unterminated_quote |= !terminated;
+                        warnings.clamped_slops.extend(clamped_from);
                         if !phrase.is_empty() {
                             out.push(Lexeme::Not);
-                            out.push(Lexeme::Phrase(phrase, slop));
+                            out.push(Lexeme::Phrase(phrase, slop, content_start));
                         }
                     }
                     Some(&(_, '(')) => out.push(Lexeme::Not),
@@ -227,7 +308,14 @@ fn lex(query: &str) -> Vec<Lexeme> {
                         out.push(Lexeme::Not);
                         // A negated word is always literal: `-or` excludes "or".
                         let (text, start, end) = read_word(query, &mut chars);
-                        out.push(classify_word(text, start, end, &mut chars, false));
+                        out.push(classify_word(
+                            text,
+                            start,
+                            end,
+                            &mut chars,
+                            false,
+                            &mut warnings,
+                        )?);
                     }
                 }
             }
@@ -238,11 +326,18 @@ fn lex(query: &str) -> Vec<Lexeme> {
                     chars.next();
                     continue;
                 }
-                out.push(classify_word(text, start, end, &mut chars, true));
+                out.push(classify_word(
+                    text,
+                    start,
+                    end,
+                    &mut chars,
+                    true,
+                    &mut warnings,
+                )?);
             }
         }
     }
-    out
+    Ok((out, warnings))
 }
 
 fn classify_word(
@@ -251,33 +346,39 @@ fn classify_word(
     end: usize,
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     keywords: bool,
-) -> Lexeme {
+    warnings: &mut QueryWarnings,
+) -> Result<Lexeme, QuerySyntaxError> {
     if keywords && text.eq_ignore_ascii_case("or") {
-        return Lexeme::Or;
+        return Ok(Lexeme::Or);
     }
     if keywords && text.eq_ignore_ascii_case("and") {
-        return Lexeme::And;
+        return Ok(Lexeme::And);
     }
     if let Some((name, rest)) = text.split_once(':')
         && let Some(kind) = FieldKind::parse(name)
     {
         if !rest.is_empty() {
-            return Lexeme::Field {
+            return Ok(Lexeme::Field {
                 kind,
                 value: FieldText::Word(rest.to_owned()),
-            };
+            });
         }
         if matches!(chars.peek(), Some(&(_, '"'))) {
             chars.next();
-            let phrase = read_phrase(chars);
-            let slop = read_slop(chars);
-            return Lexeme::Field {
+            let (phrase, terminated) = read_phrase(chars);
+            if terminated && peek_malformed_slop(chars) {
+                return Err(QuerySyntaxError::new(MALFORMED_SLOP_MESSAGE));
+            }
+            let (slop, clamped_from) = read_slop(chars);
+            warnings.unterminated_quote |= !terminated;
+            warnings.clamped_slops.extend(clamped_from);
+            return Ok(Lexeme::Field {
                 kind,
                 value: FieldText::Phrase(phrase, slop),
-            };
+            });
         }
     }
-    Lexeme::Word { text, start, end }
+    Ok(Lexeme::Word { text, start, end })
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +395,9 @@ enum RawNode {
         start: usize,
         end: usize,
     },
-    Phrase(String, u32),
+    /// Content, slop, and the byte offset of the content's first character
+    /// in the query (DEC-357).
+    Phrase(String, u32, usize),
     Field {
         kind: FieldKind,
         value: FieldText,
@@ -304,6 +407,9 @@ enum RawNode {
 struct Parser {
     lexemes: Vec<Lexeme>,
     pos: usize,
+    /// Accumulated while parsing; `lex()`'s findings seed it, parsing adds
+    /// `dangling_operator` (UX-6 / DEC-358).
+    warnings: QueryWarnings,
 }
 
 impl Parser {
@@ -327,8 +433,14 @@ impl Parser {
                         "unbalanced parenthesis: ')' without a matching '('",
                     ));
                 }
-                // `AND` is whitespace; an `OR` with no left operand is ignored.
-                Some(Lexeme::And | Lexeme::Or) => self.pos += 1,
+                // `AND` is whitespace and never dangling. An `OR` reaching
+                // here has no left operand (`OR a`, or a run of `OR OR`) --
+                // ignored, same as a trailing one in `parse_or`.
+                Some(Lexeme::And) => self.pos += 1,
+                Some(Lexeme::Or) => {
+                    self.warnings.dangling_operator = true;
+                    self.pos += 1;
+                }
                 Some(_) => items.push(self.parse_or(depth)?),
             }
         }
@@ -341,8 +453,12 @@ impl Parser {
             while matches!(self.peek(), Some(Lexeme::Or)) {
                 self.pos += 1;
             }
-            // A trailing `OR` (end, `)` or `AND`) has no right operand: ignored.
+            // A trailing `OR` (end, `)` or `AND`) has no right operand:
+            // ignored, and flagged (UX-6 / DEC-358) -- `a OR` matched
+            // everything just like `a` alone, which is not what a reader
+            // typing `OR` expects.
             if matches!(self.peek(), None | Some(Lexeme::Close | Lexeme::And)) {
+                self.warnings.dangling_operator = true;
                 break;
             }
             alternatives.push(self.parse_unary(depth)?);
@@ -398,7 +514,9 @@ impl Parser {
                 Ok(RawNode::And(items))
             }
             Lexeme::Word { text, start, end } => Ok(RawNode::Word { text, start, end }),
-            Lexeme::Phrase(text, slop) => Ok(RawNode::Phrase(text, slop)),
+            Lexeme::Phrase(text, slop, content_start) => {
+                Ok(RawNode::Phrase(text, slop, content_start))
+            }
             Lexeme::Field { kind, value } => Ok(RawNode::Field { kind, value }),
             // Unreachable from parse_and/parse_or, which consume these first.
             Lexeme::Close | Lexeme::Or | Lexeme::And | Lexeme::Not => Err(QuerySyntaxError::new(
@@ -408,12 +526,38 @@ impl Parser {
     }
 }
 
-fn parse(query: &str) -> Result<RawNode, QuerySyntaxError> {
+fn parse(query: &str) -> Result<(RawNode, QueryWarnings), QuerySyntaxError> {
+    // UX-6 / DEC-358: a malformed `~N` slop (`"a b"~abc`) is detected inside
+    // `lex()` itself, right after the *closing* quote it actually follows
+    // (review fix: a query-wide scan for `"` + `~` + a letter also matched
+    // an *opening* quote, so `"~home dir"` -- an ordinary phrase whose
+    // content starts with `~` -- was rejected before it was ever lexed).
+    let (lexemes, lex_warnings) = lex(query)?;
+    // UX-10 text polish: `title:(a OR b)` reads `(a` as the literal start of
+    // the field's word value (parens inside a word are literal, like
+    // `main()`), so the `(` never reaches the parser as a group opener and
+    // the trailing `)` fails later as unbalanced -- a confusing error about
+    // the wrong character. Catch it here, once, with a message that names
+    // the actual problem: a field term takes one word or phrase, not a group.
+    if let Some(kind) = lexemes.iter().find_map(|l| match l {
+        Lexeme::Field {
+            kind,
+            value: FieldText::Word(text),
+        } if text.starts_with('(') => Some(*kind),
+        _ => None,
+    }) {
+        let name = kind.as_str();
+        return Err(QuerySyntaxError::new(format!(
+            "a field term cannot take a group: write {name}:word or {name}:\"phrase\", not {name}:(…)"
+        )));
+    }
     let mut parser = Parser {
-        lexemes: lex(query),
+        lexemes,
         pos: 0,
+        warnings: lex_warnings,
     };
-    Ok(RawNode::And(parser.parse_and(0)?))
+    let root = RawNode::And(parser.parse_and(0)?);
+    Ok((root, parser.warnings))
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +707,8 @@ pub struct CompiledQuery {
     source: String,
     /// Field weights and proximity bonus used when scoring (DEC-337/338).
     params: super::SearchSettings,
+    /// Non-fatal issues found while parsing (UX-6 / DEC-358).
+    warnings: QueryWarnings,
 }
 
 fn dedup<T: PartialEq>(items: Vec<T>) -> Vec<T> {
@@ -627,6 +773,30 @@ fn prefix_candidates(raw: &str, stemmers: &[&Stemmer]) -> Vec<String> {
     out
 }
 
+/// Whitespace-delimited raw words inside quoted phrase `text`, each with its
+/// byte span local to `text` (DEC-357): `"stale indx"` yields `("stale",
+/// 0, 5)` and `("indx", 6, 10)`. A phrase has no parenthesis/field syntax to
+/// account for, unlike [`read_word`], so plain whitespace splitting suffices.
+fn phrase_raw_words(text: &str) -> Vec<(&str, usize, usize)> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut last_end = 0usize;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            if let Some(s) = start.take() {
+                out.push((&text[s..i], s, i));
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+        last_end = i + c.len_utf8();
+    }
+    if let Some(s) = start {
+        out.push((&text[s..last_end], s, last_end));
+    }
+    out
+}
+
 fn group(nodes: Vec<Node>, make: fn(Vec<Node>) -> Node) -> Option<Node> {
     match nodes.len() {
         0 => None,
@@ -638,6 +808,9 @@ fn group(nodes: Vec<Node>, make: fn(Vec<Node>) -> Node) -> Option<Node> {
 struct Compiler<'a> {
     stemmers: &'a [&'a Stemmer],
     words: Vec<QueryWord>,
+    /// Words with a `*` that is not the trailing prefix marker (UX-6 /
+    /// DEC-358): `*foo`, `sn*p`.
+    misplaced_wildcards: Vec<String>,
 }
 
 impl Compiler<'_> {
@@ -661,7 +834,30 @@ impl Compiler<'_> {
                 .compile(*child, !positive)?
                 .map(|n| Node::Not(Box::new(n))),
             RawNode::Word { text, start, end } => self.word(&text, start, end, positive)?,
-            RawNode::Phrase(text, slop) => {
+            RawNode::Phrase(text, slop, content_start) => {
+                // UX-1 / DEC-357: a misspelled word inside a phrase used to
+                // get no suggestion at all, because only the plain-word path
+                // (`self.word`, below) ever registered a `QueryWord` for
+                // did-you-mean. Each simple single-token word in the phrase
+                // gets the same registration here, at its absolute byte span
+                // in the original query so a correction can be spliced back
+                // into `query.source`.
+                if positive {
+                    for (raw, local_start, local_end) in phrase_raw_words(&text) {
+                        let words = super::tokenizer::query_words(raw, self.stemmers);
+                        if let [only] = words.as_slice()
+                            && only.whole.is_none()
+                            && only.parts.len() == 1
+                        {
+                            self.words.push(QueryWord {
+                                raw: raw.to_owned(),
+                                start: content_start + local_start,
+                                end: content_start + local_end,
+                                stems: only.parts[0].clone(),
+                            });
+                        }
+                    }
+                }
                 let mut alternatives = sequences(&text, self.stemmers);
                 if alternatives.iter().all(|seq| seq.len() == 1) && !alternatives.is_empty() {
                     Some(Node::Term(alternatives.drain(..).flatten().collect()))
@@ -699,6 +895,14 @@ impl Compiler<'_> {
                 .collect();
             nodes.push(Node::Prefix(prefix_candidates(last, self.stemmers)));
             return Ok(group(nodes, Node::And));
+        }
+        // UX-6 / DEC-358: `*` only means "prefix wildcard" as the very last
+        // character of a word (handled above). A `*` anywhere else -- a
+        // leading `*foo` or an interior `sn*p` -- is tokenized as a literal
+        // character and silently dropped, which usually is not what the
+        // query meant.
+        if text.contains('*') {
+            self.misplaced_wildcards.push(text.to_owned());
         }
         let words = super::tokenizer::query_words(text, self.stemmers);
         if positive
@@ -817,22 +1021,35 @@ impl CompiledQuery {
             words: Vec::new(),
             source: query.to_owned(),
             params: super::search_settings(),
+            warnings: QueryWarnings::default(),
         }
     }
 
     fn parse_with_stemmers(query: &str, stemmers: &[&Stemmer]) -> Result<Self, QuerySyntaxError> {
-        let raw = parse(query)?;
+        let (raw, mut warnings) = parse(query)?;
         let mut compiler = Compiler {
             stemmers,
             words: Vec::new(),
+            misplaced_wildcards: Vec::new(),
         };
         let root = compiler.compile(raw, true)?;
+        warnings.misplaced_wildcard_terms = compiler.misplaced_wildcards;
         Ok(Self {
             root,
             words: compiler.words,
             source: query.to_owned(),
             params: super::search_settings(),
+            warnings,
         })
+    }
+
+    /// Non-fatal issues found while parsing this query (UX-6 / DEC-358):
+    /// dangling operators, an unterminated quote, clamped slops, and words
+    /// whose `*` is not the trailing prefix marker. The hint layer warns
+    /// for each, `-q`-proof.
+    #[must_use]
+    pub fn warnings(&self) -> &QueryWarnings {
+        &self.warnings
     }
 
     /// Replace the scoring parameters (field weights, proximity bonus). A
@@ -1032,7 +1249,12 @@ pub(super) fn min_window(lists: &[Vec<u32>]) -> Option<u64> {
 
 /// Lexeme-level check used to explain an empty query made only of operators.
 pub(super) fn operator_only(query: &str) -> bool {
-    let lexemes = lex(query);
+    // Called only once a query has already compiled successfully elsewhere
+    // (see `find`'s BM25-empty-result path), so a lex error here would be
+    // unreachable in practice; still handled rather than unwrapped.
+    let Ok((lexemes, _)) = lex(query) else {
+        return false;
+    };
     !lexemes.is_empty()
         && lexemes
             .iter()
@@ -1421,19 +1643,24 @@ fn close_enough(query: &str, candidate: &str) -> bool {
 
 impl Bm25InvertedIndex {
     /// The prefixes a `prefix*` term actually expands with: the raw prefix
-    /// when it matches any dictionary term, else every stem-derived fallback
-    /// that does (`configuration*` → `configur`).
+    /// (when it matches any dictionary term) *union* every stem-derived
+    /// fallback that does (`configuration*` → `configur`) — BUG-10 /
+    /// DEC-355's sibling fix. The two used to be mutually exclusive: the
+    /// fallback only fired when the raw prefix matched *nothing*, so a
+    /// single typo stem sharing the raw prefix (`configurationon`, a
+    /// one-document misspelling) silently absorbed the whole search and the
+    /// well-known stem `configur` was never tried.
     fn effective_prefixes<'p>(&self, candidates: &'p [String]) -> Vec<&'p str> {
         let matches = |p: &str| self.postings.keys().any(|t| t.starts_with(p));
-        match candidates.split_first() {
-            Some((raw, _)) if matches(raw) => vec![raw.as_str()],
-            Some((_, fallbacks)) => fallbacks
-                .iter()
-                .map(String::as_str)
-                .filter(|p| matches(p))
-                .collect(),
-            None => Vec::new(),
+        let Some((raw, fallbacks)) = candidates.split_first() else {
+            return Vec::new();
+        };
+        let mut out: Vec<&str> = Vec::new();
+        if matches(raw) {
+            out.push(raw.as_str());
         }
+        out.extend(fallbacks.iter().map(String::as_str).filter(|p| matches(p)));
+        out
     }
 
     /// Documents for which `node`, read with positive polarity, evaluates
@@ -1647,10 +1874,30 @@ impl Bm25InvertedIndex {
         changed
     }
 
+    /// Every positive query word none of whose stems occur in the
+    /// dictionary at all -- "has zero postings", independent of whether a
+    /// close dictionary term exists to suggest (review fix, SHOULD-FIX 5):
+    /// [`Self::suggest`] silently drops a word with no close candidate
+    /// either, so a caller using `suggest()`'s output as a stand-in for
+    /// "this word has no postings" (the "Try OR" hint did) wrongly treated
+    /// a hopeless word like `qqqzzz` as if it had matches.
+    #[must_use]
+    pub fn words_without_postings(&self, query: &CompiledQuery) -> Vec<String> {
+        query
+            .words
+            .iter()
+            .filter(|word| !word.stems.iter().any(|s| self.postings.contains_key(s)))
+            .map(|word| word.raw.clone())
+            .collect()
+    }
+
     /// Did-you-mean for each positive query word none of whose stems occur in
     /// the dictionary: up to three close terms (Jaro-Winkler ≥ 0.85 or
-    /// Levenshtein ≤ 2), most similar first with document frequency as the
-    /// tie-break. Candidates are dictionary stems, not surface words.
+    /// Levenshtein ≤ 2), ordered by Damerau-Levenshtein distance (transposition-
+    /// aware, so `snapshto` → `snapshot` is 1 edit, not the 2 plain Levenshtein
+    /// counts) then document frequency descending, then alphabetically for
+    /// determinism (UX-1 / DEC-357). Candidates are dictionary stems, not
+    /// surface words.
     #[must_use]
     pub fn suggest(&self, query: &CompiledQuery) -> Vec<TermSuggestion> {
         let mut out: Vec<TermSuggestion> = Vec::new();
@@ -1665,36 +1912,25 @@ impl Bm25InvertedIndex {
             let mut probes: Vec<&str> = vec![lowered.as_str()];
             probes.extend(word.stems.iter().map(String::as_str));
             let probes = dedup(probes);
-            // (term, docs, edit similarity, Jaro-Winkler), best probe each.
-            let mut candidates: Vec<(&str, usize, f64, f64)> = self
+            // (term, docs, best-probe Damerau-Levenshtein distance).
+            let mut candidates: Vec<(&str, usize, usize)> = self
                 .postings
                 .iter()
                 .filter(|(term, _)| !probes.contains(&term.as_str()))
                 .filter_map(|(term, posts)| {
-                    let (edit, jw) = probes
+                    let distance = probes
                         .iter()
                         .filter(|p| close_enough(p, term))
-                        .map(|p| {
-                            (
-                                strsim::normalized_levenshtein(p, term),
-                                strsim::jaro_winkler(p, term),
-                            )
-                        })
-                        .fold(None, |best: Option<(f64, f64)>, s| {
-                            Some(best.map_or(s, |b| if s > b { s } else { b }))
-                        })?;
-                    Some((term.as_str(), posts.len(), edit, jw))
+                        .map(|p| strsim::damerau_levenshtein(p, term))
+                        .min()?;
+                    Some((term.as_str(), posts.len(), distance))
                 })
                 .collect();
             if candidates.is_empty() {
                 continue;
             }
-            // Fewest edits first (normalised Levenshtein), then Jaro-Winkler;
-            // document frequency only breaks ties.
             candidates.sort_unstable_by(|a, b| {
-                b.2.partial_cmp(&a.2)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
+                a.2.cmp(&b.2)
                     .then_with(|| b.1.cmp(&a.1))
                     .then_with(|| a.0.cmp(b.0))
             });
@@ -1703,7 +1939,7 @@ impl Bm25InvertedIndex {
                 term: word.raw.clone(),
                 candidates: candidates
                     .into_iter()
-                    .map(|(term, docs, _, _)| TermCandidate {
+                    .map(|(term, docs, _)| TermCandidate {
                         term: term.to_owned(),
                         docs,
                     })
@@ -1714,17 +1950,44 @@ impl Bm25InvertedIndex {
     }
 }
 
-/// The query with the best single substitution applied: the first suggested
-/// word replaced by its most frequent candidate. `None` without suggestions.
+/// The query with every suggested word replaced by its top candidate.
+/// `None` without suggestions (UX-1 / DEC-357: a query with two misspelled
+/// words used to have only the first corrected, so the hinted command still
+/// came up empty — `suggestions` already carried both fixes, the rewrite
+/// just never applied the second one).
 #[must_use]
 pub fn corrected_query(query: &CompiledQuery, suggestions: &[TermSuggestion]) -> Option<String> {
-    let suggestion = suggestions.first()?;
-    let candidate = suggestion.candidates.first()?;
-    let word = query.words.iter().find(|w| w.raw == suggestion.term)?;
+    // Review fix (SHOULD-FIX 4): `suggest()` dedups by raw term, so a word
+    // repeated in the query (`ostrch ostrch kangroo`) has only ONE
+    // `TermSuggestion`, but every occurrence still needs its own edit --
+    // `.find()` (singular) stopped at the first `QueryWord` with that raw
+    // text and left the rest of the repeats uncorrected.
+    let mut edits: Vec<(usize, usize, &str)> = suggestions
+        .iter()
+        .filter_map(|suggestion| {
+            let candidate = suggestion.candidates.first()?;
+            Some((suggestion, candidate.term.as_str()))
+        })
+        .flat_map(|(suggestion, replacement)| {
+            query
+                .words
+                .iter()
+                .filter(move |w| w.raw == suggestion.term)
+                .map(move |w| (w.start, w.end, replacement))
+        })
+        .collect();
+    if edits.is_empty() {
+        return None;
+    }
+    edits.sort_unstable_by_key(|&(start, ..)| start);
     let mut out = String::with_capacity(query.source.len());
-    out.push_str(query.source.get(..word.start)?);
-    out.push_str(&candidate.term);
-    out.push_str(query.source.get(word.end..)?);
+    let mut cursor = 0;
+    for (start, end, replacement) in edits {
+        out.push_str(query.source.get(cursor..start)?);
+        out.push_str(replacement);
+        cursor = end;
+    }
+    out.push_str(query.source.get(cursor..)?);
     Some(out)
 }
 
@@ -1836,6 +2099,22 @@ mod tests {
     }
 
     #[test]
+    fn field_term_with_a_group_names_the_real_problem() {
+        // UX-10 text polish: `title:(` reads the `(` as literal, so the
+        // parser used to blame the trailing `)` for being unbalanced -- the
+        // wrong character. The real problem is the field term itself.
+        for query in ["title:(index OR snapshot)", "heading:(a OR b)"] {
+            let err = CompiledQuery::parse(query, &[StemLanguage::English]).unwrap_err();
+            assert!(
+                err.to_string().contains("cannot take a group"),
+                "{query} -> {err}"
+            );
+        }
+        // Parens as literal text inside a plain word are unaffected.
+        assert!(CompiledQuery::parse("main()", &[StemLanguage::English]).is_ok());
+    }
+
+    #[test]
     fn parentheses_inside_a_word_are_literal() {
         assert_eq!(compile("main()").root, Some(term("main")));
         assert_eq!(
@@ -1856,6 +2135,66 @@ mod tests {
         assert!(compile("   ").root.is_none());
         assert!(operator_only("AND OR"));
         assert!(!operator_only("a OR"));
+    }
+
+    // -- UX-6 / DEC-358: malformed-but-recoverable query warnings --
+
+    #[test]
+    fn dangling_or_is_flagged_both_directions() {
+        assert!(compile("a1 OR").warnings().dangling_operator);
+        assert!(compile("OR a1").warnings().dangling_operator);
+        assert!(!compile("a1 OR b1").warnings().dangling_operator);
+        assert!(!compile("a1 b1").warnings().dangling_operator);
+    }
+
+    #[test]
+    fn unterminated_quote_is_flagged() {
+        assert!(compile(r#"a1 "b1"#).warnings().unterminated_quote);
+        assert!(!compile(r#"a1 "b1""#).warnings().unterminated_quote);
+    }
+
+    #[test]
+    fn clamped_slop_is_flagged_with_the_original_value() {
+        let w = compile(r#""a1 b1"~99"#).warnings().clone();
+        assert_eq!(w.clamped_slops, vec![99]);
+        let w = compile(r#""a1 b1"~30"#).warnings().clone();
+        assert_eq!(w.clamped_slops, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn misplaced_wildcard_is_flagged() {
+        assert_eq!(
+            compile("*foo").warnings().misplaced_wildcard_terms,
+            vec!["*foo".to_owned()]
+        );
+        assert_eq!(
+            compile("sn*p").warnings().misplaced_wildcard_terms,
+            vec!["sn*p".to_owned()]
+        );
+        // A trailing '*' is the real prefix syntax, not misplaced.
+        assert_eq!(
+            compile("config*").warnings().misplaced_wildcard_terms,
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn malformed_phrase_slop_is_a_syntax_error() {
+        assert!(CompiledQuery::parse(r#""a b"~abc"#, &[StemLanguage::English]).is_err());
+        // A numeric slop, or none at all, is unaffected.
+        assert!(CompiledQuery::parse(r#""a b"~3"#, &[StemLanguage::English]).is_ok());
+        assert!(CompiledQuery::parse(r#""a b""#, &[StemLanguage::English]).is_ok());
+    }
+
+    #[test]
+    fn phrase_content_starting_with_tilde_letter_is_not_malformed_slop() {
+        // Review MUST-FIX 1: the malformed-slop check used to scan the whole
+        // query for any '"' followed by '~' and a letter, which also fired
+        // on the *opening* quote of an ordinary phrase whose content starts
+        // with '~' -- `"~home dir"` has nothing to do with a slop suffix.
+        assert!(CompiledQuery::parse(r#""~home dir""#, &[StemLanguage::English]).is_ok());
+        let index = corpus(&[("a.md", "home dir"), ("b.md", "unrelated")]);
+        assert_eq!(hits(&index, r#""~home dir""#), vec!["a.md"]);
     }
 
     #[test]
@@ -2098,6 +2437,131 @@ mod tests {
     }
 
     #[test]
+    fn words_without_postings_reports_a_hopeless_word_suggest_drops() {
+        // Review fix (SHOULD-FIX 5): `suggest()` silently drops a word with
+        // no close dictionary candidate at all (`zzzzqqq`, just confirmed
+        // empty above), so a caller cannot use `suggest()`'s output as a
+        // stand-in for "this word has zero postings" -- `qqqzzz wwwxxx`
+        // must still show up here even though `suggest()` says nothing
+        // about either.
+        let index = corpus(&[("a.md", "stemming and stemmer")]);
+        let q = compile("qqqzzz wwwxxx");
+        assert!(index.suggest(&q).is_empty(), "no close candidates exist");
+        let mut without = index.words_without_postings(&q);
+        without.sort();
+        assert_eq!(without, vec!["qqqzzz".to_owned(), "wwwxxx".to_owned()]);
+
+        // A word that does have postings is absent from the list.
+        let q2 = compile("stemmer qqqzzz");
+        assert_eq!(index.words_without_postings(&q2), vec!["qqqzzz".to_owned()]);
+    }
+
+    #[test]
+    fn did_you_mean_orders_by_damerau_levenshtein_then_docs() {
+        // UX-1 / DEC-357: the query is one adjacent-transposition away from
+        // two different dictionary terms (Damerau distance 1 each) and two
+        // plain substitutions away from a third (Damerau distance 2). Plain
+        // (non-Damerau) Levenshtein rates all three equally far (2 edits,
+        // same length), which is exactly the tie the old ranking broke on
+        // document frequency rather than true edit distance — so the
+        // Damerau-2 term, given far more documents, must NOT outrank either
+        // Damerau-1 term; and between the two Damerau-1 terms, the one with
+        // more documents must come first.
+        fn docs(word: &'static str, n: usize) -> Vec<(String, &'static str)> {
+            (0..n).map(|i| (format!("{word}-{i}.md"), word)).collect()
+        }
+        let mut pairs: Vec<(String, &str)> = Vec::new();
+        pairs.extend(docs("qxwyzt", 5)); // Damerau 1 (transpose pos 2,3), more docs
+        pairs.extend(docs("qwxytz", 2)); // Damerau 1 (transpose pos 5,6), fewer docs
+        pairs.extend(docs("qwxyab", 20)); // Damerau 2 (two substitutions), most docs
+        let docs_ref: Vec<(&str, &str)> = pairs.iter().map(|(p, b)| (p.as_str(), *b)).collect();
+        let index = corpus(&docs_ref);
+
+        let q = compile("qwxyzt");
+        assert!(index.score_compiled(&q).is_empty());
+        let suggestions = index.suggest(&q);
+        assert_eq!(suggestions.len(), 1, "{suggestions:?}");
+        let ranked: Vec<_> = suggestions[0]
+            .candidates
+            .iter()
+            .map(|c| (c.term.as_str(), c.docs))
+            .collect();
+        assert_eq!(
+            ranked,
+            vec![("qxwyzt", 5), ("qwxytz", 2), ("qwxyab", 20)],
+            "Damerau distance must beat document frequency as the primary key"
+        );
+    }
+
+    #[test]
+    fn corrected_query_fixes_every_misspelled_term() {
+        // UX-1 / DEC-357: a query with two misspelled words used to have
+        // only the first one corrected, so the hinted command still
+        // returned nothing even though `suggestions` carried both fixes.
+        let index = corpus(&[
+            ("a.md", "ostrich kangaroo"),
+            ("b.md", "ostrich only"),
+            ("c.md", "kangaroo only"),
+        ]);
+        let q = compile("ostrch kangroo");
+        assert!(index.score_compiled(&q).is_empty());
+        let suggestions = index.suggest(&q);
+        assert_eq!(suggestions.len(), 2, "{suggestions:?}");
+        assert_eq!(
+            corrected_query(&q, &suggestions).as_deref(),
+            Some("ostrich kangaroo")
+        );
+        assert!(
+            !index
+                .score_compiled(&compile("ostrich kangaroo"))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn corrected_query_fixes_a_repeated_misspelled_word() {
+        // Review fix (SHOULD-FIX 4): `suggest()` dedups by raw term, so a
+        // word repeated in the query had only one `TermSuggestion`, and
+        // `corrected_query`'s old `.find()` (singular) corrected only the
+        // *first* occurrence, leaving the second one typo'd:
+        // `ostrch ostrch kangroo` -> `'ostrich ostrch kangaroo'`.
+        let index = corpus(&[
+            ("a.md", "ostrich kangaroo"),
+            ("b.md", "ostrich only"),
+            ("c.md", "kangaroo only"),
+        ]);
+        let q = compile("ostrch ostrch kangroo");
+        let suggestions = index.suggest(&q);
+        assert_eq!(suggestions.len(), 2, "{suggestions:?}");
+        assert_eq!(
+            corrected_query(&q, &suggestions).as_deref(),
+            Some("ostrich ostrich kangaroo")
+        );
+    }
+
+    #[test]
+    fn did_you_mean_reaches_a_misspelled_word_inside_a_phrase() {
+        // UX-1 / DEC-357: only the plain-word compile path used to register
+        // a `QueryWord` for did-you-mean, so a typo inside a quoted phrase
+        // (`"stale indx"`) silently got `suggestions: null` instead of a fix.
+        let index = corpus(&[
+            ("a.md", "stale index repair"),
+            ("b.md", "stale bread"),
+            ("c.md", "index of contents"),
+        ]);
+        let q = compile(r#""stale indx""#);
+        assert!(index.score_compiled(&q).is_empty());
+        let suggestions = index.suggest(&q);
+        assert_eq!(suggestions.len(), 1, "{suggestions:?}");
+        assert_eq!(suggestions[0].term, "indx");
+        assert_eq!(suggestions[0].candidates[0].term, "index");
+        assert_eq!(
+            corrected_query(&q, &suggestions).as_deref(),
+            Some(r#""stale index""#)
+        );
+    }
+
+    #[test]
     fn empty_negated_phrase_negates_nothing() {
         let index = corpus(&[("a.md", "snapshot index"), ("b.md", "other words")]);
         assert_eq!(compile("-\"\" snapshot").root, compile("snapshot").root);
@@ -2117,7 +2581,12 @@ mod tests {
                 start: 0,
                 end: 2,
             });
-            Parser { lexemes, pos: 0 }.parse_and(0)
+            Parser {
+                lexemes,
+                pos: 0,
+                warnings: QueryWarnings::default(),
+            }
+            .parse_and(0)
         };
         let two = parse_lexemes(2).unwrap();
         assert_eq!(
@@ -2152,6 +2621,33 @@ mod tests {
         assert!(hits(&index, "zzzzz*").is_empty(), "no fallback hit");
         let m = SnippetMatcher::from_compiled(&compile("configuration*"));
         assert_eq!(m.coverage(&tokenize("configuration here", &en())), 1);
+    }
+
+    #[test]
+    fn prefix_unions_raw_match_with_stem_fallback() {
+        // BUG-10 / DEC-355's sibling fix: a one-document typo that happens
+        // to share the raw prefix ("configurationon" starts with
+        // "configuration") used to count as "the raw prefix matched
+        // something", which suppressed the stem fallback entirely and made
+        // `configuration*` miss every document that only has the ordinary
+        // word "configuration" (stem `configur`). The two must union.
+        let index = corpus(&[
+            ("a.md", "configuration file"),
+            ("b.md", "configurationon typo"),
+            ("c.md", "unrelated"),
+        ]);
+        let mut found = hits(&index, "configuration*");
+        found.sort();
+        assert_eq!(
+            found,
+            vec!["a.md".to_owned(), "b.md".to_owned()],
+            "configuration* must find both the stem match (a.md) and the raw-prefix typo match (b.md)"
+        );
+        // config* already found both via the stem alone; union must not
+        // regress it (and must not double-count a term matched by both).
+        let mut config_found = hits(&index, "config*");
+        config_found.sort();
+        assert_eq!(config_found, vec!["a.md".to_owned(), "b.md".to_owned()]);
     }
 
     #[test]

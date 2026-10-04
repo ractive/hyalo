@@ -2213,3 +2213,47 @@ fn empty_body_pattern_note_is_silenced_by_quiet_mode() {
         "-q must silence this advisory even on a terminal"
     );
 }
+
+// -- argv_has_concatenated_short_flag (BUG-5 / DEC-356, review fix) --
+
+#[test]
+fn argv_detects_concatenated_section_and_tag_short_flags() {
+    let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert!(argv_has_concatenated_short_flag(&s(&[
+        "hyalo",
+        "find",
+        "-snapshot"
+    ])));
+    assert!(argv_has_concatenated_short_flag(&s(&[
+        "hyalo",
+        "find",
+        "-tag:iteration"
+    ])));
+    assert!(argv_has_concatenated_short_flag(&s(&[
+        "hyalo", "find", "-sqlite"
+    ])));
+}
+
+#[test]
+fn argv_ignores_separate_and_long_forms() {
+    let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    // Short flag with a separately-given value: legitimate `-s Task`.
+    assert!(!argv_has_concatenated_short_flag(&s(&[
+        "hyalo", "find", "-s", "Task"
+    ])));
+    // Long form, even with no PATTERN.
+    assert!(!argv_has_concatenated_short_flag(&s(&[
+        "hyalo",
+        "find",
+        "--section",
+        "Task"
+    ])));
+    // Bare short flag, nothing concatenated.
+    assert!(!argv_has_concatenated_short_flag(&s(&[
+        "hyalo", "find", "-s"
+    ])));
+    // A PATTERN or other token entirely is not a short flag at all.
+    assert!(!argv_has_concatenated_short_flag(&s(&[
+        "hyalo", "find", "snapshot"
+    ])));
+}

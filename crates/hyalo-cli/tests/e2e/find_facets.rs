@@ -295,6 +295,23 @@ fn empty_property_key_exits_1() {
     );
 }
 
+/// BUG-18: a second ':' is not a key with a colon in it (dot-paths use '.',
+/// not ':') -- it is almost always `property:` typed with the wrong
+/// separator, and must be rejected like `property:` itself rather than
+/// accepted as a literal key.
+#[test]
+fn second_colon_in_property_facet_exits_1() {
+    let tmp = vault();
+    let (_, output) = run(&tmp, &["find", "--facet", "property:status:extra"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let error = json["error"].as_str().unwrap();
+    assert!(
+        error.contains("unknown facet") && error.contains("property:<KEY>"),
+        "{json}"
+    );
+}
+
 #[test]
 fn text_mode_prints_a_facet_block_after_results() {
     let tmp = vault();
