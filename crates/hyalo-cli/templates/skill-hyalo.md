@@ -695,6 +695,32 @@ Flags that only `--help` mentions, worth knowing:
 - **`config` reports a broken config rather than failing.** `results.malformed` /
   `results.parse_error` mean every other value shown is a built-in default.
 - **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.
+- **Anchor fix writes the right fragment form** (DEC-351, iter-311): a wikilink anchor fix gets
+  the heading TEXT (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug
+  (`note.md#3-deploy-steps`) — Obsidian only matches a wikilink fragment against heading text,
+  never a slug. `links fix` and `find --broken-links` share one anchor-suggestion chooser; a
+  deferred anchor fix carries that `suggested_fragment`, and the `Fixable:` text line counts
+  anchor fixes too, so it cannot read 0 next to an "Apply N fixes" hint.
+- **A fragment also resolves against an explicit HTML anchor** (DEC-353, iter-311):
+  `<a id="x">`, `<a name="x">`, `<h1 id="x">`…`<h6 id="x">` are valid targets, matched
+  byte-for-byte (case-sensitive) against the id/name value, independent of any ATX heading.
+  `find --broken-links`, HYALO008 and `links fix` all take the combined check.
+- **`mv` rewrites bare attachment/embed links too** (DEC-352, iter-311): `[img](img.png)`,
+  `![embed](img.png)` and `[cfg](.gitignore)` are rebased on a cross-directory move exactly
+  like the `.md` sibling, when they resolve to a real file. The vault-wide bare-attachment
+  read-side fallback is unchanged — that is genuine Obsidian semantics, not a bug.
+- **Wikilink resolution folds Unicode composition** (DEC-354, iter-311): `[[Café NFD]]`
+  (precomposed) resolves a file named with decomposed accents and vice versa, matching
+  Obsidian; `mv`/`links fix` propose no rewrite for a target differing only in composition.
+- **A site-absolute bare `/` resolves to the vault root** (iter-311): `[x](/)` resolves to
+  `index.md` when it exists, consistent with `/dir` resolving to `dir/index.md`.
+- **`links fix`'s text rendering shows the truthful write** (iter-311): case-mismatch,
+  relocation, fuzzy and certain-fix text lines show `emitted_target`, not the vault-relative
+  `new_target` a wikilink write never puts on disk verbatim (a wikilink always drops `.md`).
+- **`--apply-fuzzy` without `--apply` never claims a write** (iter-311): `fuzzy_applied` is
+  `false` on every dry run; the text distinguishes "never opted in — pass --apply-fuzzy" from
+  "opted in but this is a dry run — pass --apply". A `[[<placeholder>]]` angle-bracket target
+  joins the `templated` bucket, never offered as a fuzzy candidate.
 
 ## Schema & Lint
 
