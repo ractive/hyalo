@@ -22,8 +22,11 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      - dependency-name: ractive/release-workflows
-      - dependency-name: ractive/setup-hyalo
+      # Dependabot names a reusable workflow by its full path
+      # (ractive/release-workflows/.github/workflows/release.yml), so the
+      # patterns need the trailing wildcard (PR #367 slipped through without it).
+      - dependency-name: "ractive/release-workflows*"
+      - dependency-name: "ractive/setup-hyalo*"
     groups:
       github-actions:
         update-types: [minor, patch]
@@ -36,6 +39,9 @@ updates:
       # Held at 0.0.23 on purpose (see the comment in Cargo.toml): newer
       # releases change how user frontmatter parses.
       - dependency-name: serde-saphyr
+      # mdbook-lint-core 0.16.x hands comrak 0.21 AST nodes to hyalo-mdlint's
+      # rules, so comrak can only move together with mdbook-lint (PR #366).
+      - dependency-name: comrak
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
