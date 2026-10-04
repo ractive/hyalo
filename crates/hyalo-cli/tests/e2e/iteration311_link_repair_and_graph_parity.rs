@@ -525,3 +525,69 @@ fn batch_mv_rewrites_bare_attachment_links_too() {
     let content = std::fs::read_to_string(tmp.path().join("archive/e.md")).unwrap();
     assert_eq!(content, "[img](../notes/img.png)\n");
 }
+
+// ---------------------------------------------------------------------------
+// BUG-9 (DEC-353): `<a id="x">`, `<a name="x">` and `<hN id="x">` are anchor
+// targets for resolution, HYALO008, and `links fix` -- matched byte-for-byte
+// against the id/name value, independent of any ATX heading.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_html_anchors_resolve_and_only_the_missing_one_is_broken() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "<a id=\"legacy-anchor\"></a>\n\n<a name=\"named-anchor\"></a>\n\n<h2 id=\"html-heading\">A heading</h2>\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "[[target#legacy-anchor]]\n[[target#named-anchor]]\n[[target#html-heading]]\n[[target#missing-id]]\n",
+    );
+
+    let links = find_links(tmp.path(), "source.md");
+    let links = links.as_array().unwrap();
+    for (i, link) in links.iter().take(3).enumerate() {
+        assert_ne!(
+            link["broken_anchor"].as_bool(),
+            Some(true),
+            "line {}: {:?}",
+            i + 1,
+            link
+        );
+    }
+    assert_eq!(links[3]["broken_anchor"], true, "{:?}", links[3]);
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["lint", "--rule", "HYALO008", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["results"]["violations"], 1,
+        "only #missing-id should violate HYALO008: {value:?}"
+    );
+
+    let fix = links_fix(tmp.path(), &[]);
+    assert_eq!(fix["broken_anchors"], 1, "{fix:?}");
+    assert_eq!(fix["anchor_fixable"], 0, "{fix:?}");
+}
+
+#[test]
+fn explicit_html_anchor_id_match_is_case_sensitive() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "<a id=\"Legacy-Anchor\"></a>\n");
+    write_md(tmp.path(), "source.md", "[[target#legacy-anchor]]\n");
+
+    let links = find_links(tmp.path(), "source.md");
+    assert_eq!(
+        links[0]["broken_anchor"], true,
+        "an HTML id is matched byte-for-byte, not case-folded: {links:?}"
+    );
+}

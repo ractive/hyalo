@@ -145,7 +145,11 @@ pub fn plan_anchor_fixes_filtered(
             let Some(target_entry) = index.get(&target) else {
                 continue;
             };
-            if fragment_matches_headings(fragment, &target_entry.sections) {
+            if crate::anchor::fragment_matches_headings_or_explicit_anchors(
+                fragment,
+                &target_entry.sections,
+                &target_entry.explicit_anchor_ids,
+            ) {
                 if (crate::anchor::is_templated_heading(fragment)
                     || target_entry.sections.iter().any(|section| {
                         section

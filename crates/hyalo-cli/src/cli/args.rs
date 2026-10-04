@@ -2311,9 +2311,12 @@ Repeatable (AND).\n\
               - HYALO006: broken file targets (warning; strict promotes to error)\n\
               - HYALO008: broken heading anchors on resolved document targets, including\n\
                          same-file and configured frontmatter wikilinks (warning; strict\n\
-                         promotes unless severity is explicitly configured). Scoped lint\n\
-                         keeps vault-wide targets. Repair with links fix after reviewing\n\
-                         the preview and applying with --apply.\n\
+                         promotes unless severity is explicitly configured). An explicit\n\
+                         HTML anchor (<a id=\"x\">, <a name=\"x\">, <h2 id=\"x\">) is also a\n\
+                         valid target, matched byte-for-byte against the id/name value\u{2014}\n\
+                         not just an ATX heading. Scoped lint keeps vault-wide targets.\n\
+                         Repair with links fix after reviewing the preview and applying\n\
+                         with --apply.\n\
               - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
                          oversized scalar) — error by default; the file still counts in\n\
                          `files_checked` so a corrupt file can never leave a green lint.\n\

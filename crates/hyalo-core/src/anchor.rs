@@ -60,6 +60,10 @@
 //! references. hyalo does not index block ids, so these are **skipped** — never
 //! reported broken.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 use crate::types::OutlineSection;
 
 /// Return `true` when a fragment is an Obsidian block reference (`^block-id`)
@@ -67,6 +71,94 @@ use crate::types::OutlineSection;
 #[must_use]
 pub fn is_block_ref(fragment: &str) -> bool {
     fragment.starts_with('^')
+}
+
+// ---------------------------------------------------------------------------
+// Explicit HTML anchors (BUG-9, iteration 311, DEC-353)
+// ---------------------------------------------------------------------------
+
+/// Matches `<a id="x">`/`<a name="x">` and `<h1>`–`<h6> id="x">` tags and
+/// captures the id/name value — GitHub and MDN both let a fragment target an
+/// explicit HTML anchor this way, independent of any ATX heading. Double
+/// quotes only (the shape every real-world sample in the dogfood report
+/// used); a single-quoted attribute is a documented gap, not a crash.
+static EXPLICIT_ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i:<a)\b[^>]*\b(?i:id|name)\s*=\s*"([^"]*)"|(?i:<h[1-6])\b[^>]*\bid\s*=\s*"([^"]*)""#,
+    )
+    .expect("EXPLICIT_ANCHOR_RE is a fixed, tested pattern")
+});
+
+/// Explicit HTML anchor ids/names named on one source line, in the order
+/// they appear. The id/name attribute VALUE is matched byte-for-byte
+/// (case-sensitive): unlike a heading slug, an HTML `id` is a literal
+/// identifier, not prose to be folded.
+pub fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &str> {
+    EXPLICIT_ANCHOR_RE
+        .captures_iter(line)
+        .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()))
+}
+
+/// Whether `fragment` names one of a target file's explicit HTML anchors
+/// (DEC-353). Compared byte-for-byte against the raw `id`/`name` attribute
+/// value stored in the index — no percent-decoding, no case fold, matching
+/// how a browser (and GitHub/MDN) resolves an explicit id.
+#[must_use]
+pub fn fragment_matches_explicit_anchor(fragment: &str, explicit_anchor_ids: &[String]) -> bool {
+    explicit_anchor_ids.iter().any(|id| id == fragment)
+}
+
+/// [`fragment_matches_headings`] extended with a target's explicit HTML
+/// anchors (DEC-353) -- the combined check every anchor-resolution call site
+/// (`find --broken-links`, HYALO008, `links fix`) should use instead of the
+/// heading-only function.
+#[must_use]
+pub fn fragment_matches_headings_or_explicit_anchors(
+    fragment: &str,
+    sections: &[OutlineSection],
+    explicit_anchor_ids: &[String],
+) -> bool {
+    fragment_matches_headings(fragment, sections)
+        || fragment_matches_explicit_anchor(fragment, explicit_anchor_ids)
+}
+
+/// A [`crate::scanner::FileVisitor`] that collects explicit HTML anchor
+/// ids/names (BUG-9, iteration 311, DEC-353) across a file's body, in
+/// document order. Run alongside `SectionScanner` during a scan; the
+/// scanner's fence tracking already keeps `on_body_line` from firing inside a
+/// fenced code block, so a `<a id="x">` shown as a *sample* in a fenced
+/// snippet is never collected as a real anchor.
+#[derive(Debug, Default)]
+pub struct ExplicitAnchorScanner {
+    ids: Vec<String>,
+}
+
+impl ExplicitAnchorScanner {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Consume and return the collected ids/names.
+    #[must_use]
+    pub fn into_ids(self) -> Vec<String> {
+        self.ids
+    }
+}
+
+impl crate::scanner::FileVisitor for ExplicitAnchorScanner {
+    fn on_body_line(
+        &mut self,
+        raw: &str,
+        _cleaned: &str,
+        _line_num: usize,
+    ) -> crate::scanner::ScanAction {
+        if raw.contains('<') {
+            self.ids
+                .extend(explicit_anchor_ids_in_line(raw).map(str::to_owned));
+        }
+        crate::scanner::ScanAction::Continue
+    }
 }
 
 /// Whether heading (or fragment) text carries a *template expression* rather

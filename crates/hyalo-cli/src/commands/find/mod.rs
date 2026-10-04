@@ -35,10 +35,12 @@ use hyalo_core::types::{
 use build::{TitleMatcher, extract_title, matches_task_filter};
 use sort::{apply_sort, presort_index_entries};
 
-/// Memoized heading outlines for link targets the active index does not hold
-/// (iter-273, NAMED-3). `None` marks a target that could not be read, so a
-/// failed read is attempted once rather than once per link.
-type AnchorSectionsCache = std::cell::RefCell<HashMap<String, Option<Vec<OutlineSection>>>>;
+/// Memoized heading outlines plus explicit HTML anchor ids (BUG-9, DEC-353)
+/// for link targets the active index does not hold (iter-273, NAMED-3).
+/// `None` marks a target that could not be read, so a failed read is
+/// attempted once rather than once per link.
+type AnchorSectionsCache =
+    std::cell::RefCell<HashMap<String, Option<(Vec<OutlineSection>, Vec<String>)>>>;
 
 /// The broken-anchor verdict for `#fragment` in `target_path`, plus DEC-268's
 /// unique-prefix suggestion, derived from one section list so the two can never
@@ -54,8 +56,16 @@ fn anchor_verdict(
     target_path: &str,
     fragment: &str,
 ) -> (bool, Option<String>) {
-    fn verdict(sections: &[OutlineSection], fragment: &str) -> (bool, Option<String>) {
-        let broken = !hyalo_core::anchor::fragment_matches_headings(fragment, sections);
+    fn verdict(
+        sections: &[OutlineSection],
+        explicit_anchor_ids: &[String],
+        fragment: &str,
+    ) -> (bool, Option<String>) {
+        let broken = !hyalo_core::anchor::fragment_matches_headings_or_explicit_anchors(
+            fragment,
+            sections,
+            explicit_anchor_ids,
+        );
         let suggested = broken
             .then(|| hyalo_core::anchor::unique_heading_by_prefix(fragment, sections))
             .flatten()
@@ -64,18 +74,18 @@ fn anchor_verdict(
     }
 
     if let Some(entry) = index.get(target_path) {
-        return verdict(&entry.sections, fragment);
+        return verdict(&entry.sections, &entry.explicit_anchor_ids, fragment);
     }
     let mut cache = cache.borrow_mut();
-    let sections = cache.entry(target_path.to_owned()).or_insert_with(|| {
-        hyalo_core::index::scan_file_sections(&canonical_dir.join(target_path)).ok()
+    let scanned = cache.entry(target_path.to_owned()).or_insert_with(|| {
+        hyalo_core::index::scan_file_anchors(&canonical_dir.join(target_path)).ok()
     });
     // A target that resolved but cannot be re-read (deleted between the two
     // steps, or unreadable) keeps the historic "not broken" answer rather than
     // inventing a broken anchor out of an I/O failure.
-    sections
-        .as_deref()
-        .map_or((false, None), |s| verdict(s, fragment))
+    scanned.as_ref().map_or((false, None), |(sections, ids)| {
+        verdict(sections, ids, fragment)
+    })
 }
 
 /// Strip hyalo's internal `(?i)` prefix out of a regex engine error message
@@ -1507,10 +1517,12 @@ pub(crate) fn find_prepared(
                     // this does not change those verdicts.
                     .chain(entry.self_anchors.iter().map(|anchor| {
                         let fragment = &anchor.fragment;
-                        let broken_anchor = !hyalo_core::anchor::fragment_matches_headings(
-                            fragment,
-                            &entry.sections,
-                        );
+                        let broken_anchor =
+                            !hyalo_core::anchor::fragment_matches_headings_or_explicit_anchors(
+                                fragment,
+                                &entry.sections,
+                                &entry.explicit_anchor_ids,
+                            );
                         LinkInfo {
                             target: String::new(),
                             path: Some(entry.rel_path.clone()),

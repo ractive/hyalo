@@ -461,7 +461,11 @@ pub fn count_broken_anchors(
             .self_anchors
             .iter()
             .filter(|anchor| {
-                !crate::anchor::fragment_matches_headings(&anchor.fragment, &entry.sections)
+                !crate::anchor::fragment_matches_headings_or_explicit_anchors(
+                    &anchor.fragment,
+                    &entry.sections,
+                    &entry.explicit_anchor_ids,
+                )
             })
             .count();
 
@@ -479,7 +483,11 @@ pub fn count_broken_anchors(
             );
             if let Some(target_path) = resolved
                 && let Some(target_entry) = index.get(&target_path)
-                && !crate::anchor::fragment_matches_headings(fragment, &target_entry.sections)
+                && !crate::anchor::fragment_matches_headings_or_explicit_anchors(
+                    fragment,
+                    &target_entry.sections,
+                    &target_entry.explicit_anchor_ids,
+                )
             {
                 count += 1;
             }
@@ -2108,6 +2116,7 @@ mod tests {
                     tasks: Vec::new(),
                     links: links.clone(),
                     self_anchors: Vec::new(),
+                    explicit_anchor_ids: Vec::new(),
                     bm25_tokens: None,
                     bm25_language: None,
                     bm25_tokenizer_version: None,
@@ -3806,6 +3815,7 @@ See [broken](old-name.md) here.
             tasks: Vec::new(),
             links,
             self_anchors: Vec::new(),
+            explicit_anchor_ids: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
@@ -3859,6 +3869,7 @@ See [broken](old-name.md) here.
                 kind: crate::links::LinkKind::Wikilink,
                 label: None,
             }],
+            explicit_anchor_ids: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,

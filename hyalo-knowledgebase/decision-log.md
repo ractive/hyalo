@@ -7307,6 +7307,52 @@ other broken link.
 
 **Where:** `commands::summary` (the `link_health` block). See
 [[iterations/iteration-311-link-repair-and-graph-parity]].
+
+## DEC-353: an explicit HTML anchor (`<a id>`, `<a name>`, `<hN id>`) is a valid fragment target (2026-10-04)
+
+**Decision.** A link fragment now resolves against two things in the target
+document, not just its ATX headings: `anchor::fragment_matches_headings_or_explicit_anchors`
+also checks the file's explicit HTML anchor ids/names — `<a id="x"></a>`,
+`<a name="x"></a>`, `<h1 id="x">`…`<h6 id="x">` — matched **byte-for-byte**
+against the `id`/`name` attribute value. This is deliberately not the
+heading matcher's case-insensitive, slug-folding comparison: an HTML `id` is
+a literal identifier a browser resolves exactly, not prose. Every
+anchor-resolution surface takes the combined check: `find --broken-links`
+(including same-file anchors), HYALO008, and `links fix`'s broken-anchor
+count and deferral planning (an explicit anchor is never offered a numbered-
+heading "repair" — it already resolves, so it is simply not broken).
+
+An `IndexEntry` grows one field, `explicit_anchor_ids: Vec<String>`,
+collected by a new `ExplicitAnchorScanner` visitor run alongside the
+existing `SectionScanner` during `create-index` and every disk scan.
+Defaulted and skipped-when-empty in the snapshot, so an older index keeps
+loading; a vault with no explicit HTML anchors pays one extra regex pass
+over lines that already contain `<y>` and nothing else.
+
+**Why.** GitHub and MDN both let a document name an anchor explicitly,
+independent of the heading that happens to render there — `id=` is the
+HTML/DOM anchor primitive underneath every rendered heading's own slug.
+Three of GitHub Docs' 374 broken anchors in the dogfood sweep were exactly
+this: a real, working anchor hyalo reported dead because no heading's slug
+matched it. The attribute match stays case-sensitive and un-decoded on
+purpose, mirroring how a browser's own fragment navigation behaves (and
+unlike the heading matcher, which already has its own, separate
+Obsidian-compatible case-folding and slug-equivalence rules — DEC-060/075).
+A single-quoted attribute (`<a id='x'>`) is a known, documented gap: every
+real-world sample in the dogfood report used double quotes, and the
+extraction regex only matches those.
+
+**Rejected: folding the id comparison the way heading slugs are folded.**
+HTML's `id`/`name` attributes are case-sensitive identifiers under the spec
+and in every browser's fragment-navigation behavior; silently accepting
+`#Legacy-Anchor` for an id written `legacy-anchor` would resolve a link
+hyalo should report broken, since the browser itself would not scroll there.
+
+**Where:** `anchor::{ExplicitAnchorScanner, explicit_anchor_ids_in_line,
+fragment_matches_explicit_anchor, fragment_matches_headings_or_explicit_anchors}`,
+`index::{IndexEntry::explicit_anchor_ids, scan_file_anchors, scan_slice_anchors}`,
+`hyalo_mdlint::profiles::link::{LinkLintContext, check_broken_anchors}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
 ## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
 
 **Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the
