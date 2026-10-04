@@ -42,3 +42,17 @@ iteration fixes the P1 Rust items, the P2 Rust items and the P3 hint items.
 - [x] Help texts, `.claude/CLAUDE.md` claims and templates agree with the binary
 - [x] fmt, clippy `-D warnings`, `cargo test --workspace`, `just gates`, `cargo deny check` and `hyalo lint --strict` are green
 - [x] CI green on Linux, macOS and Windows
+
+## Measurements
+
+MDN `files/en-us` (14k notes), release build, best of 3, after the review round
+(DEC-342 ignore-drop count reuses the existing walk and is stored in the snapshot):
+
+| Command | Before 306 | First 306 push | Final |
+| --- | --- | --- | --- |
+| `summary` (disk) | 1.55 s | 2.0 s | 1.70 s |
+| `summary --index-file` | 0.49 s | 0.93 s | 0.40 s |
+
+The disk scan still pays one extra gitignore-disabled walk to count ignored notes;
+a single-pass classification is not reachable through the `ignore` crate public API
+(DEC-342 records the rejected alternative).
