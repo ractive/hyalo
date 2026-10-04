@@ -276,6 +276,13 @@ and this project adheres to
   `"call get"~1`) while `"name here"` matches, and a quoted
   `"error-handling"` misses prose `error handling` while the bare term finds
   it. Ligatures such as `Œ` do not fold to `oe`.
+- **Breaking: snapshot format 5.** Indexes written by earlier versions
+  (including this release's own 4) are refused (the run falls back to a disk
+  scan with a warning); rebuild them with `hyalo create-index`. A v4 entry
+  reused as-is by incremental `create-index` (unchanged size/mtime) would
+  otherwise never gain the new `explicit_anchor_ids` field, so an upgraded
+  binary serving an un-rebuilt v4 index would silently under-report broken
+  heading anchors (DEC-353).
 - The Codex plugin manifest now carries the hyalo version (0.24.1, was 0.1.0)
   and is checked against the workspace version like the other manifests
   (DEC-340).

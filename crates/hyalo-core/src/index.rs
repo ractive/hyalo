@@ -402,7 +402,11 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | older entries retain truncated link targets |
 /// | 4 | iter-304 | tokenizer v4 (folding, identifier parts, code-block
 /// |   |          | setting) and BM25F per-field postings (DEC-336/337) |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 4;
+/// | 5 | iter-311 | `IndexEntry.explicit_anchor_ids` (DEC-353) — a v4 entry
+/// |   |          | reused by an incremental `create-index` (unchanged
+/// |   |          | size/mtime) never gets anchor ids scanned, so a v4
+/// |   |          | snapshot must be rebuilt rather than silently trusted |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
