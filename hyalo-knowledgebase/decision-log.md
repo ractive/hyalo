@@ -7116,8 +7116,9 @@ changed:
    its byte span, goes to `resolve_core_int`, which accepts YAML 1.2 core
    `[-+]?[0-9]+`. A match becomes that integer (`01234` → 1234). Anything
    else, including a value outside `i64`/`u64`, stays the float the parser
-   produced. Quoted scalars are strings before this rule runs, and a written
-   `12.0` stays a float. Every frontmatter parse goes through these two
+   produced. Quoted scalars are strings before this rule runs, a written
+   `12.0` stays a float, and so does an explicitly tagged `!!float 1`: a
+   scalar whose span follows a tag is never re-resolved (`follows_tag`). Every frontmatter parse goes through these two
    functions, never through `serde_saphyr::from_str*` directly.
 2. **Quoting on write.** `hyalo_serializer_options_for` turns on `yaml_12`,
    so 1.x does not quote what Obsidian writes plain (`2026-01-01`, `12:30`).
@@ -7126,8 +7127,12 @@ changed:
    would write plain in `serde_saphyr::DoubleQuoted`: a YAML 1.1 boolean
    spelling (`yes`, `off`, `y`), a `#` that does not start a comment
    (`a#b`, `C#`), and a digit run with underscores (`1_000`). Under
-   `quote_all` nothing is wrapped. Mapping keys go through serde-saphyr's key
-   path, which ignores the wrapper.
+   `quote_all` nothing is wrapped. serde-saphyr's key emitter ignores that
+   wrapper, so `requote_legacy_keys` puts the quotes back on such keys
+   (`"yes": v`, `"on":`, `"C#":`) at every depth, because a YAML 1.1 reader
+   (PyYAML, go-yaml v2, Jekyll) takes a plain `on:` for the boolean key
+   `true`. It rewrites only key lines outside block scalars, and it keeps the
+   rewrite only if parsing it back gives the same value.
 
 The options set every field 1.x added. `emit_comments: false` validates
 comments without buffering them, so the 32-event comment lookahead
@@ -7177,10 +7182,11 @@ under Consequences.
 - Integer keys are compared by value: `0xB:` and `11:` in one mapping are a
   duplicate key. Leading-zero spellings are not integers there, so `01:` and
   `1:` stay distinct.
-- The emitter quotes `---`, `...`, `--- x` and `0X1F`. 0.0.23 wrote them
-  plain, and a plain `---:` key opens a new document. It writes the keys
-  `yes`/`no`/`on`/`off`/`y`/`n` and keys with an inner `#` without quotes,
-  which read back as the same strings.
+- The emitter quotes `---`, `...`, `--- x`, `0X1F` and a `<<` key. 0.0.23
+  wrote them plain, but a plain `---:` key opens a new document, a plain
+  `<<:` key is a merge key, and a plain `0X1F` reads back as 31. So
+  `set k=0X1F` now stores the string it was given.
+- `!!float 1` parses as 1.0. 0.0.23 refused it.
 
 `Options`, `Budget` and `SerializerOptions` are `#[non_exhaustive]` in 1.x,
 so they are built by assigning fields on `default()`. The `serde-saphyr`

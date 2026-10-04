@@ -207,10 +207,12 @@ and this project adheres to
   read as written. They used to come back as `".nan"` / `".inf"`, which
   changed four MDN titles. A tab after a colon (`a:<TAB>value`) and a tagged
   quoted scalar (`!!int '5'`) now parse instead of making the frontmatter
-  unparsable. Integer keys are compared by value, so `0xB:` and `11:` in
-  one mapping are a duplicate key. The emitter now quotes `---`, `...` and
-  `0X1F`, which it used to write plain, and writes the keys `yes`/`no`/`on`/
-  `off`/`y`/`n` and keys with an inner `#` without quotes.
+  unparsable. An explicitly tagged `!!float 1` is the float 1.0. Integer
+  keys are compared by value, so `0xB:` and `11:` in one mapping are a
+  duplicate key. The emitter now quotes `---`, `...`, `0X1F` and a `<<` key
+  (which YAML reads as a merge key), all of which it used to write plain. So
+  `set k=0X1F` stores the string `"0X1F"`, where it used to write `k: 0X1F`,
+  which read back as 31.
 - The internal `xtask` tooling moved to syn 3. Other Rust dependencies, the npm package's dev
   dependencies, and the CI actions (`actions/checkout` v7,
   `actions/setup-node` v7, `actions/upload-artifact` v7,

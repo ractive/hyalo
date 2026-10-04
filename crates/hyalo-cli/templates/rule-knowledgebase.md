@@ -313,6 +313,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `<!-- markdownlint-disable no-hard-tabs -->` … `<!-- markdownlint-enable no-hard-tabs -->`,
   plus `-disable-line`, `-disable-next-line`, `-disable-file` and `-enable-file`, taking rule
   ids or aliases; with no ids a directive covers every rule, HYALO ones included.
+- **Frontmatter follows YAML 1.2 core** (DEC-350, iter-310): `01234` is the integer 1234, the
+  plain words `NaN`/`Infinity` stay strings (only `.nan`/`.inf` keep their string fallback), and
+  `set` keeps its old quoting except that `---`, `...` and `0X1F` are now quoted.
 - **Frontmatter closes only at column 0** (DEC-293, iter-271): an indented `  ---` inside a
   block scalar is content, not a delimiter — it used to truncate the block, dropping every key
   after it and letting the next `set` overwrite the body. A block that never closes at column 0

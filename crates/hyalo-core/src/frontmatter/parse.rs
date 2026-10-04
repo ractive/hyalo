@@ -194,6 +194,29 @@ impl<'de> serde::Deserialize<'de> for Node {
     }
 }
 
+/// Whether an emitted line ends in a block-scalar indicator (`k: |-`,
+/// `- >`), so the lines indented below it are scalar content.
+fn opens_block_scalar(line: &str) -> bool {
+    let line = line.trim_end();
+    let Some(pos) = line.rfind(' ') else {
+        return false;
+    };
+    let indicator = &line[pos + 1..];
+    let mut chars = indicator.chars();
+    matches!(chars.next(), Some('|' | '>'))
+        && chars.all(|c| matches!(c, '+' | '-') || c.is_ascii_digit())
+}
+
+/// Whether the text right before a scalar ends in a YAML tag (`!!float`,
+/// `!foo`), which then governs the scalar's type.
+fn follows_tag(before: &str) -> bool {
+    before
+        .trim_end_matches([' ', '\t'])
+        .rsplit(|c: char| c.is_whitespace() || matches!(c, '[' | '{' | ','))
+        .next()
+        .is_some_and(|token| token.starts_with('!'))
+}
+
 /// Convert a spanned node to the `serde_json::Value` the fast path would
 /// have produced, except that an integral float whose source text is a core
 /// integer becomes that integer.
@@ -209,6 +232,9 @@ fn node_to_value(node: Spanned<Node>, source: &str) -> Value {
                 .and_then(|(start, len)| {
                     let start = usize::try_from(start).ok()?;
                     let end = start.checked_add(usize::try_from(len).ok()?)?;
+                    // An explicitly tagged scalar (`!!float 1`) means what
+                    // its tag says; only an untagged one is re-resolved.
+                    (!follows_tag(source.get(..start)?)).then_some(())?;
                     source.get(start..end)
                 })
                 .and_then(resolve_core_int)
@@ -404,7 +430,94 @@ pub(super) fn emit_map<'a>(
         entries: entries.into_iter().collect(),
         quote_all,
     };
-    serde_saphyr::to_string_with_options(&map, options).map(strip_yaml_12_header)
+    let yaml = serde_saphyr::to_string_with_options(&map, options).map(strip_yaml_12_header)?;
+    Ok(requote_legacy_keys(yaml, &map.entries))
+}
+
+/// Restore 0.0.23's double quotes on mapping keys that serde-saphyr 1.x
+/// writes plain (DEC-350). Its key emitter ignores
+/// [`serde_saphyr::DoubleQuoted`] and, in `yaml_12` mode, writes `on:` and
+/// `yes:`, which YAML 1.1 readers (PyYAML, go-yaml v2) take for the boolean
+/// key `true`.
+///
+/// A key line is `<indent>[- ]*<key>:` followed by a space or the line end.
+/// The rewritten text is parsed back and kept only if it yields the same
+/// value, so a block-scalar line that merely looks like a key can never be
+/// changed. Keys with a `"` or `\` are left alone: they would need escaping,
+/// and 1.x quotes most of them already.
+fn requote_legacy_keys(yaml: String, entries: &[(&str, &Value)]) -> String {
+    fn collect<'v>(value: &'v Value, keys: &mut Vec<&'v str>) {
+        match value {
+            Value::Array(items) => items.iter().for_each(|v| collect(v, keys)),
+            Value::Object(map) => {
+                for (key, v) in map {
+                    keys.push(key);
+                    collect(v, keys);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut keys: Vec<&str> = Vec::new();
+    for &(key, value) in entries {
+        keys.push(key);
+        collect(value, &mut keys);
+    }
+    keys.retain(|k| keeps_legacy_quotes(k) && !k.contains(['"', '\\']));
+    if keys.is_empty() {
+        return yaml;
+    }
+
+    let mut out = String::with_capacity(yaml.len() + 2 * keys.len());
+    let mut changed = false;
+    // Indent of the line that opened the block scalar being skipped, if any.
+    let mut block_indent: Option<usize> = None;
+    for line in yaml.split_inclusive('\n') {
+        let body = line.trim_start_matches(' ');
+        let indent = line.len() - body.len();
+        if let Some(open) = block_indent {
+            if body.trim().is_empty() || indent > open {
+                out.push_str(line);
+                continue;
+            }
+            block_indent = None;
+        }
+        if opens_block_scalar(body) {
+            block_indent = Some(indent);
+        }
+        let mut rest = body;
+        while let Some(after) = rest.strip_prefix("- ") {
+            rest = after;
+        }
+        let prefix_len = line.len() - rest.len();
+        let hit = keys.iter().find(|key| {
+            rest.strip_prefix(**key)
+                .and_then(|r| r.strip_prefix(':'))
+                .is_some_and(|r| r.is_empty() || r.starts_with([' ', '\n', '\r']))
+        });
+        match hit {
+            Some(key) => {
+                out.push_str(&line[..prefix_len]);
+                out.push('"');
+                out.push_str(key);
+                out.push('"');
+                out.push_str(&rest[key.len()..]);
+                changed = true;
+            }
+            None => out.push_str(line),
+        }
+    }
+    if !changed {
+        return yaml;
+    }
+    let round_trips = parse_yaml_map(&out).is_ok_and(|parsed| {
+        parsed.len() == entries.len()
+            && parsed
+                .iter()
+                .zip(entries)
+                .all(|((pk, pv), &(k, v))| pk == k && pv == v)
+    });
+    if round_trips { out } else { yaml }
 }
 
 /// [`emit_map`] for a top-level sequence.
@@ -1678,7 +1791,7 @@ mod open_tests {
 mod yaml_tests {
     use super::{
         emit_map, emit_seq, has_integral_float, hyalo_serializer_options_for, keeps_legacy_quotes,
-        parse_yaml_map, parse_yaml_value, resolve_core_int,
+        opens_block_scalar, parse_yaml_map, parse_yaml_value, resolve_core_int,
     };
     use serde_json::{Value, json};
 
@@ -1789,7 +1902,7 @@ mod yaml_tests {
             assert_eq!(emit_one(&json!(input)), expected, "{input:?}");
         }
         assert_eq!(emit_one(&json!(["a#b", "x"])), "k:\n  - \"a#b\"\n  - x\n");
-        assert_eq!(emit_one(&json!({"n": "yes"})), "k:\n  n: \"yes\"\n");
+        assert_eq!(emit_one(&json!({"n": "yes"})), "k:\n  \"n\": \"yes\"\n");
         assert_eq!(emit_one(&json!(1234)), "k: 1234\n");
     }
 
@@ -1810,6 +1923,57 @@ mod yaml_tests {
         for value in ["0X1F", "---", "--- a", "..."] {
             let yaml = emit_one(&json!(value));
             assert_eq!(parse_yaml_map(&yaml).unwrap()["k"], json!(value), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_float_tag_keeps_the_float() {
+        let props =
+            parse_yaml_map("a: !!float 1\nb: !!float 01\nc: [!!float 2, 03]\nd: 04\n").unwrap();
+        assert!(props["a"].is_f64(), "{:?}", props["a"]);
+        assert!(props["b"].is_f64(), "{:?}", props["b"]);
+        assert!(props["c"][0].is_f64(), "{:?}", props["c"]);
+        assert_eq!(props["c"][1], json!(3));
+        assert_eq!(props["d"], json!(4));
+    }
+
+    fn emit_entries(entries: &[(&str, &Value)], quote_all: bool) -> String {
+        let mut options = hyalo_serializer_options_for(false, entries.iter().map(|(_, v)| *v));
+        options.quote_all = quote_all;
+        emit_map(entries.iter().copied(), options).unwrap()
+    }
+
+    /// Keys keep 0.0.23's quotes: a YAML 1.1 reader takes a plain `on:` for
+    /// the boolean key `true` (DEC-350).
+    #[test]
+    fn legacy_keys_stay_quoted() {
+        let one = json!(1);
+        assert_eq!(emit_entries(&[("yes", &one)], false), "\"yes\": 1\n");
+        assert_eq!(emit_entries(&[("on", &one)], true), "\"on\": 1\n");
+        assert_eq!(emit_entries(&[("C#", &one)], false), "\"C#\": 1\n");
+        assert_eq!(emit_entries(&[("1_000", &one)], false), "\"1_000\": 1\n");
+        let nested = json!({"off": [ {"n": "x"} ], "plain": 2});
+        assert_eq!(
+            emit_entries(&[("m", &nested)], false),
+            "m:\n  \"off\":\n    - \"n\": x\n  plain: 2\n"
+        );
+        // A block-scalar line that looks like a key is content, not a key,
+        // whatever the chomping indicator (`|` and `|-`).
+        for text in [json!("first\nyes: no\n"), json!("first\nyes: no")] {
+            let yaml = emit_entries(&[("yes", &one), ("t", &text)], false);
+            assert!(yaml.starts_with("\"yes\": 1\nt: |"), "{yaml}");
+            assert!(yaml.contains("\n  yes: no"), "content untouched: {yaml}");
+            assert_eq!(parse_yaml_map(&yaml).unwrap()["t"], text, "{yaml}");
+        }
+    }
+
+    #[test]
+    fn block_scalar_indicators_are_recognised() {
+        for line in ["t: |", "t: |-", "t: >+", "- |2", "t: |-\n"] {
+            assert!(opens_block_scalar(line), "{line:?}");
+        }
+        for line in ["t: x|", "t: -", "t: a |b", "|"] {
+            assert!(!opens_block_scalar(line), "{line:?}");
         }
     }
 

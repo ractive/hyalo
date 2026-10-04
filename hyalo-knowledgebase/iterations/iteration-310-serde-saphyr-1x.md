@@ -149,10 +149,11 @@ frontmatter maps. All 21 469 maps are byte-identical, and every emitted
 string reads back unchanged under 1.3. The remaining string differences are
 accepted, because each one quotes a value 0.0.23 wrote in a form that does
 not read back as the same string or is ambiguous: `---`, `...`, `--- x`,
-`0X1F`, a trailing space, and `<<` as a key. Plus one cosmetic change: the
-keys `yes`/`no`/`on`/`off`/`y`/`n` and keys with an inner `#` are written
-unquoted, because serde-saphyr's key path ignores the `DoubleQuoted`
-wrapper. They read back as the same strings.
+`0X1F`, a trailing space, and `<<` as a key. serde-saphyr's key emitter
+ignores the `DoubleQuoted` wrapper, so `requote_legacy_keys` restores the
+quotes on keys (`"yes":`, `"on":`, `"C#":`) after emission. It touches only
+key lines outside block scalars, and it keeps the rewrite only if parsing it
+back gives the same value (review of PR #373).
 
 ### Results
 

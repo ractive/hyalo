@@ -38,7 +38,7 @@ ignore = true
 # mdbook-lint-rulesets 0.16.0 have not moved off 0.5 (upstream
 # joshrotenberg/mdbook-lint#459). Re-checked 2026-10-03 at 0.16.2 (still
 # the latest release): unchanged. The graph `cargo deny list` checks is now
-# 166 crate versions. The other duplicates it warns about: thiserror 1
+# 157 crate versions. The other duplicates it warns about: thiserror 1
 # (mdbook-lint) vs 2 (ts-rs), strsim (mdbook-lint's darling 0.14), and syn
 # (xtask's syn 3 vs proc-macro crates on syn 1/2). serde-saphyr 1.x dropped
 # ahash / saphyr-parser-bw and with them the getrandom/r-efi duplicate
