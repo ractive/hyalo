@@ -621,3 +621,115 @@ fn wikilink_resolution_folds_unicode_normalization() {
     assert_eq!(fix["broken"], 0, "{fix:?}");
     assert_eq!(fix["case_mismatches"], 0, "{fix:?}");
 }
+
+/// Review follow-up: a link differing from the file in BOTH case AND
+/// composition is a genuine case mismatch (unlike the pure-composition case
+/// above) -- but the proposed rewrite must still be NFC, never the file's
+/// raw decomposed bytes.
+#[test]
+fn case_and_composition_mismatch_emits_nfc_not_the_files_raw_decomposed_bytes() {
+    let tmp = TempDir::new().unwrap();
+    // "Caf\u{0301}" (NFD) differs from the written "café" (NFC, lowercase)
+    // in composition AND case.
+    write_md(tmp.path(), "sub/Cafe\u{0301}.md", "# Cafe\n");
+    write_md(tmp.path(), "source.md", "[[sub/café]]\n");
+
+    let fix = links_fix(tmp.path(), &[]);
+    let plan = &fix["case_mismatch_fixes"][0];
+    assert_eq!(
+        plan["emitted_target"], "sub/Café",
+        "the emitted target must be NFC-normalised, not the file's raw \
+         decomposed bytes: {plan:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-9 review follow-up: a sample `<a id>` inside an HTML comment, a code
+// span, or a `data-id` attribute must never resolve as a real anchor; both
+// `find --broken-links` (hyalo-core) and HYALO008 (hyalo-mdlint) must agree,
+// since they share the same `ExplicitAnchorScanner`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_anchor_false_positives_are_excluded_in_find_and_hyalo008() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "<!--\n<a id=\"commented\"></a>\n-->\n\nWrite `<a id=\"inline\">` in markup.\n\n<a href=\"x\" data-id=\"dz\"></a>\n\n<a id=\"real\"></a>\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "[[target#commented]]\n[[target#inline]]\n[[target#dz]]\n[[target#real]]\n",
+    );
+
+    let links = find_links(tmp.path(), "source.md");
+    let links = links.as_array().unwrap();
+    for broken_target in ["commented", "inline", "dz"] {
+        let link = links
+            .iter()
+            .find(|l| l["fragment"] == broken_target)
+            .unwrap();
+        assert_eq!(link["broken_anchor"], true, "{link:?}");
+    }
+    let real = links.iter().find(|l| l["fragment"] == "real").unwrap();
+    assert_ne!(real["broken_anchor"].as_bool(), Some(true), "{real:?}");
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["lint", "--rule", "HYALO008", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["results"]["violations"], 3,
+        "find and HYALO008 must agree: {value:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-1 review follow-up: a heading containing `#` or `^` is deferred, never
+// written into a wikilink fragment -- Obsidian gives both characters special
+// meaning there (nested-heading-path separator, block-reference marker).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn heading_with_hash_or_caret_defers_the_wikilink_anchor_fix() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "## 1. C# basics\n\n## 7. Caret ^ thing\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "[[target#C# basics]]\n[[target#Caret ^ thing]]\n",
+    );
+
+    let fix = links_fix(tmp.path(), &[]);
+    assert_eq!(fix["anchor_fixable"], 0, "{fix:?}");
+    assert_eq!(fix["anchors_deferred"], 2, "{fix:?}");
+    let deferred = fix["deferred_anchor_fixes"].as_array().unwrap();
+    assert!(
+        deferred
+            .iter()
+            .any(|d| d["reason"].as_str().unwrap().contains('#')),
+        "{deferred:?}"
+    );
+    assert!(
+        deferred
+            .iter()
+            .any(|d| d["reason"].as_str().unwrap().contains('^')),
+        "{deferred:?}"
+    );
+
+    // Nothing was written.
+    let content = std::fs::read_to_string(tmp.path().join("source.md")).unwrap();
+    assert_eq!(content, "[[target#C# basics]]\n[[target#Caret ^ thing]]\n");
+}

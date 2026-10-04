@@ -81,7 +81,9 @@ branch build, confirmed with the final release binary.
   resolution/parsing-layer redesign, not a bug fix, and risks silently
   changing behaviour in dozens of call sites I did not have the time budget
   to audit safely in this iteration. Left the line unticked rather than
-  claim it done; flagging for its own iteration.
+  claim it done; filed as
+  [[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]] for
+  its own iteration.
 - **`check-help-drift` gate.** Could not be run to completion: it shells out
   to `cargo run -q -p hyalo-cli -- <cmd> --help` for dozens of subcommands,
   and two independent runs both hung at near-zero CPU for 8+ minutes. A
