@@ -343,3 +343,63 @@ fn site_absolute_target_equal_to_the_configured_prefix_resolves_to_root_index() 
     let links = find_links(tmp.path(), "a.md");
     assert_eq!(links[0]["path"], "index.md", "{links:?}");
 }
+
+// ---------------------------------------------------------------------------
+// UX-3: `--apply-fuzzy` (or `--min-confidence`) without `--apply` must not
+// claim anything was written. `fuzzy_applied` is false on every dry run, a
+// separate `fuzzy_requested` lets the text renderer distinguish "never
+// opted in" from "opted in but this is a dry run", and the two text lines
+// read "not written/not applied — pass --apply" in the latter case.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_fuzzy_without_apply_reports_not_written_and_pass_apply() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "# Target\n");
+    // "trget" is a one-edit typo of "target" -- a fuzzy match well above the
+    // default 0.8 confidence floor.
+    write_md(tmp.path(), "source.md", "[[trget]]\n");
+
+    let dry = links_fix(tmp.path(), &["--apply-fuzzy"]);
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(dry["applied"], false);
+    assert_eq!(
+        dry["fuzzy_applied"], false,
+        "nothing was written without --apply: {dry:?}"
+    );
+    assert_eq!(dry["fuzzy_requested"], true);
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["links", "fix", "--apply-fuzzy", "--format", "text"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(
+        text.contains("not written — pass --apply") && !text.contains("pass --apply-fuzzy"),
+        "{text}"
+    );
+
+    // Nothing was actually written to disk.
+    let content = std::fs::read_to_string(tmp.path().join("source.md")).unwrap();
+    assert_eq!(content, "[[trget]]\n");
+
+    // A plain dry run (never opted in at all) keeps the original wording.
+    let plain = links_fix(tmp.path(), &[]);
+    assert_eq!(plain["fuzzy_requested"], false);
+    let plain_text = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["links", "fix", "--format", "text"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plain_text = String::from_utf8(plain_text).unwrap();
+    assert!(plain_text.contains("not written — pass --apply-fuzzy"));
+}

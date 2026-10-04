@@ -655,7 +655,14 @@ pub fn links_fix(
         templated_links: &templated_links,
         fuzzy: fuzzy_fixes.len(),
         fuzzy_fixes: &fuzzy_json,
-        fuzzy_applied: fuzzy.enabled(),
+        // UX-3 (iteration 311): `fuzzy.enabled()` only says the user asked
+        // for `--apply-fuzzy` / `--min-confidence`, not that anything was
+        // written -- that also needs `--apply`. Without this, a bare
+        // `links fix --apply-fuzzy` (no `--apply`) reported `fuzzy_applied:
+        // true` and the text renderer printed "(written — --apply-fuzzy)"
+        // directly above "Applied: no (dry run)".
+        fuzzy_applied: fuzzy.enabled() && !dry_run,
+        fuzzy_requested: fuzzy.enabled(),
         fuzzy_min_confidence: fuzzy.floor(),
         fuzzy_below_floor: below_floor,
     };
@@ -2315,8 +2322,16 @@ struct LinksFixResult<'a> {
     fuzzy: usize,
     /// Detailed fuzzy fixes.
     fuzzy_fixes: &'a [FixResult<'a>],
-    /// Whether fuzzy application was requested.
+    /// Whether a fuzzy fix was actually written this run -- requires both
+    /// `--apply-fuzzy` (or `--min-confidence`) AND `--apply` (UX-3,
+    /// iteration 311). `false` on every dry run, regardless of whether
+    /// fuzzy was requested.
     fuzzy_applied: bool,
+    /// Whether `--apply-fuzzy` / `--min-confidence` was requested this run,
+    /// independent of whether `--apply` was also given. Lets the text
+    /// renderer tell "never opted in -- pass --apply-fuzzy" apart from
+    /// "opted in but this was a dry run -- pass --apply" (UX-3).
+    fuzzy_requested: bool,
     /// Effective confidence floor for fuzzy application.
     fuzzy_min_confidence: f64,
     /// Number of fuzzy below floor.

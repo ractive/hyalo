@@ -3356,7 +3356,9 @@ pub(crate) enum LinksAction {
         /// actions.md elsewhere in the vault. Both are reported in a separate
         /// bucket and are NOT written by plain --apply. Pass --apply-fuzzy to
         /// opt in — which still only writes proposals at or above the
-        /// confidence floor (0.8 by default; see --min-confidence).
+        /// confidence floor (0.8 by default; see --min-confidence). --apply
+        /// is still required to write anything: --apply-fuzzy alone (without
+        /// --apply) stays a dry run and reports "not written — pass --apply".
         #[arg(long)]
         apply_fuzzy: bool,
         /// Confidence floor for applying low-confidence fixes (0.0–1.0); implies --apply-fuzzy
