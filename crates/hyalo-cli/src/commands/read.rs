@@ -65,6 +65,47 @@ fn parse_line_range(s: &str) -> Result<LineRange, String> {
     }
 }
 
+/// Slice `lines` to the 1-based inclusive range `(start, end)`, in place
+/// (truncate + drain, no cloning). `start`/`end` are relative to `lines`
+/// itself — i.e. already body-relative, or relative to whatever extracted
+/// text `lines` holds.
+fn slice_lines_in_place(lines: &mut Vec<String>, start: Option<usize>, end: Option<usize>) {
+    let len = lines.len();
+    let start_idx = start.unwrap_or(1).saturating_sub(1).min(len);
+    let end_idx = end.unwrap_or(len).min(len);
+    if start_idx >= end_idx {
+        lines.clear();
+    } else {
+        lines.truncate(end_idx);
+        lines.drain(..start_idx);
+    }
+}
+
+/// Translate a file-absolute, 1-based inclusive `range` into the
+/// body-relative `(start, end)` pair to slice `content_lines` with
+/// (BUG-4 / DEC-355): `--lines` numbers from line 1 of the *file*, matching
+/// `find`'s section hits, lint and `task --line`, while `content_lines` only
+/// holds the body (`fm_lines` lines shorter).
+///
+/// Returns `None` when the requested window has no overlap with the body at
+/// all: entirely inside the frontmatter block, or starting past the end of
+/// the file. The caller reports that case instead of silently slicing to
+/// nothing.
+fn translate_file_range(
+    range: &LineRange,
+    fm_lines: usize,
+    total_lines: usize,
+) -> Option<(Option<usize>, Option<usize>)> {
+    let req_start = range.start.unwrap_or(1);
+    let req_end = range.end.unwrap_or(total_lines);
+    if req_start > total_lines || req_end <= fm_lines {
+        return None;
+    }
+    let body_start = req_start.saturating_sub(fm_lines).max(1);
+    let body_end = req_end.saturating_sub(fm_lines);
+    Some((Some(body_start), Some(body_end)))
+}
+
 // ---------------------------------------------------------------------------
 // Section extraction
 // ---------------------------------------------------------------------------
@@ -387,9 +428,11 @@ fn read_resolved(
     // narrow `content_lines` below.  `None` means the body was not read
     // (`--frontmatter` only), and the count is scanned separately further down.
     let mut whole_file_lines: Option<usize> = None;
+    let mut frontmatter_line_count: usize = 0;
     let mut content_lines: Vec<String> = if need_body {
         let (body_lines, fm_lines) = read_body_lines(&full_path)?;
         whole_file_lines = Some(fm_lines + body_lines.len());
+        frontmatter_line_count = fm_lines;
         body_lines
     } else {
         Vec::new()
@@ -433,15 +476,38 @@ fn read_resolved(
     }
 
     // Apply line range — truncate/drain in place to avoid cloning.
+    //
+    // BUG-4 / DEC-355: `--lines A:B` is file-absolute, the same numbering
+    // `find`, lint, section hits (DEC-334) and `task --line` all print — not
+    // relative to the body. When `--section` narrowed `content_lines` first,
+    // the extracted text is its own addressable unit and `--lines` stays
+    // relative to *that* (unchanged iter-253 behaviour: slicing a slice).
+    // Otherwise the requested file-absolute range is translated to the
+    // body-relative indices that `content_lines` actually holds, and a
+    // window with no overlap with the body at all — entirely inside the
+    // frontmatter block, or past the end of the file — is reported with a
+    // `-q`-proof warning instead of a silent empty read.
     if let Some(ref range) = line_range {
-        let len = content_lines.len();
-        let start_idx = range.start.unwrap_or(1).saturating_sub(1).min(len);
-        let end_idx = range.end.unwrap_or(len).min(len);
-        if start_idx >= end_idx {
-            content_lines.clear();
+        if section.is_some() {
+            slice_lines_in_place(&mut content_lines, range.start, range.end);
         } else {
-            content_lines.truncate(end_idx);
-            content_lines.drain(..start_idx);
+            let total = whole_file_lines.unwrap_or(frontmatter_line_count + content_lines.len());
+            if let Some((start, end)) = translate_file_range(range, frontmatter_line_count, total) {
+                slice_lines_in_place(&mut content_lines, start, end);
+            } else {
+                let req_start = range.start.unwrap_or(1);
+                let req_end = range.end.unwrap_or(total);
+                let frontmatter_note = if frontmatter_line_count > 0 {
+                    format!(" (the frontmatter block occupies lines 1-{frontmatter_line_count})")
+                } else {
+                    String::new()
+                };
+                crate::warn::warn_always(format!(
+                    "requested lines {req_start}:{req_end} have no overlap with {rel_path} \
+                     ({total} lines in the file){frontmatter_note}"
+                ));
+                content_lines.clear();
+            }
         }
     }
 
@@ -768,19 +834,85 @@ mod tests {
 
     // -- inline line-range slicing (truncate + drain) --
 
-    /// Mirror the inlined truncate/drain logic for testability.
+    /// Exercise the real in-place slicer against an owned copy, so these
+    /// tests cover production code rather than a parallel mirror of it.
     fn apply_range(lines: &[String], range: &LineRange) -> Vec<String> {
         let mut v = lines.to_vec();
-        let len = v.len();
-        let start_idx = range.start.unwrap_or(1).saturating_sub(1).min(len);
-        let end_idx = range.end.unwrap_or(len).min(len);
-        if start_idx >= end_idx {
-            v.clear();
-        } else {
-            v.truncate(end_idx);
-            v.drain(..start_idx);
-        }
+        slice_lines_in_place(&mut v, range.start, range.end);
         v
+    }
+
+    // -- translate_file_range (BUG-4 / DEC-355) --
+
+    #[test]
+    fn translate_file_range_no_frontmatter_is_identity() {
+        // No frontmatter: file-absolute and body-relative coincide.
+        let range = LineRange {
+            start: Some(2),
+            end: Some(4),
+        };
+        assert_eq!(
+            translate_file_range(&range, 0, 10),
+            Some((Some(2), Some(4)))
+        );
+    }
+
+    #[test]
+    fn translate_file_range_shifts_past_frontmatter() {
+        // 16-line frontmatter, file lines 125-135 (a section hit's printed
+        // range) -> body lines 109-119.
+        let range = LineRange {
+            start: Some(125),
+            end: Some(135),
+        };
+        assert_eq!(
+            translate_file_range(&range, 16, 500),
+            Some((Some(109), Some(119)))
+        );
+    }
+
+    #[test]
+    fn translate_file_range_wholly_inside_frontmatter_is_none() {
+        let range = LineRange {
+            start: Some(1),
+            end: Some(10),
+        };
+        assert_eq!(translate_file_range(&range, 16, 150), None);
+    }
+
+    #[test]
+    fn translate_file_range_past_end_of_file_is_none() {
+        let range = LineRange {
+            start: Some(999),
+            end: Some(1000),
+        };
+        assert_eq!(translate_file_range(&range, 16, 150), None);
+    }
+
+    #[test]
+    fn translate_file_range_partial_overlap_clamps_into_body() {
+        // start inside the frontmatter, end inside the body: clamp to body
+        // line 1 rather than reporting no overlap.
+        let range = LineRange {
+            start: Some(10),
+            end: Some(20),
+        };
+        assert_eq!(
+            translate_file_range(&range, 16, 150),
+            Some((Some(1), Some(4)))
+        );
+    }
+
+    #[test]
+    fn translate_file_range_open_end_uses_total_lines() {
+        let range = LineRange {
+            start: Some(20),
+            end: None,
+        };
+        assert_eq!(
+            translate_file_range(&range, 16, 20),
+            Some((Some(4), Some(4)))
+        );
     }
 
     #[test]

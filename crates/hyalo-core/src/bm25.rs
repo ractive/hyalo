@@ -252,8 +252,9 @@ pub use tokenizer::{
 };
 
 pub use query::{
-    CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PREFIX_EXPANSION,
-    NoFields, QuerySyntaxError, TermCandidate, TermSuggestion, corrected_query,
+    CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PHRASE_SLOP,
+    MAX_PREFIX_EXPANSION, NoFields, QuerySyntaxError, QueryWarnings, TermCandidate, TermSuggestion,
+    corrected_query,
 };
 pub use sections::{FileSections, SectionHit, SectionScorer, SectionSpan};
 

@@ -261,11 +261,14 @@ fn read_section_with_count_suffix() {
 
 #[test]
 fn read_lines_range() {
+    // BUG-4 / DEC-355: `--lines` is file-absolute, frontmatter counted. The
+    // fixture's frontmatter block is 7 lines (1-7), so the body's first 3
+    // lines ("# Heading One", "", "First paragraph.") are file lines 8-10.
     let tmp = setup();
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "read", "--file", "note.md", "--lines", "1:3", "--format", "json",
+            "read", "--file", "note.md", "--lines", "8:10", "--format", "json",
         ])
         .output()
         .unwrap();
@@ -281,11 +284,13 @@ fn read_lines_range() {
 
 #[test]
 fn read_lines_single() {
+    // File line 8 is the body's first line ("# Heading One") — see
+    // `read_lines_range` for the frontmatter-length accounting.
     let tmp = setup();
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "read", "--file", "note.md", "--lines", "1", "--format", "json",
+            "read", "--file", "note.md", "--lines", "8", "--format", "json",
         ])
         .output()
         .unwrap();
@@ -294,6 +299,50 @@ fn read_lines_single() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let content = json["results"]["content"].as_str().unwrap();
     assert_eq!(content, "# Heading One");
+}
+
+/// BUG-4 / DEC-355: a window with no overlap with the body at all — here,
+/// entirely inside the frontmatter block — warns instead of silently
+/// returning an empty read.
+#[test]
+fn read_lines_wholly_inside_frontmatter_warns() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "read", "--file", "note.md", "--lines", "1:3", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "a warning is not a failure");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"]["content"].as_str(), Some(""));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("no overlap") && stderr.contains("frontmatter"),
+        "stderr: {stderr}"
+    );
+}
+
+/// The same out-of-range report fires past the end of the file, not just
+/// inside the frontmatter.
+#[test]
+fn read_lines_past_end_of_file_warns() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "read", "--file", "note.md", "--lines", "999:1000", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"]["content"].as_str(), Some(""));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("no overlap"), "stderr: {stderr}");
 }
 
 #[test]
@@ -314,17 +363,21 @@ fn read_lines_open_end() {
 
 #[test]
 fn read_lines_open_start() {
+    // BUG-4 / DEC-355: `--lines` is file-absolute (frontmatter counted), so
+    // `:9` here means "file lines 1-9", which — the fixture's 7-line
+    // frontmatter block plus "# Heading One" and the blank line after it —
+    // is the body's first two lines.
     let tmp = setup();
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["read", "--file", "note.md", "--lines", ":2"])
+        .args(["read", "--file", "note.md", "--lines", ":9"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines, vec!["# Heading One", ""]);
 }
 
 #[test]
@@ -407,7 +460,9 @@ fn read_frontmatter_json() {
 #[test]
 fn read_frontmatter_with_lines() {
     let tmp = setup();
-    // --frontmatter + --lines should show frontmatter + sliced body
+    // --frontmatter + --lines should show frontmatter + sliced body.
+    // `--lines` is file-absolute (BUG-4 / DEC-355): file lines 8-9 are the
+    // body's first two lines ("# Heading One", the blank line after it).
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
@@ -416,7 +471,7 @@ fn read_frontmatter_with_lines() {
             "note.md",
             "--frontmatter",
             "--lines",
-            "1:2",
+            "8:9",
         ])
         .output()
         .unwrap();

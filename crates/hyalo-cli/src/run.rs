@@ -2554,6 +2554,7 @@ fn run_inner() -> Result<(), AppError> {
         hctx.corrected_query = report.corrected_query;
         hctx.section_reads = report.section_reads;
         hctx.section_file_matches = report.section_file_matches;
+        hctx.pure_negative_query = report.pure_negative_query;
         if let Some(facets) = &facets {
             hctx.facets.clone_from(facets);
         }

@@ -236,12 +236,22 @@ fn format_section_hit_text(hit: &serde_json::Value) -> String {
         field("line_start"),
         field("line_end")
     );
-    for m in hit
+    // UX-10 text polish: `matches` is relevance-ordered (JSON keeps that —
+    // it is the ranking), but printing a file's own lines out of order
+    // (145, 149, 147) reads as broken rather than ranked. The text renderer
+    // sorts by line number; JSON is unaffected.
+    let mut matches: Vec<&serde_json::Value> = hit
         .get("matches")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-    {
+        .collect();
+    matches.sort_by_key(|m| {
+        m.get("line")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    });
+    for m in matches {
         let line = m
             .get("line")
             .and_then(serde_json::Value::as_u64)
@@ -329,4 +339,33 @@ fn is_file_object_key(key: &str) -> bool {
             | "matches"
             | "score"
     )
+}
+
+#[cfg(test)]
+mod section_hit_tests {
+    use super::*;
+
+    /// UX-10 text polish: `matches` arrives relevance-ordered (JSON keeps
+    /// that), but a file's own lines printing out of order (145, 149, 147)
+    /// reads as broken. The text renderer must print them by line number.
+    #[test]
+    fn section_hit_text_sorts_snippet_lines_ascending() {
+        let hit = serde_json::json!({
+            "file": "a.md",
+            "section": {"heading": "Problem", "line_start": 145, "line_end": 153},
+            "score": 3.69,
+            "matches": [
+                {"line": 149, "text": "third"},
+                {"line": 145, "text": "first"},
+                {"line": 147, "text": "second"},
+            ],
+        });
+        let text = format_section_hit_text(&hit);
+        let line_pos = |needle: &str| text.find(needle).unwrap();
+        assert!(
+            line_pos("line 145") < line_pos("line 147")
+                && line_pos("line 147") < line_pos("line 149"),
+            "{text}"
+        );
+    }
 }

@@ -162,6 +162,11 @@ pub struct ObservedValue {
     /// Whether the value can be typed back into `--property K=V`. Only scalars
     /// can, so only they are offered as did-you-mean corrections.
     pub typeable: bool,
+    /// Whether the underlying frontmatter value is a JSON/YAML string
+    /// specifically (BUG-16): a comparison operator (`>=`, `<`, …) against a
+    /// key whose values are all strings almost never does what the caller
+    /// expects, and the zero-result diagnostic says so.
+    pub is_string: bool,
 }
 
 /// What a zero-result `find` scan saw for one filtered property key.
@@ -189,6 +194,25 @@ impl ObservedProperty {
             .filter(|v| v.typeable)
             .map(|v| v.rendered.clone())
             .collect()
+    }
+
+    /// Every typeable value observed for this key is a string (BUG-16) —
+    /// the signal behind "a comparison on string values says the values are
+    /// strings", since `>=`/`<`/etc. against string values rarely means
+    /// what a caller comparing numbers expects.
+    #[must_use]
+    pub fn all_typed_values_are_strings(&self) -> bool {
+        let mut any_typed = false;
+        for v in &self.values {
+            if !v.typeable {
+                continue;
+            }
+            any_typed = true;
+            if !v.is_string {
+                return false;
+            }
+        }
+        any_typed
     }
 }
 
@@ -336,6 +360,10 @@ pub struct HintContext {
     /// Files a `--granularity section` query matched at file level, when it
     /// ran in section mode (iteration 303).
     pub section_file_matches: Option<u64>,
+    /// The ranked query had no positive leaf at all -- every term negated
+    /// (UX-10 text polish). `properties summary` cannot fix that; the
+    /// zero-result hint says what will.
+    pub pure_negative_query: bool,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -417,6 +445,7 @@ impl HintContext {
             section_reads: Vec::new(),
             facets: Vec::new(),
             section_file_matches: None,
+            pure_negative_query: false,
             resolved: None,
         }
     }

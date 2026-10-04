@@ -111,6 +111,64 @@ fn malformed_queries_exit_1_with_json_envelope() {
     }
 }
 
+/// UX-10 text polish: `title:(a OR b)` names the real problem (a field term
+/// cannot take a group) instead of blaming the trailing `)` for being
+/// unbalanced.
+#[test]
+fn field_term_with_group_names_the_real_problem() {
+    let tmp = vault();
+    let (_, output) = run(&tmp, &["find", "title:(rust OR tokio)"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let error = json["error"].as_str().unwrap();
+    assert!(error.contains("cannot take a group"), "{error}");
+}
+
+/// UX-6 / DEC-358: malformed-but-recoverable query input warns (`-q`-proof)
+/// instead of being silently reinterpreted into a plausible-looking but
+/// wrong answer.
+#[test]
+fn malformed_query_input_warns_even_with_quiet() {
+    let tmp = vault();
+    let cases: &[(&str, &str)] = &[
+        ("rust OR", "dropped"),
+        ("OR rust", "dropped"),
+        ("rust \"tok", "never closed"),
+        ("*rust", "literal character"),
+        ("ru*t", "literal character"),
+        (r#""rust async"~99"#, "clamped to 64"),
+    ];
+    for (query, needle) in cases {
+        let output = hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["-q", "find", "--format", "json", "--", query])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{query}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(needle), "{query}: stderr={stderr}");
+    }
+}
+
+/// The companion error case: `"a b"~abc` is not a word trailing a phrase,
+/// it is a malformed slop, and must be rejected rather than silently
+/// reinterpreted.
+#[test]
+fn malformed_phrase_slop_exits_1() {
+    let tmp = vault();
+    let (_, output) = run(&tmp, &["find", r#""rust async"~abc"#]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid search query"),
+        "{json}"
+    );
+}
+
 #[test]
 fn prefix_terms_expand_against_stems() {
     let tmp = vault();

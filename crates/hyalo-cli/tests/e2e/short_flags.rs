@@ -178,6 +178,8 @@ fn read_short_s_for_section() {
 
 #[test]
 fn read_short_l_for_lines() {
+    // BUG-4 / DEC-355: `--lines` is file-absolute. The fixture's 6-line
+    // frontmatter block means "# Heading" is file line 7, not body line 1.
     let dir = setup();
     let output = hyalo_no_hints()
         .args([
@@ -185,7 +187,7 @@ fn read_short_l_for_lines() {
             "-f",
             "note.md",
             "-l",
-            "1:1",
+            "7:7",
             "-d",
             dir.path().to_str().unwrap(),
         ])

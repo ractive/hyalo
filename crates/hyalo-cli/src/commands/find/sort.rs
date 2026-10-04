@@ -116,10 +116,20 @@ pub(super) fn apply_sort(
             });
         }
         SortField::Property(key) => {
+            // BUG-6 / DEC-355's sibling fix: resolve dot-paths exactly like
+            // `--property K=V` and `--facet property:K` do, instead of a
+            // literal `.get(key)` that only ever found a top-level key.
             results.sort_by(|a, b| {
-                let a_val = a.properties.as_ref().and_then(|p| p.get(key));
-                let b_val = b.properties.as_ref().and_then(|p| p.get(key));
-                compare_nulls_last(a_val, b_val, reverse).then_with(|| a.file.cmp(&b.file))
+                let a_val = a
+                    .properties
+                    .as_ref()
+                    .and_then(|p| filter::resolve_prop_in_object(p, key));
+                let b_val = b
+                    .properties
+                    .as_ref()
+                    .and_then(|p| filter::resolve_prop_in_object(p, key));
+                compare_nulls_last(a_val.as_deref(), b_val.as_deref(), reverse)
+                    .then_with(|| a.file.cmp(&b.file))
             });
         }
         SortField::Score => {
@@ -182,13 +192,125 @@ pub(super) fn presort_index_entries(
             });
         }
         SortField::Property(key) => {
+            // BUG-6's sibling fix for the pre-sort fast path (same dot-path
+            // resolution as `apply_sort`, below).
             entries.sort_by(|a, b| {
-                let a_val = a.properties.get(key.as_str());
-                let b_val = b.properties.get(key.as_str());
-                compare_nulls_last(a_val, b_val, false).then_with(|| a.rel_path.cmp(&b.rel_path))
+                let a_val = filter::resolve_prop(&a.properties, key);
+                let b_val = filter::resolve_prop(&b.properties, key);
+                compare_nulls_last(a_val.as_deref(), b_val.as_deref(), false)
+                    .then_with(|| a.rel_path.cmp(&b.rel_path))
             });
         }
         // Score sorting is applied after BM25 scoring, not during pre-sort.
         SortField::Score => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyalo_core::index::IndexEntry;
+
+    fn entry(path: &str, props: &[(&str, serde_json::Value)]) -> IndexEntry {
+        IndexEntry {
+            rel_path: path.to_owned(),
+            modified: String::new(),
+            size: 0,
+            lines: 0,
+            properties: props
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links: Vec::new(),
+            self_anchors: Vec::new(),
+            bm25_tokens: None,
+            bm25_language: None,
+            bm25_tokenizer_version: None,
+        }
+    }
+
+    fn file_object(path: &str, properties: &serde_json::Value) -> FileObject {
+        FileObject {
+            file: path.to_owned(),
+            modified: None,
+            size: None,
+            lines: None,
+            title: None,
+            title_source: None,
+            properties: properties.as_object().cloned(),
+            properties_typed: None,
+            tags: None,
+            sections: None,
+            tasks: None,
+            links: None,
+            backlinks: None,
+            matches: None,
+            score: None,
+            skipped: None,
+        }
+    }
+
+    /// BUG-6: `--sort property:K` must resolve a dot-path exactly like
+    /// `--property K=V` and `--facet property:K` do, on both the `FileObject`
+    /// display path (`apply_sort`) and the `IndexEntry` pre-sort fast path
+    /// (`presort_index_entries`) -- not just a literal top-level key.
+    #[test]
+    fn apply_sort_resolves_dot_path_property_keys() {
+        let mut results = vec![
+            file_object("b.md", &serde_json::json!({"versions": {"ghes": "beta"}})),
+            file_object("a.md", &serde_json::json!({"versions": {"ghes": "alpha"}})),
+            file_object("c.md", &serde_json::json!({"other": "x"})),
+        ];
+        apply_sort(
+            &mut results,
+            Some(&SortField::Property("versions.ghes".to_owned())),
+            None,
+            false,
+        );
+        // Nulls (no value at all, c.md) last; the rest ascending by the
+        // resolved nested value.
+        assert_eq!(
+            results.iter().map(|r| r.file.as_str()).collect::<Vec<_>>(),
+            vec!["a.md", "b.md", "c.md"]
+        );
+
+        apply_sort(
+            &mut results,
+            Some(&SortField::Property("versions.ghes".to_owned())),
+            None,
+            true,
+        );
+        assert_eq!(
+            results.iter().map(|r| r.file.as_str()).collect::<Vec<_>>(),
+            vec!["b.md", "a.md", "c.md"],
+            "--reverse must flip the resolved order, nulls still last"
+        );
+    }
+
+    #[test]
+    fn presort_index_entries_resolves_dot_path_property_keys() {
+        let b = entry("b.md", &[("versions", serde_json::json!({"ghes": "beta"}))]);
+        let a = entry(
+            "a.md",
+            &[("versions", serde_json::json!({"ghes": "alpha"}))],
+        );
+        let c = entry("c.md", &[("other", serde_json::json!("x"))]);
+        let mut entries = vec![&b, &a, &c];
+        let link_graph = LinkGraph::default();
+        presort_index_entries(
+            &mut entries,
+            Some(&SortField::Property("versions.ghes".to_owned())),
+            &link_graph,
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.rel_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md", "c.md"]
+        );
     }
 }

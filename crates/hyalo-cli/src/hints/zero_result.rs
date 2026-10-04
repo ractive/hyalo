@@ -182,6 +182,15 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
         Some(filters) => format!("No results for {filters}"),
         None => "No results".to_owned(),
     };
+    // UX-10 text polish: a pure-negative query (every term negated, e.g.
+    // `-- '-snapshot'` alone) can never match anything by definition --
+    // negating the whole vocabulary is not a typo or a missing filter, so
+    // say that instead of sending the reader to `properties summary`.
+    if ctx.pure_negative_query {
+        notice.push_str(
+            "\na query needs at least one positive term — negating every word excludes everything",
+        );
+    }
     if let Some(files) = ctx.section_file_matches.filter(|n| *n > 0) {
         let _ = write!(
             notice,
@@ -247,6 +256,51 @@ fn equality_property_filters(ctx: &HintContext) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// How a non-equality value-bearing `--property` filter's operand should be
+/// described (BUG-16). Only `Comparison` gets the "these are strings" note —
+/// a regex's operand frequently *contains* `<`/`>` without being one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueBearingKind {
+    NotEq,
+    Regex,
+    Comparison,
+}
+
+/// Keys of `--property` filters with an operand to be wrong about, but not a
+/// plain equality — BUG-16's complement of [`equality_property_filters`]:
+/// `!=`, `~=`/`=~`, and the four ordering operators. Existence (`K`),
+/// absence (`!K`), and the null/empty-list literals have no value to name.
+fn other_value_bearing_property_filters(ctx: &HintContext) -> Vec<(&str, ValueBearingKind)> {
+    ctx.property_filters
+        .iter()
+        .filter_map(|pf| {
+            if pf.starts_with('!') {
+                return None;
+            }
+            if let Some((key, _)) = pf.split_once("~=").or_else(|| pf.split_once("=~")) {
+                return (!key.is_empty()).then_some((key, ValueBearingKind::Regex));
+            }
+            if let Some((key, value)) = pf.split_once("!=")
+                && !key.is_empty()
+                && !value.is_empty()
+            {
+                return Some((key, ValueBearingKind::NotEq));
+            }
+            // Longer operators first so `>=`/`<=` are not split at the
+            // trailing `>`/`<` they also contain.
+            for op in [">=", "<=", ">", "<"] {
+                if let Some((key, value)) = pf.split_once(op)
+                    && !key.is_empty()
+                    && !value.is_empty()
+                {
+                    return Some((key, ValueBearingKind::Comparison));
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 /// Closest observed value to `value`, when it is close enough to be a typo.
 ///
 /// Two guards keep an unrelated value from being offered as a correction: an
@@ -304,6 +358,14 @@ fn rebuild_find_with(
                 b.push_quoted(&map(token));
             }
         }
+    }
+    // Text polish (UX-10): `--granularity section` is not an `ActiveFilter`
+    // (it shapes the answer, not the match set) so it fell out of every
+    // rebuilt command here, including the corrected-query hint — silently
+    // reverting a section-mode query to file mode. `section_file_matches` is
+    // `Some` exactly when this query ran in section mode (DEC-334).
+    if ctx.section_file_matches.is_some() {
+        b = b.flag_value("--granularity", "section");
     }
     let b = b.with_globals(ctx);
     match pattern {
@@ -528,6 +590,54 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         }
     }
 
+    // 2b. BUG-16: the same "name the values" treatment as above, for
+    // value-bearing filters that are not plain equality -- `!=`, `~=`, and
+    // the ordering operators. There is no single comparable "value" here
+    // (unlike `K=V`), so the wording is generic rather than "but never to
+    // that value"; a comparison against values that are all strings gets an
+    // extra note, since `>=`/`<`/etc. then compares text, not numbers.
+    for (key, kind) in other_value_bearing_property_filters(ctx) {
+        if hints.len() >= MAX_ZERO_RESULT_HINTS {
+            break;
+        }
+        let Some(observation) = observed.get(key) else {
+            continue;
+        };
+        if observation.files == 0 || observation.values.is_empty() {
+            continue;
+        }
+        let shown: Vec<String> = observation
+            .values
+            .iter()
+            .take(MAX_NAMED_VALUES)
+            .map(|v| format!("{} ({})", v.rendered, v.count))
+            .collect();
+        let more = observation.values.len().saturating_sub(shown.len());
+        let suffix = if more > 0 {
+            format!(", … (+{more})")
+        } else {
+            String::new()
+        };
+        let files = observation.files;
+        let files_label = if files == 1 { "file" } else { "files" };
+        let string_note =
+            if kind == ValueBearingKind::Comparison && observation.all_typed_values_are_strings() {
+                " -- these are strings, not numbers, so the comparison compares text"
+            } else {
+                ""
+            };
+        hints.push(Hint::new(
+            format!(
+                "`{key}` is set in {files} {files_label}; observed values: {}{suffix}{string_note}",
+                shown.join(", ")
+            ),
+            HintBuilder::cmd("find")
+                .flag_value("--property", key)
+                .flag_value("--fields", "properties")
+                .finish(ctx),
+        ));
+    }
+
     // 3. Re-run without the most selective filter.
     if filters.len() >= 2 && hints.len() < MAX_ZERO_RESULT_HINTS {
         hints.push(Hint::new(
@@ -544,7 +654,15 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
             HintBuilder::cmd("tags summary").finish(ctx),
         ));
     }
-    if hints.is_empty() {
+    if hints.is_empty() && ctx.pure_negative_query {
+        // UX-10: `properties summary` cannot fix a query that excludes
+        // everything by construction -- the notice above already says what
+        // will (zero_result_notice).
+        hints.push(Hint::new(
+            "Add a positive word or phrase to search for alongside the exclusion",
+            HintBuilder::cmd("find --help").build(),
+        ));
+    } else if hints.is_empty() {
         hints.push(Hint::new(
             "List the properties this vault actually uses",
             HintBuilder::cmd("properties summary").finish(ctx),
@@ -584,6 +702,7 @@ mod tests {
                 rendered: (*rendered).to_owned(),
                 count: *count,
                 typeable: *typeable,
+                is_string: *typeable,
             })
             .collect();
         let files = values.iter().map(|v| v.count).sum();
@@ -607,6 +726,72 @@ mod tests {
             "3 edits over 4 chars is a different word, not a typo"
         );
         assert_eq!(did_you_mean("nonexistent", &values), None);
+    }
+
+    #[test]
+    fn bug16_comparison_filter_names_observed_values_with_a_string_note() {
+        // `versions.ghes>=3.10` matched nothing, but the key does carry
+        // values -- all strings, so the comparison compared text.
+        let mut ctx = ctx_with(&["versions.ghes>=3.10"], &[]);
+        observed(&mut ctx, "versions.ghes", &["3.9", "3.11"]);
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            hints.iter().any(|h| {
+                h.description.contains("versions.ghes")
+                    && h.description.contains("3.9")
+                    && h.description.contains("3.11")
+                    && h.description.contains("these are strings")
+            }),
+            "expected a value-listing hint with the string note: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn bug16_regex_filter_names_observed_values_without_a_string_note() {
+        // A regex operand frequently contains '<'/'>' itself; that must not
+        // be mistaken for a numeric comparison.
+        let mut ctx = ctx_with(&["title~=/^[<>]/"], &[]);
+        observed(&mut ctx, "title", &["Design doc", "Other"]);
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            hints.iter().any(|h| {
+                h.description.contains("title") && h.description.contains("Design doc")
+            }),
+            "expected a value-listing hint: {hints:?}"
+        );
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("these are strings")),
+            "a regex filter is not a numeric comparison: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn pure_negative_query_gets_its_own_notice_and_hint() {
+        // UX-10 text polish: `-- '-snapshot'` alone can never match anything
+        // by construction, so the generic "properties summary" dead end is
+        // replaced with the real explanation.
+        let mut ctx = ctx_with(&[], &[]);
+        ctx.pure_negative_query = true;
+        let notice = zero_result_notice(&ctx);
+        assert!(
+            notice.contains("needs at least one positive term"),
+            "{notice}"
+        );
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("properties this vault")),
+            "{hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("positive word or phrase")),
+            "{hints:?}"
+        );
     }
 
     #[test]
