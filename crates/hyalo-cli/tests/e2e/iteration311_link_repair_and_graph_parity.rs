@@ -591,3 +591,33 @@ fn explicit_html_anchor_id_match_is_case_sensitive() {
         "an HTML id is matched byte-for-byte, not case-folded: {links:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-13 (DEC-354): a wikilink target typed with precomposed (NFC) Unicode
+// resolves a file named with decomposed (NFD) accents, and vice versa
+// (Obsidian's own normalisation convention), without `links fix` proposing
+// to rewrite a clean wikilink into decomposed Unicode.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wikilink_resolution_folds_unicode_normalization() {
+    let tmp = TempDir::new().unwrap();
+    // "Caf\u{0301}" (e + combining acute accent, U+0301) is the NFD spelling
+    // of "Café" (precomposed, U+00E9) -- two distinct byte sequences for the
+    // same rendered text, the shape a vault synced from HFS+/APFS carries.
+    write_md(tmp.path(), "Cafe\u{0301} NFD.md", "# Cafe\n");
+    write_md(tmp.path(), "source.md", "[[Café NFD]]\n");
+
+    let links = find_links(tmp.path(), "source.md");
+    assert_eq!(
+        links[0]["path"], "Cafe\u{0301} NFD.md",
+        "a precomposed wikilink target must resolve the decomposed file: {links:?}"
+    );
+
+    // links fix must not propose rewriting the clean, precomposed wikilink
+    // into decomposed Unicode just because the on-disk name differs in
+    // composition only.
+    let fix = links_fix(tmp.path(), &[]);
+    assert_eq!(fix["broken"], 0, "{fix:?}");
+    assert_eq!(fix["case_mismatches"], 0, "{fix:?}");
+}

@@ -7353,6 +7353,62 @@ fragment_matches_explicit_anchor, fragment_matches_headings_or_explicit_anchors}
 `index::{IndexEntry::explicit_anchor_ids, scan_file_anchors, scan_slice_anchors}`,
 `hyalo_mdlint::profiles::link::{LinkLintContext, check_broken_anchors}`. See
 [[iterations/iteration-311-link-repair-and-graph-parity]].
+
+## DEC-354: wikilink resolution folds Unicode normalisation, not just case (2026-10-04)
+
+**Decision.** `CaseInsensitiveIndex::fold_key` — the one function every path,
+stem and alias lookup in the index keys through — now NFC-normalises a
+target with any non-ASCII byte before ASCII-lowercasing it, so `[[Café
+NFD]]` (precomposed, typed on an ordinary keyboard) resolves a file named
+`Café NFD.md` with decomposed accents (the form HFS+/APFS, and some input
+methods, actually write to disk), and vice versa. Every caller that keys
+through `fold_key` — `insert`, `lookup_unique`, `lookup_stem(_all)`,
+`lookup_all`, `insert_aliases`, `lookup_alias(_all)` — gets this for free;
+several of those previously bypassed `fold_key` entirely with their own
+inline `.to_ascii_lowercase()` and are now routed through it, which is
+itself a consistency fix (nothing in this iteration depended on the
+divergence).
+
+Two further spots needed the same equivalence so `mv` and `links fix` stay
+**unaffected** — no new rewrite proposed, no rename — for a target that
+already resolves once normalisation is accounted for:
+
+- `classify_short_form_wikilink`'s bare-stem casing check (`target ==
+  canonical_stem`) gained an `|| nfc_equal(target, canonical_stem)` escape,
+  so a pure composition difference is `ShortFormValid`, never
+  `ShortFormStemMismatch`.
+- `classify_link`'s "exact resolution succeeded, check for a casing
+  mismatch against the canonical index entry" branch gained the same
+  escape. This one matters even where `fold_key` is not consulted at all:
+  on a normalisation-insensitive filesystem (APFS, HFS+) the *literal*,
+  no-index probe already resolves a precomposed target against a decomposed
+  on-disk name — the OS does the folding, not hyalo — so without this
+  second escape the case-index cross-check compared the literal probe's
+  spelling against the canonical (decomposed) one and reported a spurious
+  mismatch, which `links fix` would have "fixed" by rewriting a clean
+  wikilink into decomposed Unicode.
+
+`nfc_equal(a, b)` normalises only when either side carries a non-ASCII
+byte, does no case-folding of its own, and is shared by both call sites.
+
+**Why.** Obsidian normalises wikilink targets to NFC before resolving them
+— consistent with how every modern editor and the DOM itself treat
+Unicode text as composition-independent. hyalo's own comparisons were
+byte-exact, so a vault with any file carrying decomposed accents (common
+after an HFS+ → APFS migration, or when a note was typed on an input
+method that composes differently) reported phantom broken links for text
+that renders identically and that Obsidian opens without complaint.
+
+**Rejected: folding non-ASCII case too, while touching this code.** Out of
+scope for this bug, and a materially bigger change — Unicode case-folding
+needs a real case-folding table (`é`/`É` are not an ASCII-range relationship),
+not the three-line composition fix this one line of the decision covers.
+`É` and `é` still key apart, exactly as before.
+
+**Where:** `case_index::{fold_key, CaseInsensitiveIndex::{insert, lookup_stem,
+lookup_stem_all, lookup_all, insert_aliases, lookup_alias, lookup_alias_all}}`,
+`discovery::{nfc_equal, classify_short_form_wikilink, classify_link}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
 ## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
 
 **Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the

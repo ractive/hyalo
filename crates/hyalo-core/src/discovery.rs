@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
+use unicode_normalization::UnicodeNormalization as _;
+
 use crate::case_index::CaseInsensitiveIndex;
 use crate::util::levenshtein;
 
@@ -2165,7 +2167,14 @@ fn classify_short_form_wikilink(
                 .strip_suffix(".md")
                 .unwrap_or(canonical_fname);
 
-            if target == canonical_stem {
+            if target == canonical_stem || nfc_equal(target, canonical_stem) {
+                // BUG-13 (iteration 311, DEC-354): a stem that is already
+                // byte-identical once both sides are NFC-normalised is not a
+                // casing difference at all — it is the *same* text in a
+                // different composition (`Café NFD` precomposed vs. the
+                // on-disk `Café NFD.md` written with decomposed accents).
+                // `links fix` must not propose a "fix" that rewrites a
+                // correct wikilink into decomposed Unicode.
                 Some(LinkResolution::ShortFormValid)
             } else {
                 // Stem casing differs — propose the canonical stem (not a full path).
@@ -2209,7 +2218,15 @@ fn classify_link(
         {
             let canonical_fwd = canonical_path.replace('\\', "/");
             let exact_fwd = exact_str.replace('\\', "/");
-            if exact_fwd != canonical_fwd {
+            // BUG-13 (iteration 311, DEC-354): on a normalisation-insensitive
+            // filesystem (APFS, HFS+) the literal probe above already
+            // succeeded for a precomposed target against a decomposed
+            // on-disk name, so `exact_fwd` and `canonical_fwd` differ only in
+            // Unicode composition, not in any way a user would call a
+            // "mismatch". Reporting that as `Resolved(Some(..))` would make
+            // `links fix` propose rewriting a clean wikilink into decomposed
+            // Unicode for no reason.
+            if exact_fwd != canonical_fwd && !nfc_equal(&exact_fwd, &canonical_fwd) {
                 return LinkResolution::Resolved(Some(canonical_fwd));
             }
         }
@@ -2235,6 +2252,22 @@ fn classify_link(
     }
 
     LinkResolution::Broken
+}
+
+/// Whether `a` and `b` are the same text once both are NFC-normalised
+/// (BUG-13, iteration 311, DEC-354) — a pure Unicode *composition* difference
+/// (`Café NFD` precomposed vs. decomposed), never a case difference: both
+/// sides are compared byte-for-byte after normalisation, with no ASCII
+/// lowercasing. `a.is_ascii() && b.is_ascii()` short-circuits the common case
+/// without importing the normalisation machinery at all.
+fn nfc_equal(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.is_ascii() && b.is_ascii() {
+        return false;
+    }
+    a.nfc().eq(b.nfc())
 }
 
 /// Whether `canonical` is the same path as `written` up to ASCII case and the
