@@ -43,7 +43,7 @@ numbers reserved for this iteration: **DEC-355 to DEC-358**.
 - [x] `hyalo find '-snapshot'` either exits 1 naming `--` or warns with the `--` form; it never silently returns the `--section` result set
 - [x] GitHub Docs: `--sort property:versions.ghes` orders and `--reverse` reverses; `--property 'versions.ghes=nothing'` lists existing values
 - [x] Disk and `--index` byte-identical on every query touched; exit codes 0/1/2 (DEC-307)
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, `check-jq-recipes`, help-drift and `hyalo lint --strict` green; CI green on three platforms
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, `check-jq-recipes`, help-drift and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
