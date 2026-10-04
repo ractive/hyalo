@@ -353,7 +353,7 @@ fn warn_skip_once(path: &Path, message: &str) {
         Err(_) => true,
     };
     if first {
-        eprintln!("warning: skipping {}: {message}", path.display());
+        crate::warn::advisory(format!("skipping {}: {message}", path.display()));
     }
 }
 

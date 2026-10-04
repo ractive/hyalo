@@ -42,6 +42,8 @@ static SUPPRESSED: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 /// Calling it more than once is safe but redundant.
 pub fn init(quiet: bool) {
     QUIET.store(quiet, Ordering::Relaxed);
+    // Core advisories (oversized-file skips and friends) obey `-q` too.
+    hyalo_core::warn::set_quiet(quiet);
     // Initialise the dedup map (replacing None with an empty map).
     if let Ok(mut guard) = SUPPRESSED.lock()
         && guard.is_none()
