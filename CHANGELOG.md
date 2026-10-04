@@ -197,11 +197,23 @@ and this project adheres to
 - Building hyalo from source now requires Rust 1.95 or newer, declared as
   `rust-version` in the workspace manifest. The code is clippy-clean on
   Rust 1.99.
-- Frontmatter parsing is unchanged: the YAML parser (serde-saphyr) stays
-  at 0.0.23. Version 1.x would turn leading-zero numbers such as
-  `zip: 01234` into floats and offers no setting that keeps them integers;
-  new regression tests pin the current behavior. The internal `xtask`
-  tooling moved to syn 3. Other Rust dependencies, the npm package's dev
+- The YAML parser (serde-saphyr) moved from 0.0.23 to 1.3 (DEC-350). The
+  values hyalo reads stay the same: a leading-zero number such as
+  `zip: 01234` is still the integer 1234, as in Obsidian, `.nan` and `.inf`
+  are still the strings `".nan"` and `".inf"`, and a list under a long run of
+  comment lines still parses. Values that `set` and the other write commands
+  emit are byte-identical (`a#b`, `C#` and `yes` stay quoted, dates stay
+  plain). Changes: the words `NaN`, `Infinity`, `inf` and `nan` are now
+  read as written. They used to come back as `".nan"` / `".inf"`, which
+  changed four MDN titles. A tab after a colon (`a:<TAB>value`) and a tagged
+  quoted scalar (`!!int '5'`) now parse instead of making the frontmatter
+  unparsable. An explicitly tagged `!!float 1` is the float 1.0. Integer
+  keys are compared by value, so `0xB:` and `11:` in one mapping are a
+  duplicate key. The emitter now quotes `---`, `...`, `0X1F` and a `<<` key
+  (which YAML reads as a merge key), all of which it used to write plain. So
+  `set k=0X1F` stores the string `"0X1F"`, where it used to write `k: 0X1F`,
+  which read back as 31.
+- The internal `xtask` tooling moved to syn 3. Other Rust dependencies, the npm package's dev
   dependencies, and the CI actions (`actions/checkout` v7,
   `actions/setup-node` v7, `actions/upload-artifact` v7,
   `actions/download-artifact` v8) were updated to their latest releases.

@@ -7102,3 +7102,105 @@ it. Running the second walk concurrently with parsing: it competes with the
 scan for the same cores and kernel time. Using the port for every command:
 it would make every command's file set depend on it, for no gain outside
 `summary` and `create-index`.
+
+## DEC-350: serde-saphyr 1.x, with integer resolution and quoting hyalo owns (2026-10-04)
+
+**Decision.** hyalo uses serde-saphyr 1.3 and owns two rules that the crate
+changed:
+
+1. **Leading-zero integers.** `frontmatter::parse_yaml_map` (and
+   `parse_yaml_value`) parse with `hyalo_options()` into `serde_json::Value`.
+   If the result holds no integral float, it is returned as is. Otherwise the
+   block is parsed again into a node type whose children are
+   `serde_saphyr::Spanned`. Each integral float's source text, read through
+   its byte span, goes to `resolve_core_int`, which accepts YAML 1.2 core
+   `[-+]?[0-9]+`. A match becomes that integer (`01234` → 1234). Anything
+   else, including a value outside `i64`/`u64`, stays the float the parser
+   produced. Quoted scalars are strings before this rule runs, a written
+   `12.0` stays a float, and so does an explicitly tagged `!!float 1`: a
+   scalar whose span follows a tag is never re-resolved (`follows_tag`). Every frontmatter parse goes through these two
+   functions, never through `serde_saphyr::from_str*` directly.
+2. **Quoting on write.** `hyalo_serializer_options_for` turns on `yaml_12`,
+   so 1.x does not quote what Obsidian writes plain (`2026-01-01`, `12:30`).
+   The `%YAML 1.2` header that mode emits is stripped. `emit_map` /
+   `emit_seq` wrap each single-line string that 0.0.23 quoted and 1.x
+   would write plain in `serde_saphyr::DoubleQuoted`: a YAML 1.1 boolean
+   spelling (`yes`, `off`, `y`), a `#` that does not start a comment
+   (`a#b`, `C#`), and a digit run with underscores (`1_000`). Under
+   `quote_all` nothing is wrapped. serde-saphyr's key emitter ignores that
+   wrapper, so `requote_legacy_keys` puts the quotes back on such keys
+   (`"yes": v`, `"on":`, `"C#":`) at every depth, because a YAML 1.1 reader
+   (PyYAML, go-yaml v2, Jekyll) takes a plain `on:` for the boolean key
+   `true`. It rewrites only key lines outside block scalars, and it keeps the
+   rewrite only if parsing it back gives the same value.
+
+The options set every field 1.x added. `emit_comments: false` validates
+comments without buffering them, so the 32-event comment lookahead
+(`max_buffered_comment_events`) cannot reject a list under a long comment run
+and comments stay out of `max_events`. `reject_non_finite_typeless_float:
+false` keeps the `.nan` / `.inf` / `-.inf` string fallback. The other new
+fields keep their defaults, and the seven existing limits are unchanged. The
+iteration file holds the field-by-field table.
+
+**Why.** The 0.0.23 pin was unmaintained, and the dependency refresh had to
+skip it (PR #361). 1.x refuses a leading-zero decimal as an integer
+(`parse_scalars.rs`: "Yaml 1.2 forbids decimal integer literals starting with
+zero"), so the value falls through to the float pattern. That rule belongs to
+YAML 1.2's JSON schema. The core schema, which Obsidian follows, reads
+`01234` as an integer and checks integers before floats. 1.x has no option,
+resolver callback or tag hook for this. `legacy_octal_numbers` reads base 8,
+and no upstream issue exists. `Spanned` byte offsets are the one way the
+crate exposes a scalar's text to a typeless consumer.
+
+The slow path runs only for a block whose fast parse produced an integral
+float, and no block in the repo vault, MDN `files/en-us`, the Obsidian Hub
+or kepano-obsidian takes it. Measured in a scratch crate on frontmatter
+blocks alone (release, best of three): MDN 78.5 ms → 86.6 ms, Obsidian Hub
+26.4 ms → 30.7 ms. The same parse through `Spanned` every time took
+183.6 ms. End to end the cost does not show: `summary` on MDN 1.043 s →
+1.033 s, `find --fields properties --limit 0` on MDN 524 ms → 493 ms (mean of
+five, user time 450 → 476 ms), `summary` on this vault 54.1 → 53.6 ms. The
+`summary`, `properties`, `types list`, `lint --strict` and
+`find --fields properties,tags --limit 0` JSON is byte-identical on this
+vault and the Obsidian Hub. On MDN only the four `NaN`/`Infinity` titles
+below differ. A differential harness serialized 58 023 distinct strings
+(every key and string value in those corpora plus synthetic edge cases) in
+value, list-item and key position under each option set hyalo uses, and
+21 469 whole frontmatter maps, through 0.0.23 and through `emit_map`. Every
+whole map is byte-identical. The string differences are the changes listed
+under Consequences.
+
+**Consequences.** Accepted 1.x behaviour changes, each pinned by a test in
+`frontmatter::tests`:
+
+- The plain words `NaN`, `Infinity`, `-Infinity`, `inf` and `nan` are read
+  as written. 0.0.23 parsed them with Rust's float grammar and reported
+  `".nan"` / `".inf"`, which corrupted four MDN titles. Only `.nan`, `.inf`
+  and their case variants are special in YAML 1.2.
+- A tab after a colon and an explicit tag on a quoted scalar (`!!int '5'`)
+  parse. Both used to make the block unparsable.
+- Integer keys are compared by value: `0xB:` and `11:` in one mapping are a
+  duplicate key. Leading-zero spellings are not integers there, so `01:` and
+  `1:` stay distinct.
+- The emitter quotes `---`, `...`, `--- x`, `0X1F` and a `<<` key. 0.0.23
+  wrote them plain, but a plain `---:` key opens a new document, a plain
+  `<<:` key is a merge key, and a plain `0X1F` reads back as 31. So
+  `set k=0X1F` now stores the string it was given.
+- `!!float 1` parses as 1.0. 0.0.23 refused it.
+
+`Options`, `Budget` and `SerializerOptions` are `#[non_exhaustive]` in 1.x,
+so they are built by assigning fields on `default()`. The `serde-saphyr`
+Dependabot ignore is removed. A future bump must keep the pins in
+`frontmatter::tests` and `frontmatter::parse::yaml_tests` green. If upstream
+ever resolves leading-zero decimals as core integers (an option or a fix),
+the slow path becomes dead code and can go.
+
+**Rejected alternatives.** Parsing with `saphyr-parser` / `granit-parser`
+events and building the tree in hyalo: every budget, duplicate-key check and
+error message would move into hyalo, and the serde-saphyr emitter would stay
+anyway. `serde_norway`: no release since 2024-12, `unsafe` C-port parser,
+only a recursion limit, and a different emitter. `yaml-rust2`: no resource
+budgets, silent last-wins on duplicate keys, and it accepts kepano-obsidian's
+`{{date}}` templates that every other parser rejects. Staying on 0.0.23: an
+unmaintained pin that keeps the `NaN` corruption. Always parsing through
+`Spanned`: 2.1× the parse cost for a rule that almost no block needs.

@@ -36,9 +36,6 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Held at 0.0.23 on purpose (see the comment in Cargo.toml): newer
-      # releases change how user frontmatter parses.
-      - dependency-name: serde-saphyr
       # mdbook-lint-core 0.16.x hands comrak 0.21 AST nodes to hyalo-mdlint's
       # rules, so comrak can only move together with mdbook-lint (PR #366).
       - dependency-name: comrak

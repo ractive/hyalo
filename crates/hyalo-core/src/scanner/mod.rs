@@ -22,7 +22,6 @@ pub(crate) use strip::{
 #[cfg(test)]
 pub(crate) use visitor::{scan_file, scan_reader};
 
-use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -356,7 +355,7 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
         .map(str::to_owned);
     let mut fm_props: IndexMap<String, Value> = match fm_text.as_deref() {
         Some(yaml) if !yaml.trim().is_empty() => {
-            serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
+            crate::frontmatter::parse_yaml_map(yaml).map_err(|e| {
                 anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
                     "failed to parse YAML frontmatter: {}",
                     crate::frontmatter::friendly_parse_error(
@@ -563,7 +562,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
         }
         let props: IndexMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
-                serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
+                crate::frontmatter::parse_yaml_map(y).map_err(|e| {
                     anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
                         "failed to parse YAML frontmatter: {}",
                         crate::frontmatter::friendly_parse_error(

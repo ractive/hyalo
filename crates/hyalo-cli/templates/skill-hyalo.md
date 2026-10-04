@@ -517,6 +517,9 @@ Flags that only `--help` mentions, worth knowing:
 
 ### Pitfalls
 
+- **Frontmatter follows YAML 1.2 core** (DEC-350). `01234` is the integer 1234, the plain
+  words `NaN`/`Infinity` stay strings (only `.nan`/`.inf` keep their string fallback), and
+  `set` keeps its old quoting except that `---`, `...` and `0X1F` are now quoted.
 - **Hidden paths resolve without discovery.** Explicit Markdown paths such as
   `.gitignore` and `.github/workflows/lint.yml` can resolve by in-vault existence,
   including hidden paths omitted by scan exclusions or gitignore. They do not enter

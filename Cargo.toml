@@ -40,11 +40,11 @@ rayon = "1"
 regex = "1"
 rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
-# Held at 0.0.23 on purpose: 1.x changes how user frontmatter parses.
-# Leading-zero decimals (`zip: 01234`) become floats (1234.0) and no option
-# keeps them integers (`legacy_octal_numbers` reads them as base 8). The
-# regression tests in hyalo-core `frontmatter::tests` pin the current behavior.
-serde-saphyr = "0.0.23"
+# 1.x resolves leading-zero decimals (`zip: 01234`) as floats and offers no
+# option to keep them integers, so hyalo-core re-resolves them itself
+# (`frontmatter::parse::resolve_core_int`, DEC-350). A bump must keep
+# the serde-saphyr pins in hyalo-core `frontmatter::tests` green.
+serde-saphyr = "1.3.0"
 aho-corasick = "1"
 strsim = "0.11"
 serde_json = "1.0.151"

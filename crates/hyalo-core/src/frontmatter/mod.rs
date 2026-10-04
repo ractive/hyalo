@@ -13,9 +13,10 @@ pub use frame::{
 };
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, emit_properties,
-    hyalo_options, read_frontmatter, read_frontmatter_from_reader, read_frontmatter_raw,
-    rename_frontmatter_key_within, render_frontmatter, render_frontmatter_key_rename,
-    skip_frontmatter, write_frontmatter, write_frontmatter_within,
+    emit_yaml_map, hyalo_options, parse_yaml_map, parse_yaml_value, read_frontmatter,
+    read_frontmatter_from_reader, read_frontmatter_raw, rename_frontmatter_key_within,
+    render_frontmatter, render_frontmatter_key_rename, skip_frontmatter, write_frontmatter,
+    write_frontmatter_within,
 };
 pub(crate) use parse::{friendly_parse_error, is_closing_delimiter, is_opening_delimiter};
 pub use types::{infer_type, parse_value};
@@ -1562,15 +1563,11 @@ Body.
 
     #[test]
     fn friendly_parse_error_hides_budget_breach_internals() {
-        use indexmap::IndexMap;
-
         // A scalar value beyond the (raised) budget still needs to produce
         // a clean message — no `ScalarBytes { total_scalar_bytes: .. }`.
         let huge = "a".repeat(hyalo_options().budget.unwrap().max_total_scalar_bytes + 1);
         let yaml = format!("x: {huge}\n");
-        let err =
-            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options())
-                .unwrap_err();
+        let err = parse_yaml_map(&yaml).unwrap_err();
         let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
         assert!(!msg.contains("ScalarBytes"), "leaked internals: {msg}");
         assert!(!msg.contains('{'), "leaked Debug-struct syntax: {msg}");
@@ -1579,12 +1576,8 @@ Body.
 
     #[test]
     fn friendly_parse_error_hides_duplicate_key_policy_internals() {
-        use indexmap::IndexMap;
-
         let yaml = "x: 1\nx: 2\n";
-        let err =
-            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, hyalo_options())
-                .unwrap_err();
+        let err = parse_yaml_map(yaml).unwrap_err();
         let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
         assert!(
             !msg.contains("DuplicateKeyPolicy"),
@@ -1605,8 +1598,6 @@ Body.
 
     #[test]
     fn frontmatter_close_to_64kib_parses_without_leaked_errors() {
-        use indexmap::IndexMap;
-
         // GitHub Docs-shaped repro: a large redirect_from list well under the
         // documented 64 KiB ceiling must actually parse (it used to trip the
         // undocumented 8 KiB scalar budget at a fraction of that size).
@@ -1619,8 +1610,7 @@ Body.
         let padding = "a".repeat(60 * 1024);
         writeln!(yaml, "notes: {padding}").unwrap();
 
-        let result =
-            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options());
+        let result = parse_yaml_map(&yaml);
         assert!(
             result.is_ok(),
             "~60 KiB frontmatter must parse under the documented 64 KiB budget: {:?}",
@@ -1758,9 +1748,10 @@ Body.
     // ---- serde-saphyr behaviour pins -------------------------------------
     //
     // These guard user-visible parsing of frontmatter against parser
-    // upgrades. serde-saphyr 1.x breaks the first two (leading-zero decimals
-    // become floats; non-finite floats are a parse error by default), which
-    // is why the workspace holds it at 0.0.23.
+    // upgrades. They pinned serde-saphyr 0.0.23. On 1.x the first four hold
+    // through `parse_yaml_map`'s leading-zero resolution and the options in
+    // `hyalo_options` (DEC-350); the rest record the 1.x changes hyalo
+    // accepted.
 
     fn parse_props(yaml: &str) -> IndexMap<String, Value> {
         let content = format!("---\n{yaml}---\nbody\n");
@@ -1811,11 +1802,64 @@ Body.
     fn hash_in_string_value_round_trips() {
         let props = IndexMap::from([("k".to_owned(), Value::String("a#b".into()))]);
         let yaml = emit_properties(&props).unwrap();
+        assert_eq!(yaml, "k: \"a#b\"\n", "quoted as before the 1.x upgrade");
         let reparsed = parse_props(&yaml);
         assert_eq!(
             reparsed["k"],
             Value::String("a#b".into()),
             "emitted: {yaml}"
         );
+    }
+
+    #[test]
+    fn comments_do_not_count_against_the_event_budget() {
+        // `emit_comments: false`: comments are validated but are not
+        // events, so a comment-heavy block is limited by size alone.
+        let mut yaml = "# c\n".repeat(hyalo_options().budget.unwrap().max_events + 1);
+        yaml.push_str("a: 1\n");
+        assert_eq!(parse_yaml_map(&yaml).unwrap()["a"], serde_json::json!(1));
+    }
+
+    // Accepted 1.x changes (DEC-350).
+
+    /// 0.0.23 read Rust's float spellings `NaN`, `Infinity`, `inf` and `nan`
+    /// as non-finite floats and reported them as `".nan"` / `".inf"`, which
+    /// changed MDN's `title: NaN`. YAML 1.2 keeps them as strings, and so
+    /// does 1.x.
+    #[test]
+    fn plain_nan_and_infinity_words_stay_strings() {
+        let props = parse_props("a: NaN\nb: Infinity\nc: -Infinity\nd: inf\ne: nan\n");
+        assert_eq!(props["a"], Value::String("NaN".into()));
+        assert_eq!(props["b"], Value::String("Infinity".into()));
+        assert_eq!(props["c"], Value::String("-Infinity".into()));
+        assert_eq!(props["d"], Value::String("inf".into()));
+        assert_eq!(props["e"], Value::String("nan".into()));
+    }
+
+    /// A tab after the colon is valid YAML 1.2 separation; 0.0.23 refused
+    /// the whole block.
+    #[test]
+    fn a_tab_after_the_colon_parses() {
+        let props = parse_props("a:\tvalue\n");
+        assert_eq!(props["a"], Value::String("value".into()));
+    }
+
+    /// An explicit `!!int` tag on a quoted scalar is honoured; 0.0.23
+    /// refused the whole block.
+    #[test]
+    fn an_explicit_int_tag_on_a_quoted_scalar_parses() {
+        let props = parse_props("a: !!int '5'\n");
+        assert_eq!(props["a"], serde_json::json!(5));
+    }
+
+    /// Keys are compared as YAML nodes: `0xB` and `11` are the same integer,
+    /// so the mapping has a duplicate key. 0.0.23 compared the spellings.
+    #[test]
+    fn integer_keys_with_equal_values_are_duplicates() {
+        let err = Document::parse("---\n0xB: one\n11: two\n---\n").unwrap_err();
+        assert!(err.to_string().contains("duplicate key"), "{err}");
+        // Leading-zero spellings are not integers to the key comparison.
+        let props = parse_props("01: a\n1: b\n");
+        assert_eq!(props.len(), 2);
     }
 }

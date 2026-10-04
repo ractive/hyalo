@@ -558,7 +558,7 @@ mod tests {
     // --- Tag extraction ---
 
     fn make_props(yaml: &str) -> IndexMap<String, Value> {
-        serde_saphyr::from_str_with_options(yaml, hyalo_core::frontmatter::hyalo_options()).unwrap()
+        hyalo_core::frontmatter::parse_yaml_map(yaml).unwrap()
     }
 
     #[test]

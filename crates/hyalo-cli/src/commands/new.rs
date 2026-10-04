@@ -568,10 +568,7 @@ fn synthesise_content(
             ) => match default_val {
                 None => PropValue::EmptyList,
                 Some(value) => {
-                    let parsed: serde_json::Value = serde_saphyr::from_str_with_options(
-                        &value,
-                        hyalo_core::frontmatter::hyalo_options(),
-                    )?;
+                    let parsed = hyalo_core::frontmatter::parse_yaml_value(&value)?;
                     anyhow::ensure!(
                         parsed.is_array(),
                         "default for {prop_name} must be a YAML list"

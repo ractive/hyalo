@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
-use serde_saphyr::{Budget, DuplicateKeyPolicy, Options, SerializerOptions};
+use serde_saphyr::{Budget, DuplicateKeyPolicy, Options, SerializerOptions, Spanned};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -26,28 +26,234 @@ macro_rules! parse_bail {
 /// pathological inputs (deep nesting, alias bombs, huge scalars).
 /// Also enables strict YAML 1.2 booleans (`true`/`false` only) and
 /// rejects duplicate keys.
+///
+/// Every field serde-saphyr 1.x added is set deliberately (DEC-350).
+/// Comments are validated but not buffered (`emit_comments: false`), so a
+/// list under a long comment run parses and comments stay out of
+/// `max_events`, as in 0.0.23. A non-finite float (`.nan`, `.inf`, `1e999`)
+/// keeps its string fallback instead of failing the whole block. Parse
+/// frontmatter through [`parse_yaml_map`], not `serde_saphyr` directly, so
+/// leading-zero integers keep their YAML 1.2 core meaning.
+#[must_use]
 pub fn hyalo_options() -> Options {
-    Options {
-        budget: Some(Budget {
-            max_events: 10_000,
-            max_depth: 20,
-            max_aliases: 0,
-            max_anchors: 0,
-            max_nodes: 5_000,
-            // Matches MAX_FRONTMATTER_BYTES (the documented 64 KiB frontmatter
-            // limit): scalar content is a subset of the whole block, which is
-            // already capped there by the pre-read line/byte guards in every
-            // caller, so this can never be the tighter limit in practice
-            // (iter-219 NEW-8 — it used to be 8192, well below the documented
-            // ceiling, and the resulting parser error leaked raw budget-breach
-            // internals; see `friendly_parse_error`).
-            max_total_scalar_bytes: MAX_FRONTMATTER_BYTES,
-            max_documents: 1,
-            ..Budget::default()
-        }),
-        duplicate_keys: DuplicateKeyPolicy::Error,
-        strict_booleans: true,
-        ..Options::default()
+    let mut budget = Budget::default();
+    budget.max_events = 10_000;
+    budget.max_depth = 20;
+    budget.max_aliases = 0;
+    budget.max_anchors = 0;
+    budget.max_nodes = 5_000;
+    // Matches MAX_FRONTMATTER_BYTES (the documented 64 KiB frontmatter
+    // limit): scalar content is a subset of the whole block, which is
+    // already capped there by the pre-read line/byte guards in every
+    // caller, so this can never be the tighter limit in practice
+    // (iter-219 NEW-8 — it used to be 8192, well below the documented
+    // ceiling, and the resulting parser error leaked raw budget-breach
+    // internals; see `friendly_parse_error`).
+    budget.max_total_scalar_bytes = MAX_FRONTMATTER_BYTES;
+    budget.max_documents = 1;
+
+    let mut options = Options::default();
+    options.budget = Some(budget);
+    options.duplicate_keys = DuplicateKeyPolicy::Error;
+    options.strict_booleans = true;
+    options.emit_comments = false;
+    options.reject_non_finite_typeless_float = false;
+    options
+}
+
+/// Parse a YAML frontmatter block into an ordered mapping (DEC-350).
+///
+/// serde-saphyr 1.x refuses a decimal with a leading zero as an integer
+/// and resolves it as a float (`zip: 01234` → `1234.0`). YAML 1.2's core
+/// schema, which Obsidian follows, reads `[-+]?[0-9]+` as an integer. Such
+/// a value always arrives as an integral float, so the fast parse is kept
+/// unless one appears. Only then is the block parsed again with source
+/// spans, and each integral float is re-resolved from its own text by
+/// [`resolve_core_int`]. A written `12.0` stays a float.
+pub fn parse_yaml_map(yaml: &str) -> Result<IndexMap<String, Value>, serde_saphyr::Error> {
+    let fast: IndexMap<String, Value> = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+    if !fast.values().any(has_integral_float) {
+        return Ok(fast);
+    }
+    let spanned: IndexMap<String, Spanned<Node>> =
+        serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+    Ok(spanned
+        .into_iter()
+        .map(|(key, node)| (key, node_to_value(node, yaml)))
+        .collect())
+}
+
+/// [`parse_yaml_map`] for a YAML document of any shape (a list default in
+/// a schema, for instance).
+pub fn parse_yaml_value(yaml: &str) -> Result<Value, serde_saphyr::Error> {
+    let fast: Value = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+    if !has_integral_float(&fast) {
+        return Ok(fast);
+    }
+    let spanned: Spanned<Node> = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+    Ok(node_to_value(spanned, yaml))
+}
+
+/// Resolve a plain scalar's text as a YAML 1.2 core integer
+/// (`[-+]?[0-9]+`, where leading zeros are allowed and mean nothing).
+///
+/// Returns `None` for anything else, and for a value outside `i64`/`u64`,
+/// which then stays the float the parser produced.
+fn resolve_core_int(raw: &str) -> Option<serde_json::Number> {
+    let text = raw.trim();
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if text.starts_with('-') {
+        text.parse::<i64>().ok().map(Into::into)
+    } else {
+        digits.parse::<u64>().ok().map(Into::into)
+    }
+}
+
+/// Whether `value` holds a float with no fractional part, the only shape a
+/// leading-zero integer can take after serde-saphyr's resolution.
+fn has_integral_float(value: &Value) -> bool {
+    match value {
+        Value::Number(n) => n.is_f64() && n.as_f64().is_some_and(|f| f.fract() == 0.0),
+        Value::Array(items) => items.iter().any(has_integral_float),
+        Value::Object(map) => map.values().any(has_integral_float),
+        _ => false,
+    }
+}
+
+/// An untyped YAML node whose children keep their source spans. Only the
+/// slow path of [`parse_yaml_map`] uses it. serde-saphyr resolves every
+/// scalar exactly as it does for `serde_json::Value`; only floats are
+/// looked at again.
+enum Node {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    Float(f64),
+    String(String),
+    Seq(Vec<Spanned<Node>>),
+    Map(Vec<(String, Spanned<Node>)>),
+}
+
+impl<'de> serde::Deserialize<'de> for Node {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NodeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NodeVisitor {
+            type Value = Node;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("any YAML value")
+            }
+            fn visit_unit<E>(self) -> Result<Node, E> {
+                Ok(Node::Null)
+            }
+            fn visit_none<E>(self) -> Result<Node, E> {
+                Ok(Node::Null)
+            }
+            fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Node, D::Error> {
+                <Node as serde::Deserialize>::deserialize(d)
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<Node, E> {
+                Ok(Node::Bool(v))
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<Node, E> {
+                Ok(Node::Number(v.into()))
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Node, E> {
+                Ok(Node::Number(v.into()))
+            }
+            fn visit_f64<E>(self, v: f64) -> Result<Node, E> {
+                Ok(Node::Float(v))
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Node, E> {
+                Ok(Node::String(v.to_owned()))
+            }
+            fn visit_string<E>(self, v: String) -> Result<Node, E> {
+                Ok(Node::String(v))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Node, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(Node::Seq(items))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
+                }
+                Ok(Node::Map(entries))
+            }
+        }
+
+        deserializer.deserialize_any(NodeVisitor)
+    }
+}
+
+/// Whether an emitted line ends in a block-scalar indicator (`k: |-`,
+/// `- >`), so the lines indented below it are scalar content.
+fn opens_block_scalar(line: &str) -> bool {
+    let line = line.trim_end();
+    let Some(pos) = line.rfind(' ') else {
+        return false;
+    };
+    let indicator = &line[pos + 1..];
+    let mut chars = indicator.chars();
+    matches!(chars.next(), Some('|' | '>'))
+        && chars.all(|c| matches!(c, '+' | '-') || c.is_ascii_digit())
+}
+
+/// Whether the text right before a scalar ends in a YAML tag (`!!float`,
+/// `!foo`), which then governs the scalar's type.
+fn follows_tag(before: &str) -> bool {
+    before
+        .trim_end_matches([' ', '\t'])
+        .rsplit(|c: char| c.is_whitespace() || matches!(c, '[' | '{' | ','))
+        .next()
+        .is_some_and(|token| token.starts_with('!'))
+}
+
+/// Convert a spanned node to the `serde_json::Value` the fast path would
+/// have produced, except that an integral float whose source text is a core
+/// integer becomes that integer.
+fn node_to_value(node: Spanned<Node>, source: &str) -> Value {
+    match node.value {
+        Node::Null => Value::Null,
+        Node::Bool(b) => Value::Bool(b),
+        Node::Number(n) => Value::Number(n),
+        Node::Float(f) => {
+            let span = node.defined.span();
+            span.byte_offset()
+                .zip(span.byte_len())
+                .and_then(|(start, len)| {
+                    let start = usize::try_from(start).ok()?;
+                    let end = start.checked_add(usize::try_from(len).ok()?)?;
+                    // An explicitly tagged scalar (`!!float 1`) means what
+                    // its tag says; only an untagged one is re-resolved.
+                    (!follows_tag(source.get(..start)?)).then_some(())?;
+                    source.get(start..end)
+                })
+                .and_then(resolve_core_int)
+                .or_else(|| serde_json::Number::from_f64(f))
+                .map_or(Value::Null, Value::Number)
+        }
+        Node::String(s) => Value::String(s),
+        Node::Seq(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| node_to_value(item, source))
+                .collect(),
+        ),
+        Node::Map(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, item)| (key, node_to_value(item, source)))
+                .collect(),
+        ),
     }
 }
 
@@ -195,11 +401,235 @@ pub(super) fn hyalo_serializer_options_for<'a>(
         safe &= !has_document_marker_line(value) && !has_trailing_line_whitespace(value);
         quote_all |= has_trailing_line_whitespace(value);
     }
-    SerializerOptions {
-        compact_list_indent,
-        prefer_block_scalars: safe,
+    let mut options = SerializerOptions::default();
+    options.compact_list_indent = compact_list_indent;
+    options.prefer_block_scalars = safe;
+    options.quote_all = quote_all;
+    options.yaml_12 = true;
+    options
+}
+
+/// The document header serde-saphyr writes in front of every document when
+/// [`SerializerOptions::yaml_12`] is on. A frontmatter block carries none.
+const YAML_12_HEADER: &str = "%YAML 1.2\n---\n";
+
+/// Serialize `entries` as a YAML mapping with hyalo's quoting (DEC-350).
+///
+/// `options` must come from [`hyalo_serializer_options_for`]. Its
+/// `yaml_12` mode keeps serde-saphyr 1.x from quoting what Obsidian writes
+/// plain (`2026-01-01`, `12:30`). Strings that 0.0.23 quoted and 1.x would
+/// now leave plain are wrapped in [`serde_saphyr::DoubleQuoted`], see
+/// [`keeps_legacy_quotes`]. Mapping keys are emitted by serde-saphyr's key
+/// path, which ignores that wrapper.
+pub(super) fn emit_map<'a>(
+    entries: impl IntoIterator<Item = (&'a str, &'a Value)>,
+    options: SerializerOptions,
+) -> Result<String, serde_saphyr::SerializeError> {
+    let quote_all = options.quote_all;
+    let map = EmitMap {
+        entries: entries.into_iter().collect(),
         quote_all,
-        ..SerializerOptions::default()
+    };
+    let yaml = serde_saphyr::to_string_with_options(&map, options).map(strip_yaml_12_header)?;
+    Ok(requote_legacy_keys(yaml, &map.entries))
+}
+
+/// Restore 0.0.23's double quotes on mapping keys that serde-saphyr 1.x
+/// writes plain (DEC-350). Its key emitter ignores
+/// [`serde_saphyr::DoubleQuoted`] and, in `yaml_12` mode, writes `on:` and
+/// `yes:`, which YAML 1.1 readers (PyYAML, go-yaml v2) take for the boolean
+/// key `true`.
+///
+/// A key line is `<indent>[- ]*<key>:` followed by a space or the line end.
+/// The rewritten text is parsed back and kept only if it yields the same
+/// value, so a block-scalar line that merely looks like a key can never be
+/// changed. Keys with a `"` or `\` are left alone: they would need escaping,
+/// and 1.x quotes most of them already.
+fn requote_legacy_keys(yaml: String, entries: &[(&str, &Value)]) -> String {
+    fn collect<'v>(value: &'v Value, keys: &mut Vec<&'v str>) {
+        match value {
+            Value::Array(items) => items.iter().for_each(|v| collect(v, keys)),
+            Value::Object(map) => {
+                for (key, v) in map {
+                    keys.push(key);
+                    collect(v, keys);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut keys: Vec<&str> = Vec::new();
+    for &(key, value) in entries {
+        keys.push(key);
+        collect(value, &mut keys);
+    }
+    keys.retain(|k| keeps_legacy_quotes(k) && !k.contains(['"', '\\']));
+    if keys.is_empty() {
+        return yaml;
+    }
+
+    let mut out = String::with_capacity(yaml.len() + 2 * keys.len());
+    let mut changed = false;
+    // Indent of the line that opened the block scalar being skipped, if any.
+    let mut block_indent: Option<usize> = None;
+    for line in yaml.split_inclusive('\n') {
+        let body = line.trim_start_matches(' ');
+        let indent = line.len() - body.len();
+        if let Some(open) = block_indent {
+            if body.trim().is_empty() || indent > open {
+                out.push_str(line);
+                continue;
+            }
+            block_indent = None;
+        }
+        if opens_block_scalar(body) {
+            block_indent = Some(indent);
+        }
+        let mut rest = body;
+        while let Some(after) = rest.strip_prefix("- ") {
+            rest = after;
+        }
+        let prefix_len = line.len() - rest.len();
+        let hit = keys.iter().find(|key| {
+            rest.strip_prefix(**key)
+                .and_then(|r| r.strip_prefix(':'))
+                .is_some_and(|r| r.is_empty() || r.starts_with([' ', '\n', '\r']))
+        });
+        match hit {
+            Some(key) => {
+                out.push_str(&line[..prefix_len]);
+                out.push('"');
+                out.push_str(key);
+                out.push('"');
+                out.push_str(&rest[key.len()..]);
+                changed = true;
+            }
+            None => out.push_str(line),
+        }
+    }
+    if !changed {
+        return yaml;
+    }
+    let round_trips = parse_yaml_map(&out).is_ok_and(|parsed| {
+        parsed.len() == entries.len()
+            && parsed
+                .iter()
+                .zip(entries)
+                .all(|((pk, pv), &(k, v))| pk == k && pv == v)
+    });
+    if round_trips { out } else { yaml }
+}
+
+/// [`emit_map`] for a top-level sequence.
+pub(super) fn emit_seq(
+    items: &[&Value],
+    options: SerializerOptions,
+) -> Result<String, serde_saphyr::SerializeError> {
+    let quote_all = options.quote_all;
+    let seq: Vec<EmitValue<'_>> = items
+        .iter()
+        .map(|value| EmitValue { value, quote_all })
+        .collect();
+    serde_saphyr::to_string_with_options(&seq, options).map(strip_yaml_12_header)
+}
+
+/// Serialize a parsed property map as a YAML block, without fences.
+pub fn emit_yaml_map(props: &IndexMap<String, Value>) -> Result<String> {
+    emit_map(
+        props.iter().map(|(k, v)| (k.as_str(), v)),
+        hyalo_serializer_options_for(false, props.values()),
+    )
+    .context("failed to serialize YAML")
+}
+
+fn strip_yaml_12_header(yaml: String) -> String {
+    match yaml.strip_prefix(YAML_12_HEADER) {
+        Some(rest) => rest.to_owned(),
+        None => yaml,
+    }
+}
+
+/// Whether a single-line string that serde-saphyr 1.x would write plain
+/// must stay double-quoted, as serde-saphyr 0.0.23 wrote it, so a value
+/// hyalo writes is byte-identical across the upgrade (DEC-350).
+///
+/// Three shapes changed. A YAML 1.1 boolean spelling (`yes`, `off`, `y`),
+/// which `yaml_12` mode no longer quotes. A `#` that does not start a
+/// comment (`a#b`, `C#`), which 1.x writes plain. And a digit run with
+/// underscores (`1_000`, `1_`), which 1.x reads as a number when it is
+/// well formed and as a string otherwise. Each still reads back as the same
+/// string either way. The quoting only keeps the bytes.
+fn keeps_legacy_quotes(s: &str) -> bool {
+    if s.contains('\n') {
+        return false;
+    }
+    let yaml11_bool = ["yes", "y", "on", "no", "n", "off"]
+        .iter()
+        .any(|word| s.eq_ignore_ascii_case(word));
+    let inner_hash = s.contains('#')
+        && !s.starts_with('#')
+        && !s
+            .as_bytes()
+            .windows(2)
+            .any(|w| w[0].is_ascii_whitespace() && w[1] == b'#');
+    let underscored_digits = s.contains('_')
+        && s.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && s.bytes().all(|b| b.is_ascii_digit() || b == b'_');
+    yaml11_bool || inner_hash || underscored_digits
+}
+
+struct EmitMap<'a> {
+    entries: Vec<(&'a str, &'a Value)>,
+    quote_all: bool,
+}
+
+struct EmitValue<'a> {
+    value: &'a Value,
+    quote_all: bool,
+}
+
+impl serde::Serialize for EmitMap<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+        for &(key, value) in &self.entries {
+            map.serialize_entry(
+                key,
+                &EmitValue {
+                    value,
+                    quote_all: self.quote_all,
+                },
+            )?;
+        }
+        map.end()
+    }
+}
+
+impl serde::Serialize for EmitValue<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        let quote_all = self.quote_all;
+        match self.value {
+            // `quote_all` already quotes every string.
+            Value::String(s) if !quote_all && keeps_legacy_quotes(s) => {
+                serde_saphyr::DoubleQuoted(s.as_str()).serialize(serializer)
+            }
+            Value::Array(items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+                for value in items {
+                    seq.serialize_element(&EmitValue { value, quote_all })?;
+                }
+                seq.end()
+            }
+            Value::Object(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    map.serialize_entry(key, &EmitValue { value, quote_all })?;
+                }
+                map.end()
+            }
+            other => other.serialize(serializer),
+        }
     }
 }
 
@@ -208,9 +638,8 @@ pub(super) fn hyalo_serializer_options_for<'a>(
 pub fn emit_properties(props: &IndexMap<String, Value>) -> Result<String> {
     let mut output = String::new();
     for (key, value) in props {
-        let property = IndexMap::from([(key, value)]);
-        let yaml = serde_saphyr::to_string_with_options(
-            &property,
+        let yaml = emit_map(
+            [(key.as_str(), value)],
             hyalo_serializer_options_for(false, [value]),
         )
         .context("failed to serialize YAML")?;
@@ -469,13 +898,12 @@ impl Document {
         let (properties, compact_list_indent) = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
                 let compact = detect_list_indent_style(yaml);
-                let props: IndexMap<String, Value> =
-                    serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
-                        anyhow::Error::new(FrontmatterError(format!(
-                            "failed to parse YAML frontmatter: {}",
-                            friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
-                        )))
-                    })?;
+                let props: IndexMap<String, Value> = parse_yaml_map(yaml).map_err(|e| {
+                    anyhow::Error::new(FrontmatterError(format!(
+                        "failed to parse YAML frontmatter: {}",
+                        friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
+                    )))
+                })?;
                 (props, compact)
             }
             _ => (IndexMap::new(), false),
@@ -494,8 +922,8 @@ impl Document {
 
         if !self.properties.is_empty() {
             out.push_str("---\n");
-            let yaml = serde_saphyr::to_string_with_options(
-                &self.properties,
+            let yaml = emit_map(
+                self.properties.iter().map(|(k, v)| (k.as_str(), v)),
                 hyalo_serializer_options_for(self.compact_list_indent, self.properties.values()),
             )
             .context("failed to serialize YAML")?;
@@ -901,8 +1329,8 @@ fn render_frontmatter_impl(
             };
             Some(match spliced {
                 Some(yaml) => yaml,
-                None => serde_saphyr::to_string_with_options(
-                    props,
+                None => emit_map(
+                    props.iter().map(|(k, v)| (k.as_str(), v)),
                     hyalo_serializer_options_for(compact_list_indent, props.values()),
                 )
                 .context("failed to serialize YAML")?,
@@ -1191,7 +1619,7 @@ pub fn read_frontmatter_from_reader<R: BufRead>(mut reader: R) -> Result<IndexMa
         return Ok(IndexMap::new());
     }
 
-    serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
+    parse_yaml_map(yaml).map_err(|e| {
         anyhow::Error::new(FrontmatterError(format!(
             "failed to parse YAML frontmatter: {}",
             friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
@@ -1356,5 +1784,203 @@ mod open_tests {
         assert_eq!(result.expect("first open should succeed"), 23);
         assert_eq!(attempts.get(), 1);
         assert_eq!(waits.get(), 0);
+    }
+}
+
+#[cfg(test)]
+mod yaml_tests {
+    use super::{
+        emit_map, emit_seq, has_integral_float, hyalo_serializer_options_for, keeps_legacy_quotes,
+        opens_block_scalar, parse_yaml_map, parse_yaml_value, resolve_core_int,
+    };
+    use serde_json::{Value, json};
+
+    #[test]
+    fn resolve_core_int_accepts_the_core_schema_pattern_only() {
+        assert_eq!(resolve_core_int("01234"), Some(1234.into()));
+        assert_eq!(resolve_core_int("007"), Some(7.into()));
+        assert_eq!(resolve_core_int("00"), Some(0.into()));
+        assert_eq!(resolve_core_int("-017"), Some((-17).into()));
+        assert_eq!(resolve_core_int("+012"), Some(12.into()));
+        assert_eq!(resolve_core_int(" 08 "), Some(8.into()));
+        for not_int in [
+            "", "+", "-", "1.0", "1e3", "0x1F", "1_000", "12.", ".5", "1 2", "\u{663}",
+        ] {
+            assert_eq!(resolve_core_int(not_int), None, "{not_int:?}");
+        }
+        // Out of range for i64/u64: the parser's float stands.
+        assert_eq!(resolve_core_int("0123456789012345678901234"), None);
+        assert_eq!(
+            resolve_core_int("018446744073709551615"),
+            Some(u64::MAX.into())
+        );
+        assert_eq!(
+            resolve_core_int("-09223372036854775808"),
+            Some(i64::MIN.into())
+        );
+    }
+
+    #[test]
+    fn integral_float_detection_reaches_nested_values() {
+        assert!(has_integral_float(&json!(1.0)));
+        assert!(has_integral_float(&json!({"a": [1, {"b": 2.0}]})));
+        assert!(!has_integral_float(&json!({"a": [1, 1.5, "1.0"]})));
+    }
+
+    #[test]
+    fn leading_zero_integers_resolve_at_every_depth() {
+        let props = parse_yaml_map(
+            "m:\n  zip: 01234 # comment\n  list:\n    - 007\n    - \"08\"\n    - 1.0\n  flow: [01, -02, +03, 4.50]\nn: 12.0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Value::Object(props.into_iter().collect()),
+            json!({"m": {"zip": 1234, "list": [7, "08", 1.0], "flow": [1, -2, 3, 4.5]}, "n": 12.0})
+        );
+    }
+
+    #[test]
+    fn written_floats_stay_floats() {
+        let props = parse_yaml_map("a: 1.0\nb: 1e3\nc: -0.0\nd: 010.5\n").unwrap();
+        for key in ["a", "b", "c", "d"] {
+            assert!(props[key].is_f64(), "{key}: {:?}", props[key]);
+        }
+    }
+
+    #[test]
+    fn a_top_level_value_resolves_the_same_way() {
+        assert_eq!(
+            parse_yaml_value("[01, 2.0, x]").unwrap(),
+            json!([1, 2.0, "x"])
+        );
+    }
+
+    #[test]
+    fn legacy_quote_shapes() {
+        for quoted in [
+            "yes", "Off", "y", "N", "a#b", "C#", "x a#b", "1_000", "1_", "1__0",
+        ] {
+            assert!(keeps_legacy_quotes(quoted), "{quoted:?}");
+        }
+        for plain in [
+            "#a",
+            "a #b",
+            "yesno",
+            "1000",
+            "_1",
+            "a\n#b",
+            "2026-01-01",
+            "12:30",
+        ] {
+            assert!(!keeps_legacy_quotes(plain), "{plain:?}");
+        }
+    }
+
+    fn emit_one(value: &Value) -> String {
+        emit_map([("k", value)], hyalo_serializer_options_for(false, [value])).unwrap()
+    }
+
+    /// The emitter writes what serde-saphyr 0.0.23 wrote for the values
+    /// hyalo writes most, and where 1.x alone would differ (DEC-350).
+    #[test]
+    fn emitter_output_matches_the_pre_upgrade_bytes() {
+        let cases = [
+            ("a#b", "k: \"a#b\"\n"),
+            ("C#", "k: \"C#\"\n"),
+            ("yes", "k: \"yes\"\n"),
+            ("1_000", "k: \"1_000\"\n"),
+            ("2026-01-01", "k: 2026-01-01\n"),
+            ("2026-01-01T10:00:00Z", "k: 2026-01-01T10:00:00Z\n"),
+            ("12:30", "k: 12:30\n"),
+            ("01234", "k: \"01234\"\n"),
+            ("NaN", "k: \"NaN\"\n"),
+            (".nan", "k: \".nan\"\n"),
+            ("a: b", "k: \"a: b\"\n"),
+            ("plain words", "k: plain words\n"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(emit_one(&json!(input)), expected, "{input:?}");
+        }
+        assert_eq!(emit_one(&json!(["a#b", "x"])), "k:\n  - \"a#b\"\n  - x\n");
+        assert_eq!(emit_one(&json!({"n": "yes"})), "k:\n  \"n\": \"yes\"\n");
+        assert_eq!(emit_one(&json!(1234)), "k: 1234\n");
+    }
+
+    #[test]
+    fn emitter_never_writes_the_yaml_12_header() {
+        let value = json!("x");
+        assert!(!emit_one(&value).contains("%YAML"));
+        let seq = emit_seq(&[&value], hyalo_serializer_options_for(true, [&value])).unwrap();
+        assert_eq!(seq, "- x\n");
+    }
+
+    /// Changes 1.x makes on purpose that hyalo accepts: each one quotes a
+    /// value that 0.0.23 wrote plain.
+    #[test]
+    fn emitter_quotes_document_markers_and_uppercase_hex() {
+        assert_eq!(emit_one(&json!("0X1F")), "k: \"0X1F\"\n");
+        assert_eq!(emit_one(&json!("---")), "k: \"---\"\n");
+        for value in ["0X1F", "---", "--- a", "..."] {
+            let yaml = emit_one(&json!(value));
+            assert_eq!(parse_yaml_map(&yaml).unwrap()["k"], json!(value), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_float_tag_keeps_the_float() {
+        let props =
+            parse_yaml_map("a: !!float 1\nb: !!float 01\nc: [!!float 2, 03]\nd: 04\n").unwrap();
+        assert!(props["a"].is_f64(), "{:?}", props["a"]);
+        assert!(props["b"].is_f64(), "{:?}", props["b"]);
+        assert!(props["c"][0].is_f64(), "{:?}", props["c"]);
+        assert_eq!(props["c"][1], json!(3));
+        assert_eq!(props["d"], json!(4));
+    }
+
+    fn emit_entries(entries: &[(&str, &Value)], quote_all: bool) -> String {
+        let mut options = hyalo_serializer_options_for(false, entries.iter().map(|(_, v)| *v));
+        options.quote_all = quote_all;
+        emit_map(entries.iter().copied(), options).unwrap()
+    }
+
+    /// Keys keep 0.0.23's quotes: a YAML 1.1 reader takes a plain `on:` for
+    /// the boolean key `true` (DEC-350).
+    #[test]
+    fn legacy_keys_stay_quoted() {
+        let one = json!(1);
+        assert_eq!(emit_entries(&[("yes", &one)], false), "\"yes\": 1\n");
+        assert_eq!(emit_entries(&[("on", &one)], true), "\"on\": 1\n");
+        assert_eq!(emit_entries(&[("C#", &one)], false), "\"C#\": 1\n");
+        assert_eq!(emit_entries(&[("1_000", &one)], false), "\"1_000\": 1\n");
+        let nested = json!({"off": [ {"n": "x"} ], "plain": 2});
+        assert_eq!(
+            emit_entries(&[("m", &nested)], false),
+            "m:\n  \"off\":\n    - \"n\": x\n  plain: 2\n"
+        );
+        // A block-scalar line that looks like a key is content, not a key,
+        // whatever the chomping indicator (`|` and `|-`).
+        for text in [json!("first\nyes: no\n"), json!("first\nyes: no")] {
+            let yaml = emit_entries(&[("yes", &one), ("t", &text)], false);
+            assert!(yaml.starts_with("\"yes\": 1\nt: |"), "{yaml}");
+            assert!(yaml.contains("\n  yes: no"), "content untouched: {yaml}");
+            assert_eq!(parse_yaml_map(&yaml).unwrap()["t"], text, "{yaml}");
+        }
+    }
+
+    #[test]
+    fn block_scalar_indicators_are_recognised() {
+        for line in ["t: |", "t: |-", "t: >+", "- |2", "t: |-\n"] {
+            assert!(opens_block_scalar(line), "{line:?}");
+        }
+        for line in ["t: x|", "t: -", "t: a |b", "|"] {
+            assert!(!opens_block_scalar(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn quote_all_values_are_not_double_wrapped() {
+        let value = json!("a#b ");
+        let yaml = emit_one(&value);
+        assert_eq!(parse_yaml_map(&yaml).unwrap()["k"], value, "{yaml}");
     }
 }
