@@ -26,6 +26,58 @@ pub fn warn(msg: impl AsRef<str>) {
     eprintln!("warning: {}", msg.as_ref());
 }
 
+/// Whether advisories are suppressed (`-q`). Set once by the CLI at startup.
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// Advisory messages already printed this run, so a command that walks the
+/// vault more than once (or meets the same file through two code paths)
+/// prints each one once.
+static ADVISED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Suppress (or restore) [`advisory`] output.
+///
+/// The CLI calls this from its warning-system initialisation with the
+/// `--quiet` flag, so core advisories obey `-q` exactly like the CLI's own
+/// `warn::warn` / `warn::note` (iter-309).
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+/// Emit an advisory `warning:` line: silenced by `-q`, printed once per run.
+///
+/// For messages that describe what a command chose to leave out — a file
+/// skipped for exceeding [`MAX_FILE_SIZE`](crate::scanner::MAX_FILE_SIZE), a
+/// symlink pointing outside the vault — rather than a failure of the command
+/// itself. Those used to be raw `eprintln!`s that `-q` could not silence and
+/// that repeated whenever a command walked the vault twice (iter-309).
+///
+/// [`warn`] stays the unsuppressible form for the two warnings that must
+/// never be silent (a full-frontmatter rewrite, a pre-1970 mtime).
+pub fn advisory(msg: impl AsRef<str>) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
+    let msg = msg.as_ref();
+    if let Ok(mut seen) = ADVISED.lock() {
+        if seen.iter().any(|m| m == msg) {
+            return;
+        }
+        seen.push(msg.to_owned());
+    }
+    eprintln!("warning: {msg}");
+}
+
+/// Format the advisory for a file skipped because it exceeds `limit` bytes.
+#[must_use]
+pub fn oversized_skip_message(path: &std::path::Path, size: u64, limit: u64) -> String {
+    format!(
+        "skipping {} ({} MiB exceeds {} MiB limit)",
+        path.display(),
+        size / (1024 * 1024),
+        limit / (1024 * 1024)
+    )
+}
+
 /// A vault file a scan could not use, with the reason it was dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedFile {
@@ -205,6 +257,16 @@ mod tests {
         record_skip("dup.md", "bad yaml", SkipKind::Frontmatter);
         assert_eq!(skipped_count(), 1);
         reset_skips_for_test();
+    }
+
+    #[test]
+    fn oversized_skip_message_reports_mib() {
+        let msg = oversized_skip_message(
+            std::path::Path::new("big.md"),
+            150 * 1024 * 1024,
+            100 * 1024 * 1024,
+        );
+        assert_eq!(msg, "skipping big.md (150 MiB exceeds 100 MiB limit)");
     }
 
     #[test]

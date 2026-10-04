@@ -156,12 +156,11 @@ pub fn scan_file_multi_stats(
     }
     let file_size = pre_meta.len();
     if file_size > MAX_FILE_SIZE {
-        eprintln!(
-            "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-            path.display(),
-            file_size / (1024 * 1024),
-            MAX_FILE_SIZE / (1024 * 1024)
-        );
+        crate::warn::advisory(crate::warn::oversized_skip_message(
+            path,
+            file_size,
+            MAX_FILE_SIZE,
+        ));
         return Ok(ScanStats {
             size: file_size,
             lines: 0,

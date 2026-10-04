@@ -248,12 +248,11 @@ pub fn plan_mv(
                 .map(|t| (t, file_size))?,
         );
         if file_size > MAX_FILE_SIZE {
-            eprintln!(
-                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-                abs_path.display(),
-                file_size / (1024 * 1024),
-                MAX_FILE_SIZE / (1024 * 1024)
-            );
+            crate::warn::advisory(crate::warn::oversized_skip_message(
+                &abs_path,
+                file_size,
+                MAX_FILE_SIZE,
+            ));
             continue;
         }
         let content = std::fs::read_to_string(&abs_path)
@@ -329,12 +328,12 @@ pub fn plan_mv(
         .with_context(|| format!("failed to read mtime for {}", old_abs.display()))
         .map(|t| (t, old_file_size))?;
     if old_file_size > MAX_FILE_SIZE {
-        eprintln!(
-            "warning: skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
+        crate::warn::advisory(format!(
+            "skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
             old_abs.display(),
             old_file_size / (1024 * 1024),
             MAX_FILE_SIZE / (1024 * 1024)
-        );
+        ));
         return Ok(MvPlanResult {
             plans: plans.into_values().collect(),
             skipped_ambiguous: all_skipped_ambiguous,
@@ -1577,12 +1576,11 @@ pub fn plan_batch_mv(
             .with_context(|| format!("failed to stat {}", abs_path.display()))?;
         let file_size = meta.len();
         if file_size > MAX_FILE_SIZE {
-            eprintln!(
-                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-                abs_path.display(),
-                file_size / (1024 * 1024),
-                MAX_FILE_SIZE / (1024 * 1024)
-            );
+            crate::warn::advisory(crate::warn::oversized_skip_message(
+                &abs_path,
+                file_size,
+                MAX_FILE_SIZE,
+            ));
             continue;
         }
         let file_mtime = meta
@@ -1610,11 +1608,11 @@ pub fn plan_batch_mv(
                 &mut skipped_frontmatter,
             );
             for s in &skipped_frontmatter {
-                eprintln!(
-                    "warning: frontmatter wikilink [[{}]] in {}:{} spans a line break — not \
+                crate::warn::advisory(format!(
+                    "frontmatter wikilink [[{}]] in {}:{} spans a line break — not \
                      rewritten; update it by hand",
                     s.target, s.source, s.line
-                );
+                ));
             }
             // Batch mode doesn't surface skipped-ambiguous links in a JSON
             // envelope (unlike single-file `plan_mv`) — preserve the prior
@@ -1684,12 +1682,12 @@ pub fn plan_batch_mv(
             .with_context(|| format!("failed to stat {}", old_abs.display()))?;
         let file_size = meta.len();
         if file_size > MAX_FILE_SIZE {
-            eprintln!(
-                "warning: skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
+            crate::warn::advisory(format!(
+                "skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
                 old_abs.display(),
                 file_size / (1024 * 1024),
                 MAX_FILE_SIZE / (1024 * 1024)
-            );
+            ));
             continue;
         }
         let old_file_mtime = meta

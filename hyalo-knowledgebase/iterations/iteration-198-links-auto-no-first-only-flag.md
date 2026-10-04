@@ -27,7 +27,7 @@ it" — i.e. this was NOT judged urgent; it was deferred pending real demand.
 
 **Filed by the iter-195a review/merge sweep on 2026-08-18 with the
 re-evaluation gate below as its first task.** That gate has since concluded
-**proceed** — see "Re-evaluation outcome" and [[decision-log#DEC-068]].
+**proceed** — see "Re-evaluation outcome" and [[decision-log#DEC-068: `links auto --no-first-only` ships as a conflicting counter-flag (2026-08-18)]].
 
 ## Context
 
@@ -67,7 +67,7 @@ changes *what is scanned* rather than *how it is linked*, and a temporary
 `.hyalo.toml` edit mutates shared vault state that a killed run leaves behind.
 The change is ~10 lines of merge logic on an existing flag surface, so the
 cost side of "defer pending demand" was near zero. Recorded as
-[[decision-log#DEC-068]].
+[[decision-log#DEC-068: `links auto --no-first-only` ships as a conflicting counter-flag (2026-08-18)]].
 
 ## Acceptance criteria
 

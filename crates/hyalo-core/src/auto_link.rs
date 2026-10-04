@@ -568,12 +568,11 @@ pub fn auto_link(
         if let Ok(meta) = std::fs::metadata(abs_path)
             && meta.len() > MAX_FILE_SIZE
         {
-            eprintln!(
-                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-                abs_path.display(),
-                meta.len() / (1024 * 1024),
-                MAX_FILE_SIZE / (1024 * 1024),
-            );
+            crate::warn::advisory(crate::warn::oversized_skip_message(
+                abs_path,
+                meta.len(),
+                MAX_FILE_SIZE,
+            ));
             continue;
         }
 

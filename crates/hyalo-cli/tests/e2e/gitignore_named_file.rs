@@ -198,10 +198,11 @@ fn find_index_drops_the_fold_in_hint_for_an_ignored_named_file_but_keeps_it_for_
 /// Review-round regression (caught by the broader suite, pinned here
 /// directly): a file the walk discovers but cannot *parse* (unparsable
 /// frontmatter) must count under `results.files.skipped`, never under
-/// `results.files.excluded` — `count_gitignore_dropped_against`'s respecting
-/// set originally came from `index.entries()` alone, which also excludes
+/// `results.files.excluded` — the iteration 306 counter's respecting set
+/// originally came from `index.entries()` alone, which also excludes
 /// unparsed files, so every skip was briefly double-counted as a gitignore
-/// drop too.
+/// drop too. Since DEC-349 the count comes from the walk itself, before any
+/// parsing, and this pins that it stays that way.
 #[test]
 fn unparsable_frontmatter_is_never_counted_as_gitignore_excluded() {
     let tmp = vault_with_gitignored_named_file();

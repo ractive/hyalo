@@ -26,7 +26,9 @@ ctrlc = { version = "3.5", features = ["termination"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 dunce = "1"
 globset = "0.4"
-ignore = "0.4"
+# Pinned: hyalo-core/src/ignore_classify.rs ports this exact version's private
+# precedence logic (DEC-349); a bump needs the differential tests in discovery.rs reviewed.
+ignore = "=0.4.33"
 indexmap = { version = "2", features = ["serde"] }
 memchr = "2"
 libc = "0.2"

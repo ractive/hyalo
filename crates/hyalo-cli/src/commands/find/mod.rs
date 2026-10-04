@@ -1564,6 +1564,19 @@ pub(crate) fn find_prepared(
             (None, None)
         };
 
+        // iteration 309: an oversized file is never read, so its record is
+        // empty by necessity. Say so in the record, and — for a path the
+        // caller named (DEC-301) — on stderr even under `-q`. Without `-q`
+        // the scanner's advisory already said it, once.
+        let oversized = entry.size > hyalo_core::scanner::MAX_FILE_SIZE;
+        if oversized && !files_arg.is_empty() && crate::warn::is_quiet() {
+            crate::warn::warn_always(format!(
+                "{} was not read: {} MiB exceeds the {} MiB size limit",
+                entry.rel_path,
+                entry.size / (1024 * 1024),
+                hyalo_core::scanner::MAX_FILE_SIZE / (1024 * 1024)
+            ));
+        }
         let obj = FileObject {
             file: entry.rel_path.clone(),
             modified: fields.modified.then(|| entry.modified.clone()),
@@ -1580,6 +1593,7 @@ pub(crate) fn find_prepared(
             backlinks,
             matches: content_matches,
             score: bm25_score,
+            skipped: oversized.then(|| "oversized".to_owned()),
         };
 
         // --- Apply broken-links filter ---

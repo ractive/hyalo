@@ -209,15 +209,15 @@ pub fn mv(
     // formats — a silent skip is exactly the dangling-link failure this
     // iteration exists to remove — and list the offenders in JSON.
     if !mv_plan.skipped_frontmatter.is_empty() {
-        eprintln!(
-            "warning: {} frontmatter wikilink{} not rewritten (see --format json for the files)",
+        crate::warn::warn(format!(
+            "{} frontmatter wikilink{} not rewritten (see --format json for the files)",
             mv_plan.skipped_frontmatter.len(),
             if mv_plan.skipped_frontmatter.len() == 1 {
                 ""
             } else {
                 "s"
             }
-        );
+        ));
     }
 
     // NEW-3: emit stderr notes for text format (JSON envelope has skipped_ambiguous array).
@@ -234,14 +234,14 @@ pub fn mv(
             if skipped.is_self {
                 where_.push_str(" (in the moved file itself)");
             }
-            eprintln!(
-                "note: skipped ambiguous link [[{}]] at {}:{}{where_}\n      candidates: {}\n      \
+            crate::warn::note(format!(
+                "skipped ambiguous link [[{}]] at {}:{}{where_}\n      candidates: {}\n      \
                  (use --allow-ambiguous to rewrite based on stem match anyway)",
                 skipped.target,
                 skipped.source,
                 skipped.line,
                 skipped.candidates.join(", ")
-            );
+            ));
         }
     }
 
@@ -370,11 +370,11 @@ pub fn mv_batch(
     // cannot rewrite is announced instead of left dangling in silence.
     let total_split_links: usize = plan_result.skipped_frontmatter.values().map(Vec::len).sum();
     if total_split_links > 0 {
-        eprintln!(
-            "warning: {total_split_links} frontmatter wikilink{} not rewritten \
+        crate::warn::warn(format!(
+            "{total_split_links} frontmatter wikilink{} not rewritten \
              (see --format json for the files)",
             if total_split_links == 1 { "" } else { "s" }
-        );
+        ));
     }
 
     // 6. Build result.

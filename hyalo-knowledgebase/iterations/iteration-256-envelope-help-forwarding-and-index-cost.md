@@ -101,9 +101,9 @@ task, not because they are related to each other.
 
 ## Outcomes
 
-Four decisions recorded: [[decision-log#DEC-257]] (envelope),
-[[decision-log#DEC-258]] (help forwarding), [[decision-log#DEC-259]] (FIND-8),
-[[decision-log#DEC-260]] (root `-h`). Three of the four turned out to need
+Four decisions recorded: [[decision-log#DEC-257: `dry_run` is universal on object-shaped mutation results; `skipped_count` is bulk-family-only (2026-08-31)]] (envelope),
+[[decision-log#DEC-258: `hyalo help <cmd>` forwards to the short `-h` page (2026-08-31)]] (help forwarding), [[decision-log#DEC-259: FIND-8's 20% was a quadratic stem dedupe, not lazy-field materialisation (2026-08-31)]] (FIND-8),
+[[decision-log#DEC-260: the root `-h` grouping and examples stand; one label was factually wrong (2026-08-31)]] (root `-h`). Three of the four turned out to need
 code, not just a written decision.
 
 ### COH-9 — enumerated, then half-unified

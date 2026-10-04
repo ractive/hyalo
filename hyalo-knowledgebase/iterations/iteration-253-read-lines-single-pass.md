@@ -85,4 +85,4 @@ section) for the one case still forced to eat a full second read anyway.
 ## Links
 
 - [[iterations/iteration-252-find-result-shape]]
-- [[decision-log#DEC-252]]
+- [[decision-log#DEC-252: `title` is promoted out of `properties`, and `--fields all` is hinted only where it is affordable (2026-08-30)]]

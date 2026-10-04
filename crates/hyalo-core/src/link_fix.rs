@@ -1364,12 +1364,11 @@ pub fn apply_fixes_with_catalog(
         let (content, file_mtime) = match read_source_file(&abs_path) {
             SourceRead::Ok { content, mtime } => (content, mtime),
             SourceRead::TooLarge { size } => {
-                eprintln!(
-                    "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-                    abs_path.display(),
-                    size / (1024 * 1024),
-                    MAX_FILE_SIZE / (1024 * 1024)
-                );
+                crate::warn::advisory(crate::warn::oversized_skip_message(
+                    &abs_path,
+                    size,
+                    MAX_FILE_SIZE,
+                ));
                 unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
                 continue;
             }

@@ -145,6 +145,20 @@ and this project adheres to
   `--hyalo` path exit 2 (invalid input) instead of 1 (unavailable); oversized
   and empty sections defer with explicit reasons; unknown fields in a provider
   response are ignored; `TYPESAFE_*` variables are stripped case-insensitively.
+- A wikilink whose heading fragment contains inline code now resolves. The
+  code span was blanked before the link was parsed, so the fragment matched no
+  heading while the `suggested_fragment` hyalo offered kept the backticks
+  (DEC-348).
+- A file skipped for exceeding the 100 MiB size limit, a symlink pointing
+  outside the vault, and `mv`'s skipped-link notes now print once per run and
+  are silenced by `-q`; they were raw stderr writes that `-q` could not
+  suppress.
+- `summary` from disk counts gitignore-excluded files in the walk that finds
+  the vault's files and reuses that list for its link index: MDN 1.75 s to
+  1.04 s with identical output, `create-index` 2.95 s to 2.64 s (DEC-349).
+- `find` marks a file it did not read because it exceeds the size limit with
+  `skipped: "oversized"`, and a named oversized file is announced on stderr
+  even under `-q` (DEC-301); `lint` reports such a file once instead of twice.
 
 ### Removed
 
