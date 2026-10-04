@@ -495,7 +495,7 @@ fn read_resolved(
                 }
             }
             None if !props.is_empty() => {
-                let yaml = serde_saphyr::to_string(props)
+                let yaml = hyalo_core::frontmatter::emit_yaml_map(props)
                     .context("failed to serialize frontmatter as YAML")?;
                 out.push_str(&yaml);
             }

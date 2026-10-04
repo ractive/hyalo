@@ -27,7 +27,7 @@
 //! and warns.  There is no silent churn, and no path where splicing can write
 //! something the full serializer would not have written.
 
-use super::parse::{hyalo_options, is_closing_delimiter};
+use super::parse::{is_closing_delimiter, parse_yaml_map};
 use indexmap::IndexMap;
 use serde_json::Value;
 
@@ -388,8 +388,7 @@ fn parse_map(yaml: &str) -> Result<IndexMap<String, Value>, ()> {
     if yaml.trim().is_empty() {
         return Ok(IndexMap::new());
     }
-    serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, hyalo_options())
-        .map_err(|_| ())
+    parse_yaml_map(yaml).map_err(|_| ())
 }
 
 /// Order-sensitive map equality (`IndexMap`'s `PartialEq` ignores order).
@@ -402,12 +401,10 @@ fn map_eq(a: &IndexMap<String, Value>, b: &IndexMap<String, Value>) -> bool {
 
 /// Serialize a single `key: value` pair as standalone YAML.
 fn serialize_one(key: &str, value: &Value, compact_list_indent: bool) -> Option<String> {
-    let mut single: IndexMap<&str, &Value> = IndexMap::with_capacity(1);
-    single.insert(key, value);
     // FENCE-2 (DEC-293): never emit a block scalar whose content carries a
     // `---`/`...` line — it is a trap for every lenient frontmatter reader.
     let opts = super::parse::hyalo_serializer_options_for(compact_list_indent, [value]);
-    let mut yaml = serde_saphyr::to_string_with_options(&single, opts).ok()?;
+    let mut yaml = super::parse::emit_map([(key, value)], opts).ok()?;
     if !yaml.ends_with('\n') {
         yaml.push('\n');
     }
@@ -661,7 +658,7 @@ fn render_scalar_item(value: &Value) -> Option<String> {
     // FENCE-2 (DEC-293): a list item carrying a `---` line is written as a
     // quoted scalar, never as a block scalar.
     let opts = super::parse::hyalo_serializer_options_for(true, [value]);
-    let mut yaml = serde_saphyr::to_string_with_options(&seq, opts).ok()?;
+    let mut yaml = super::parse::emit_seq(&seq, opts).ok()?;
     if !yaml.ends_with('\n') {
         yaml.push('\n');
     }
