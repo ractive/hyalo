@@ -455,6 +455,10 @@ struct CountingHits {
     /// Directories an ignore rule drops that the rules-disabled walk would
     /// descend into; their `.md` files are counted separately.
     dropped_dirs: Vec<PathBuf>,
+    /// Hidden entries the crate walk keeps only because a `!negation`
+    /// whitelists them. A rules-disabled walk never admits them or anything
+    /// below them, so they are not part of the count's rules-disabled side.
+    whitelisted_hidden: Vec<PathBuf>,
 }
 
 fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathBuf>, usize)> {
@@ -522,12 +526,18 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
                 }
                 return false;
             }
-            match &inc {
-                // The crate walk takes `hidden(false)` plus this same filter.
-                Some(_) => admitted(),
-                // The crate walk's `hidden(true)`: a whitelist beats hidden.
-                None => !hidden || verdict == Verdict::Whitelist,
+            // The crate walk takes `hidden(false)` plus this same filter.
+            if inc.is_some() {
+                return admitted();
             }
+            // The crate walk's `hidden(true)`: a whitelist beats hidden.
+            if hidden
+                && verdict == Verdict::Whitelist
+                && let Ok(mut hits) = dropped.lock()
+            {
+                hits.whitelisted_hidden.push(entry.path().to_path_buf());
+            }
+            !hidden || verdict == Verdict::Whitelist
         });
     }
     let kind = FileKind::Markdown;
@@ -575,7 +585,12 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
         // from the crate, and use everything the pass saw as the
         // rules-disabled side of the count.
         let files = discover_files_with_include_ext_policy(dir, include, kind, true, true)?;
-        let mut everything = hits.kept;
+        let whitelisted_hidden = std::mem::take(&mut hits.whitelisted_hidden);
+        let mut everything: Vec<PathBuf> = hits
+            .kept
+            .into_iter()
+            .filter(|p| !whitelisted_hidden.iter().any(|h| p.starts_with(h)))
+            .collect();
         everything.extend(dropped_md);
         let everything = finish_walk(dir, everything, false)?;
         let dropped = count_not_in(dir, &everything, &files);
@@ -5851,6 +5866,28 @@ mod tests {
         let (files, dropped) = assert_matches_crate(tmp.path());
         assert_eq!(files.len(), 3, "plain, sub/plain, sub/root-secret");
         assert_eq!(dropped, 3);
+    }
+
+    /// A root `!negation` keeps a hidden file in the crate walk; a nested
+    /// `.gitignore` re-ignoring it must not count it, since a rules-disabled
+    /// walk never admitted it (PR #372 review).
+    #[test]
+    fn counting_walk_nested_fallback_ignores_whitelisted_hidden_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".gitignore", "!.kept.md\n"),
+                ("sub/.gitignore", ".kept.md\n"),
+                ("v.md", "# v\n"),
+                ("sub/p.md", "# p\n"),
+                ("sub/.kept.md", "# k\n"),
+            ],
+        );
+        let (files, dropped) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 2);
+        assert_eq!(dropped, 0);
     }
 
     /// A `.jj` directory takes the crate route up front.

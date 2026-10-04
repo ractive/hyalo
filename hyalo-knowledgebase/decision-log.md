@@ -7087,7 +7087,11 @@ seen while the walk is already classifying its siblings, so the file set then
 comes from the crate's rules-enabled walk and the first pass supplies the
 rules-disabled side of the count, two walks as before. A `.jj` directory or
 a `.git` worktree file at the root or above takes the crate route up front.
-Every other command still discovers files through the crate alone. Unit
+Every other command still discovers files through the crate alone, but
+`create-index` takes its file **set** from the port, so every `--index`
+command depends on it indirectly. The `ignore` crate is therefore pinned to
+`=0.4.33` in `Cargo.toml` and ignored by Dependabot: a bump must come with a
+review of the private precedence logic this port mirrors. Unit
 tests compare the file list and the count with the crate's two-walk result
 for root, ancestor, `.ignore`-only, whitelist-beats-hidden, nested, `.jj`
 and relative-root layouts.
