@@ -37,6 +37,7 @@ pub mod frontmatter;
 pub mod frontmatter_links;
 pub(crate) mod fs_util;
 pub mod heading;
+pub(crate) mod ignore_classify;
 pub mod index;
 #[doc(hidden)]
 pub mod internal_metrics;

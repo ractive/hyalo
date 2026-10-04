@@ -369,11 +369,294 @@ pub(crate) fn has_hidden_component(rel: &str) -> bool {
 /// (installed via [`set_scan_include`]) re-includes them; `.git/**` is always
 /// excluded.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    if let Some(files) = memoized_discovery(dir) {
+        return Ok(files);
+    }
     let include = match SCAN_INCLUDE.get() {
         Some(Some(inc)) => Some(inc),
         _ => None,
     };
     discover_files_with_include(dir, include)
+}
+
+/// The file list a [`discover_files_counting_gitignored`] call with
+/// `memoize: true` computed, keyed by the vault directory it walked.
+///
+/// `summary` from disk used to walk the vault for its file set, again for the
+/// case-insensitive link index, and a third time for the gitignore count
+/// (iteration 309, DEC-349). It is read-only, so it computes the list once and
+/// every later [`discover_files`] for the same directory in that process reuses
+/// it. Nothing that writes to the vault populates this.
+static DISCOVERY_MEMO: Mutex<Option<(PathBuf, Vec<PathBuf>)>> = Mutex::new(None);
+
+fn memoized_discovery(dir: &Path) -> Option<Vec<PathBuf>> {
+    let memo = DISCOVERY_MEMO.lock().ok()?;
+    match memo.as_ref() {
+        Some((memo_dir, files)) if memo_dir == dir => Some(files.clone()),
+        _ => None,
+    }
+}
+
+/// Forget the memoized file list. **Tests only.**
+pub fn reset_discovery_memo_for_test() {
+    if let Ok(mut memo) = DISCOVERY_MEMO.lock() {
+        *memo = None;
+    }
+}
+
+/// [`discover_files`] plus the number of `.md` files the VCS ignore sources
+/// (`.gitignore`, `.ignore`, `.git/info/exclude`, global excludes) hide from
+/// it, in **one** directory walk where the vault layout allows it (iteration
+/// 309, DEC-349; supersedes the second walk DEC-342 described).
+///
+/// The walk runs with the `ignore` crate's VCS rules disabled and asks
+/// [`crate::ignore_classify::PreknownIgnores`] — a port of the crate's own
+/// precedence for the vault root's and its ancestors' ignore sources plus the
+/// global excludes — what the rules-enabled walk would have done with each
+/// entry. A dropped `.md` file is counted on the spot; a dropped directory is
+/// pruned like the crate prunes it and its `.md` files are counted afterwards
+/// by a walk of just that subtree. A vault with no ignore source at all pays
+/// nothing beyond the walk it always needed.
+///
+/// An ignore source *below* the root (a nested `.gitignore`, `.ignore`, `.git`
+/// or `.jj`) is only seen once the walk is already classifying its siblings,
+/// so the file set then comes from the crate's own rules-enabled walk and the
+/// first pass supplies the rules-disabled side of the count — two walks, as
+/// before. A `.jj` directory or a `.git` worktree file at the root or above
+/// takes the same route up front.
+///
+/// `memoize` stores the list for later [`discover_files`] calls on the same
+/// directory in this process; only a read-only command may pass `true`.
+///
+/// The returned count is "how many `.md` files the ignore sources hide";
+/// [`note_gitignore_dropped`] is the caller's to call.
+pub fn discover_files_counting_gitignored(
+    dir: &Path,
+    memoize: bool,
+) -> Result<(Vec<PathBuf>, usize)> {
+    let include = match SCAN_INCLUDE.get() {
+        Some(Some(inc)) => Some(inc),
+        _ => None,
+    };
+    let (files, dropped) = counting_walk(dir, include)?;
+    if memoize && let Ok(mut memo) = DISCOVERY_MEMO.lock() {
+        *memo = Some((dir.to_path_buf(), files.clone()));
+    }
+    Ok((files, dropped))
+}
+
+/// What the single pass collected.
+#[derive(Default)]
+struct CountingHits {
+    /// `.md` files the rules-enabled walk keeps (subject to `finish_walk`).
+    kept: Vec<PathBuf>,
+    /// `.md` files an ignore rule drops that the rules-disabled walk admits.
+    dropped_files: Vec<PathBuf>,
+    /// Directories an ignore rule drops that the rules-disabled walk would
+    /// descend into; their `.md` files are counted separately.
+    dropped_dirs: Vec<PathBuf>,
+}
+
+fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathBuf>, usize)> {
+    use crate::ignore_classify::{
+        PreknownIgnores, Verdict, is_hidden_entry, is_ignore_source_name,
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let Ok(pre) = PreknownIgnores::load(dir) else {
+        return two_walk_count(dir, include);
+    };
+    let pre = Arc::new(pre);
+    let nested_source = Arc::new(AtomicBool::new(false));
+    let dropped: Arc<Mutex<CountingHits>> = Arc::new(Mutex::new(CountingHits::default()));
+
+    let (tx, rx) = mpsc::channel();
+    let (err_tx, err_rx) = mpsc::channel::<String>();
+    let mut builder = WalkBuilder::new(dir);
+    builder.git_ignore(false);
+    builder.ignore(false);
+    builder.git_exclude(false);
+    builder.git_global(false);
+    // Hidden entries are filtered below, after classification, because a
+    // `!negation` keeps a hidden entry in the rules-enabled walk.
+    builder.hidden(false);
+    {
+        let root = dir.to_path_buf();
+        let inc = include.map(ScanInclude::clone_shared);
+        let pre = Arc::clone(&pre);
+        let nested_source = Arc::clone(&nested_source);
+        let dropped = Arc::clone(&dropped);
+        builder.filter_entry(move |entry| {
+            if entry.depth() >= 2 && is_ignore_source_name(entry.file_name()) {
+                nested_source.store(true, Ordering::Relaxed);
+            }
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            let hidden = is_hidden_entry(entry);
+            // What a rules-disabled walk admits (the side of the count the
+            // pre-DEC-349 second walk measured): the `[scan] include`
+            // filter, or "not hidden".
+            let admitted = || match &inc {
+                Some(inc) => {
+                    let rel = relative_path(&root, entry.path());
+                    rel.is_empty()
+                        || !has_hidden_component(&rel)
+                        || if is_dir {
+                            inc.allows_dir(&rel)
+                        } else {
+                            inc.allows_file(&rel)
+                        }
+                }
+                None => !hidden,
+            };
+            let verdict = pre.classify(entry.path(), is_dir);
+            if verdict == Verdict::Ignore {
+                if admitted()
+                    && let Ok(mut hits) = dropped.lock()
+                {
+                    if is_dir {
+                        hits.dropped_dirs.push(entry.path().to_path_buf());
+                    } else {
+                        hits.dropped_files.push(entry.path().to_path_buf());
+                    }
+                }
+                return false;
+            }
+            match &inc {
+                // The crate walk takes `hidden(false)` plus this same filter.
+                Some(_) => admitted(),
+                // The crate walk's `hidden(true)`: a whitelist beats hidden.
+                None => !hidden || verdict == Verdict::Whitelist,
+            }
+        });
+    }
+    let kind = FileKind::Markdown;
+    builder.build_parallel().run(|| {
+        let tx = tx.clone();
+        let err_tx = err_tx.clone();
+        Box::new(move |entry| {
+            match entry {
+                Ok(e) => {
+                    let path = e.path();
+                    if kind.accepts(path) && path.is_file() {
+                        let _ = tx.send(path.to_path_buf());
+                    }
+                }
+                Err(e) => {
+                    let _ = err_tx.send(format!("{e}"));
+                }
+            }
+            ignore::WalkState::Continue
+        })
+    });
+    drop(tx);
+    drop(err_tx);
+    for e in err_rx {
+        eprintln!("warning: directory walk error: {e}");
+    }
+    let mut hits = std::mem::take(
+        &mut *dropped
+            .lock()
+            .map_err(|_| anyhow::anyhow!("gitignore counting walk: collector lock poisoned"))?,
+    );
+    hits.kept = rx.into_iter().collect();
+
+    let mut dropped_md: Vec<PathBuf> = hits
+        .dropped_files
+        .into_iter()
+        .filter(|p| kind.accepts(p) && p.is_file())
+        .collect();
+    if !hits.dropped_dirs.is_empty() {
+        dropped_md.extend(walk_ignoring_vcs(dir, &hits.dropped_dirs, include));
+    }
+
+    if nested_source.load(Ordering::Relaxed) {
+        // The pass classified without the nested source: take the file set
+        // from the crate, and use everything the pass saw as the
+        // rules-disabled side of the count.
+        let files = discover_files_with_include_ext_policy(dir, include, kind, true, true)?;
+        let mut everything = hits.kept;
+        everything.extend(dropped_md);
+        let everything = finish_walk(dir, everything, false)?;
+        let dropped = count_not_in(dir, &everything, &files);
+        return Ok((files, dropped));
+    }
+
+    let files = finish_walk(dir, hits.kept, true)?;
+    let dropped = if dropped_md.is_empty() {
+        0
+    } else {
+        let dropped_md = finish_walk(dir, dropped_md, false)?;
+        count_not_in(dir, &dropped_md, &files)
+    };
+    Ok((files, dropped))
+}
+
+/// The pre-iteration-309 method: the crate's walk for the file set, then a
+/// rules-disabled walk to count the difference. Used when the vault's VCS
+/// layout (a `.jj` directory, a `.git` worktree file) is outside what
+/// [`crate::ignore_classify`] reproduces.
+fn two_walk_count(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathBuf>, usize)> {
+    let files =
+        discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, true, true)?;
+    let ignoring =
+        discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, false, false)?;
+    let dropped = count_not_in(dir, &ignoring, &files);
+    Ok((files, dropped))
+}
+
+/// How many of `candidates` are not in `kept`, compared by vault-relative path.
+fn count_not_in(dir: &Path, candidates: &[PathBuf], kept: &[PathBuf]) -> usize {
+    let kept: HashSet<String> = kept.iter().map(|p| relative_path(dir, p)).collect();
+    candidates
+        .iter()
+        .filter(|p| !kept.contains(&relative_path(dir, p)))
+        .count()
+}
+
+/// Every `.md` file under `roots` that a rules-disabled vault walk admits —
+/// the subtrees an ignore rule pruned, walked only to be counted.
+fn walk_ignoring_vcs(dir: &Path, roots: &[PathBuf], include: Option<&ScanInclude>) -> Vec<PathBuf> {
+    let Some((first, rest)) = roots.split_first() else {
+        return Vec::new();
+    };
+    let mut builder = WalkBuilder::new(first);
+    for root in rest {
+        builder.add(root);
+    }
+    builder.git_ignore(false);
+    builder.ignore(false);
+    builder.git_exclude(false);
+    builder.git_global(false);
+    builder.parents(false);
+    if let Some(inc) = include {
+        builder.hidden(false);
+        let vault = dir.to_path_buf();
+        let inc = inc.clone_shared();
+        builder.filter_entry(move |entry| {
+            let rel = relative_path(&vault, entry.path());
+            if rel.is_empty() || !has_hidden_component(&rel) {
+                return true;
+            }
+            if entry.file_type().is_some_and(|t| t.is_dir()) {
+                inc.allows_dir(&rel)
+            } else {
+                inc.allows_file(&rel)
+            }
+        });
+    } else {
+        builder.hidden(true);
+    }
+    let kind = FileKind::Markdown;
+    let mut out = Vec::new();
+    for entry in builder.build() {
+        match entry {
+            Ok(e) if kind.accepts(e.path()) && e.path().is_file() => out.push(e.into_path()),
+            Ok(_) => {}
+            Err(e) => eprintln!("warning: directory walk error: {e}"),
+        }
+    }
+    out
 }
 
 /// Which files a vault walk should collect.
@@ -415,57 +698,6 @@ fn discover_files_with_include_ext(
     kind: FileKind,
 ) -> Result<Vec<PathBuf>> {
     discover_files_with_include_ext_policy(dir, include, kind, true, true)
-}
-
-/// [`discover_files`] variant that does not honour `.gitignore` **or any of
-/// the other VCS ignore sources the normal walk applies** — `.ignore` files,
-/// `.git/info/exclude`, and git's global excludes file (iteration 306 / F5,
-/// review-round finding 6: `git_ignore(false)` alone leaves those three
-/// enabled, which silently under-counted a file excluded only by one of
-/// them). Used only to measure how many `.md` files the normal walk is
-/// hiding to any of these sources. Never used for a read or write path: an
-/// ignored file stays invisible to every other command unless named
-/// explicitly (DEC-301).
-pub fn discover_files_ignoring_gitignore(dir: &Path) -> Result<Vec<PathBuf>> {
-    let include = match SCAN_INCLUDE.get() {
-        Some(Some(inc)) => Some(inc),
-        _ => None,
-    };
-    // `record_scan_exclude_stats: false` — this walk's own `[scan] exclude`
-    // drops must not perturb `scan_excluded_count()`, which `summary` already
-    // populates from the real (ignore-respecting) walk.
-    discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, false, false)
-}
-
-/// How many `.md` files under `dir` a normal (ignore-respecting) vault sweep
-/// never sees because `.gitignore`, `.ignore`, `.git/info/exclude` or a
-/// global exclude file hides them (iteration 306 / F5, review-round perf
-/// fix), given the vault-relative paths of the files a normal sweep *did*
-/// keep.
-///
-/// Takes the already-discovered respecting set rather than re-walking for it
-/// (the review round's perf finding: the first implementation called
-/// [`discover_files`] again here, duplicating a walk every caller had already
-/// paid for). Only the ignore-disabled walk is extra; `summary`'s disk-scan
-/// path pays it once, and `create-index` pays it once at build time so
-/// `summary --index` can read the count back from the snapshot instead of
-/// walking at all (see `SnapshotHeader::gitignore_dropped`, DEC-342).
-///
-/// A fully single-pass computation (walking once and classifying each entry
-/// against the layered ignore-source stack directly) is not possible from
-/// the `ignore` crate's public API: the type that resolves that stack
-/// (`ignore::dir::Ignore`) is a private implementation detail the crate
-/// deliberately does not expose.
-#[allow(clippy::implicit_hasher)] // every caller builds a plain HashSet<String>; genericity buys nothing here
-pub fn count_gitignore_dropped_against(
-    dir: &Path,
-    respecting_rel: &HashSet<String>,
-) -> Result<usize> {
-    let ignoring = discover_files_ignoring_gitignore(dir)?;
-    Ok(ignoring
-        .into_iter()
-        .filter(|p| !respecting_rel.contains(&relative_path(dir, p)))
-        .count())
 }
 
 /// Whether a normal, ignore-respecting vault walk would currently admit the
@@ -597,8 +829,20 @@ fn discover_files_with_include_ext_policy(
         eprintln!("warning: directory walk error: {e}");
     }
 
-    let mut files: Vec<PathBuf> = rx.into_iter().collect();
+    finish_walk(dir, rx.into_iter().collect(), record_scan_exclude_stats)
+}
 
+/// Turn a walk's raw hits into the vault's file list: sorted, out-of-vault
+/// symlinks dropped, duplicate spellings merged, `[scan] exclude` applied.
+///
+/// Shared by the crate-driven walk above and the single-pass counting walk
+/// ([`discover_files_counting_gitignored`]), so both return byte-identical
+/// lists for the same hits.
+fn finish_walk(
+    dir: &Path,
+    mut files: Vec<PathBuf>,
+    record_scan_exclude_stats: bool,
+) -> Result<Vec<PathBuf>> {
     // Sort before filtering so the dedup below is deterministic: when a file is
     // reachable under two spellings, the lexicographically first one wins on
     // every platform and every run.
@@ -5420,80 +5664,252 @@ mod tests {
         tmp
     }
 
+    /// The single pass against the crate's own two walks: the file list
+    /// must be identical and the count must agree.
+    fn assert_matches_crate(dir: &Path) -> (Vec<PathBuf>, usize) {
+        let _guard = MEMO_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let single = counting_walk(dir, None).unwrap();
+        let oracle = two_walk_count(dir, None).unwrap();
+        let rel = |files: &[PathBuf]| -> Vec<String> {
+            files.iter().map(|p| relative_path(dir, p)).collect()
+        };
+        assert_eq!(
+            rel(&single.0),
+            rel(&oracle.0),
+            "file sets differ for {}",
+            dir.display()
+        );
+        assert_eq!(
+            single.1,
+            oracle.1,
+            "gitignore-dropped counts differ for {}",
+            dir.display()
+        );
+        single
+    }
+
+    static MEMO_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn write_all(root: &Path, files: &[(&str, &str)]) {
+        for (name, content) in files {
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, content).unwrap();
+        }
+    }
+
     #[test]
-    fn count_gitignore_dropped_against_counts_only_the_ignored_files() {
+    fn counting_walk_counts_only_the_ignored_files() {
         let tmp = gitignore_vault(&["Secret.md", "sub/Also.md"], &["visible.md"]);
-        let respecting: HashSet<String> = discover_files(tmp.path())
-            .unwrap()
-            .iter()
-            .map(|p| relative_path(tmp.path(), p))
-            .collect();
-        assert_eq!(respecting, HashSet::from(["visible.md".to_owned()]));
-        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        let (files, dropped) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 1);
         assert_eq!(dropped, 2);
     }
 
-    /// Review round finding (6): `.ignore` files and `.git/info/exclude`
-    /// must be counted too, not just `.gitignore` — `git_ignore(false)`
-    /// alone leaves those sources enabled and silently under-counts.
+    /// Review round finding (6) of iteration 306: `.ignore` files and
+    /// `.git/info/exclude` are counted too, not just `.gitignore`.
     #[test]
-    fn count_gitignore_dropped_against_counts_dot_ignore_and_git_info_exclude_too() {
+    fn counting_walk_counts_dot_ignore_and_git_info_exclude_too() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
-        fs::write(tmp.path().join(".ignore"), "FromDotIgnore.md\n").unwrap();
-        fs::write(
-            tmp.path().join(".git/info/exclude"),
-            "FromGitInfoExclude.md\n",
-        )
-        .unwrap();
-        make_files(
+        write_all(
             tmp.path(),
-            &["visible.md", "FromDotIgnore.md", "FromGitInfoExclude.md"],
+            &[
+                (".ignore", "FromDotIgnore.md\n"),
+                (".git/info/exclude", "FromGitInfoExclude.md\n"),
+                ("visible.md", "# v\n"),
+                ("FromDotIgnore.md", "# i\n"),
+                ("FromGitInfoExclude.md", "# e\n"),
+            ],
         );
-        let respecting: HashSet<String> = discover_files(tmp.path())
-            .unwrap()
-            .iter()
-            .map(|p| relative_path(tmp.path(), p))
-            .collect();
-        assert_eq!(respecting, HashSet::from(["visible.md".to_owned()]));
-        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        let (files, dropped) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 1);
         assert_eq!(
             dropped, 2,
-            "both the .ignore and .git/info/exclude drops must be counted"
+            "both the .ignore and .git/info/exclude drops count"
         );
     }
 
     #[test]
-    fn count_gitignore_dropped_against_is_zero_with_no_gitignore() {
+    fn counting_walk_is_zero_with_no_ignore_source() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["a.md", "sub/b.md"]);
-        let respecting: HashSet<String> = discover_files(tmp.path())
-            .unwrap()
-            .iter()
-            .map(|p| relative_path(tmp.path(), p))
-            .collect();
-        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        let (files, dropped) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 2);
         assert_eq!(dropped, 0);
     }
 
     #[test]
-    fn count_gitignore_dropped_against_does_not_perturb_scan_excluded_count() {
-        // The `.gitignore`-disabled walk this uses internally must not call
-        // `note_scan_excluded`, or it would inflate `summary`'s `[scan]
-        // exclude`-only counter with gitignore drops it never dropped under
-        // that policy.
+    fn counting_walk_does_not_perturb_scan_excluded_count() {
         let before = scan_excluded_count();
         let tmp = gitignore_vault(&["Secret.md"], &["visible.md"]);
-        let respecting: HashSet<String> = discover_files(tmp.path())
-            .unwrap()
-            .iter()
-            .map(|p| relative_path(tmp.path(), p))
-            .collect();
-        let _ = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        let _ = counting_walk(tmp.path(), None).unwrap();
         assert_eq!(
             scan_excluded_count(),
             before,
-            "the gitignore-counting walk must not touch the [scan] exclude counter"
+            "the gitignore count must not touch the [scan] exclude counter"
         );
+    }
+
+    /// A vault in a subdirectory of a repository: the repository root's
+    /// `.gitignore` is an ancestor source, matched against the canonical
+    /// absolute path (anchored patterns, directory patterns, negations).
+    #[test]
+    fn counting_walk_matches_crate_for_ancestor_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write_all(
+            &repo,
+            &[
+                (
+                    ".gitignore",
+                    "/build\n/docs/secret.md\ndrafts/\n*.tmp.md\n!keep.tmp.md\n.env\n",
+                ),
+                ("docs/visible.md", "# v\n"),
+                ("docs/secret.md", "# s\n"),
+                ("docs/sub/secret.md", "# not anchored here\n"),
+                ("docs/drafts/a.md", "# d\n"),
+                ("docs/drafts/deep/b.md", "# d\n"),
+                ("docs/x.tmp.md", "# t\n"),
+                ("docs/keep.tmp.md", "# k\n"),
+                (
+                    "docs/build/c.md",
+                    "# only /build at the repo root is ignored\n",
+                ),
+            ],
+        );
+        let (files, dropped) = assert_matches_crate(&repo.join("docs"));
+        assert_eq!(files.len(), 4, "visible, sub/secret, keep.tmp, build/c");
+        assert_eq!(dropped, 4, "secret, drafts/a, drafts/deep/b, x.tmp");
+    }
+
+    /// An ancestor `.ignore` applies without any repository; an ancestor
+    /// `.gitignore` does not.
+    #[test]
+    fn counting_walk_matches_crate_for_ancestor_dot_ignore_outside_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".ignore", "hidden-by-ignore.md\n"),
+                (".gitignore", "inert-without-git.md\n"),
+                ("vault/hidden-by-ignore.md", "# i\n"),
+                ("vault/inert-without-git.md", "# g\n"),
+                ("vault/plain.md", "# p\n"),
+            ],
+        );
+        let (files, dropped) = assert_matches_crate(&tmp.path().join("vault"));
+        // Outside a repository the ancestor `.gitignore` is inert — unless
+        // the machine's temp dir itself sits in one; the oracle decides.
+        assert_ne!(files.len(), 0);
+        assert_ne!(dropped, 0);
+    }
+
+    /// A `!negation` keeps a hidden entry in the crate's walk.
+    #[test]
+    fn counting_walk_matches_crate_for_whitelisted_hidden_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".gitignore", "!.kept.md\n!.kept-dir/\n"),
+                (".kept.md", "# k\n"),
+                (".skipped.md", "# s\n"),
+                (".kept-dir/note.md", "# n\n"),
+                ("plain.md", "# p\n"),
+            ],
+        );
+        assert_matches_crate(tmp.path());
+    }
+
+    /// A nested `.gitignore` is discovered mid-walk: the file set falls back
+    /// to the crate's walk and the count still agrees.
+    #[test]
+    fn counting_walk_falls_back_for_nested_ignore_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".gitignore", "root-secret.md\n"),
+                ("root-secret.md", "# r\n"),
+                ("sub/.gitignore", "nested-secret.md\n!root-secret.md\n"),
+                ("sub/nested-secret.md", "# n\n"),
+                ("sub/root-secret.md", "# whitelisted by the nested file\n"),
+                ("sub/plain.md", "# p\n"),
+                ("other/.ignore", "x.md\n"),
+                ("other/x.md", "# x\n"),
+                ("plain.md", "# p\n"),
+            ],
+        );
+        let (files, dropped) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 3, "plain, sub/plain, sub/root-secret");
+        assert_eq!(dropped, 3);
+    }
+
+    /// A `.jj` directory takes the crate route up front.
+    #[test]
+    fn counting_walk_falls_back_for_jj_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".jj")).unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".gitignore", "secret.md\n"),
+                ("secret.md", "# s\n"),
+                ("a.md", "# a\n"),
+            ],
+        );
+        assert_matches_crate(tmp.path());
+    }
+
+    /// The crate rebases a *relative* walk root onto its canonical path before
+    /// matching an ancestor's rules; hyalo's configured `dir` is relative.
+    #[cfg(unix)]
+    #[test]
+    fn counting_walk_matches_crate_for_relative_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        write_all(
+            &repo,
+            &[
+                (".gitignore", "/kb/secret.md\nscratch/\n"),
+                ("kb/a.md", "# a\n"),
+                ("kb/secret.md", "# s\n"),
+                ("kb/scratch/b.md", "# b\n"),
+            ],
+        );
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let target = repo.join("kb").canonicalize().unwrap();
+        let mut relative = PathBuf::new();
+        for _ in cwd.components().skip(1) {
+            relative.push("..");
+        }
+        relative.push(target.strip_prefix("/").unwrap());
+        let (files, dropped) = assert_matches_crate(&relative);
+        assert_eq!(files.len(), 1);
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn counting_with_memoize_serves_later_discover_files() {
+        let _guard = MEMO_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = gitignore_vault(&["Secret.md"], &["visible.md"]);
+        let (files, _) = discover_files_counting_gitignored(tmp.path(), true).unwrap();
+        // A file created after the memoized walk is invisible to the memo,
+        // proving the second call did not walk again.
+        fs::write(tmp.path().join("late.md"), "# l\n").unwrap();
+        assert_eq!(discover_files(tmp.path()).unwrap(), files);
+        reset_discovery_memo_for_test();
+        assert_eq!(discover_files(tmp.path()).unwrap().len(), files.len() + 1);
     }
 }

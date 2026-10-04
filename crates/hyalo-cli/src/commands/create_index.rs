@@ -90,27 +90,11 @@ pub fn create_index(
     // Check if we're replacing an existing index.
     let replacing_existing = index_path.exists();
 
-    // Discover all markdown files
-    let all = discovery::discover_files(dir)?;
-    // DEC-342 (iteration 306 review perf fix): compute the gitignore-dropped
-    // count once, here, at build time — the one extra `.gitignore`-disabled
-    // walk this requires is paid by `create-index`, not by every later
-    // `summary --index` read, which replays the stored count from the
-    // snapshot header instead of re-walking.
-    {
-        let respecting_rel: HashSet<String> = all
-            .iter()
-            .map(|p| discovery::relative_path(dir, p))
-            .collect();
-        match discovery::count_gitignore_dropped_against(dir, &respecting_rel) {
-            Ok(dropped) => discovery::note_gitignore_dropped(dropped),
-            Err(error) => {
-                crate::warn::warn(format!(
-                    "could not measure .gitignore-excluded files while building the index: {error:#}"
-                ));
-            }
-        }
-    }
+    // Discover all markdown files and, in the same walk, how many the VCS
+    // ignore sources hide (DEC-349). The count is stored in the snapshot
+    // header so `summary --index` replays it instead of walking (DEC-342).
+    let (all, dropped) = discovery::discover_files_counting_gitignored(dir, false)?;
+    discovery::note_gitignore_dropped(dropped);
     let files: Vec<(PathBuf, String)> = all
         .into_iter()
         .map(|p| {
