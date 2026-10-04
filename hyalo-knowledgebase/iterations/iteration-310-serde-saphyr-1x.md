@@ -3,7 +3,7 @@ title: "Iteration 310: move the YAML parser to serde-saphyr 1.x"
 type: iteration
 date: 2026-10-04
 tags: [iteration, dependencies, yaml, frontmatter]
-status: in-progress
+status: completed
 branch: iter-310/serde-saphyr-1x
 ---
 
@@ -33,7 +33,7 @@ itself (DEC-350).
 - [x] The four 0.0.23 pinning tests in `frontmatter::tests` pass unchanged
 - [x] `hyalo lint --strict` on the whole vault exits 0
 - [x] Typed queries return the same counts before and after
-- [ ] All gates green on Linux, macOS and Windows
+- [x] All gates green on Linux, macOS and Windows
 
 ## Research
 
