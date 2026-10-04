@@ -156,6 +156,9 @@ and this project adheres to
 - `summary` from disk counts gitignore-excluded files in the walk that finds
   the vault's files and reuses that list for its link index: MDN 1.75 s to
   1.04 s with identical output, `create-index` 2.95 s to 2.64 s (DEC-349).
+- `find` marks a file it did not read because it exceeds the size limit with
+  `skipped: "oversized"`, and a named oversized file is announced on stderr
+  even under `-q` (DEC-301); `lint` reports such a file once instead of twice.
 
 ### Removed
 

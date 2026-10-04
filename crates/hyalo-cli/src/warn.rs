@@ -52,6 +52,11 @@ pub fn init(quiet: bool) {
     }
 }
 
+/// Whether `-q` is in effect.
+pub fn is_quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
 /// Emit a warning message to stderr.
 ///
 /// - If quiet mode is active the message is silently discarded.

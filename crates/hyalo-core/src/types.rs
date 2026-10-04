@@ -695,4 +695,10 @@ pub struct FileObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// BM25 relevance score for positional ranked searches.
     pub score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Why the file's content was not read: `"oversized"` when it exceeds the
+    /// scanner's size limit (iteration 309). Its `properties`, `tags`, `lines`
+    /// and body-derived fields are then empty because nothing was read, not
+    /// because the file has none.
+    pub skipped: Option<String>,
 }

@@ -292,12 +292,8 @@ fn lint_one_file_extended_with_after_frontmatter(
     let meta =
         std::fs::metadata(full_path).with_context(|| format!("failed to stat {rel_path}"))?;
     if meta.len() > scanner::MAX_FILE_SIZE {
-        crate::warn::note(format!(
-            "skipping {} ({} MiB exceeds {} MiB limit)",
-            full_path.display(),
-            meta.len() / (1024 * 1024),
-            scanner::MAX_FILE_SIZE / (1024 * 1024)
-        ));
+        // The FILE violation below is the report; the scanner already printed
+        // the advisory for this path (iteration 309), so no second note.
         let mut violations_by_rule = indexmap::IndexMap::new();
         violations_by_rule.insert(
             "FILE".to_owned(),
