@@ -364,6 +364,14 @@ pub struct HintContext {
     /// (UX-10 text polish). `properties summary` cannot fix that; the
     /// zero-result hint says what will.
     pub pure_negative_query: bool,
+    /// Every positive query word with literally zero postings (review fix,
+    /// SHOULD-FIX 5), independent of whether `search_suggestions` happened
+    /// to propose a correction for it. `search_suggestions` alone
+    /// undercounts: `suggest()` drops a word silently when it finds no
+    /// close dictionary candidate, so a hopeless word like `qqqzzz` was
+    /// invisible to a check that used `search_suggestions` as a stand-in
+    /// for "this word matched nothing".
+    pub zero_posting_terms: Vec<String>,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -446,6 +454,7 @@ impl HintContext {
             facets: Vec::new(),
             section_file_matches: None,
             pure_negative_query: false,
+            zero_posting_terms: Vec::new(),
             resolved: None,
         }
     }

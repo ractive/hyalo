@@ -436,15 +436,24 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 token.to_owned()
             }
         });
-        let description = ctx
+        // Review fix (SHOULD-FIX 4): name every corrected word, not just the
+        // first -- `corrected_query` already fixes all of them, so a query
+        // with two typos (`ostrch kangroo`) deserves a description that
+        // doesn't make it look like only one was addressed.
+        let corrections: Vec<String> = ctx
             .search_suggestions
-            .first()
-            .and_then(|s| {
+            .iter()
+            .filter_map(|s| {
                 s.candidates
                     .first()
-                    .map(|c| format!("Did you mean '{}' instead of '{}'?", c.term, s.term))
+                    .map(|c| format!("'{}' instead of '{}'", c.term, s.term))
             })
-            .unwrap_or_else(|| "Did you mean this query?".to_owned());
+            .collect();
+        let description = if corrections.is_empty() {
+            "Did you mean this query?".to_owned()
+        } else {
+            format!("Did you mean {}?", corrections.join(", "))
+        };
         hints.push(Hint::new(description, command));
     }
     // 0b'. Section mode found the terms at file level but in no single

@@ -230,6 +230,35 @@ pub(crate) struct FindExtras<'a> {
     pub(crate) section_mode: bool,
     /// Parsed `--facet` specs; empty when none was requested.
     pub(crate) facets: &'a [FacetSpec],
+    /// `true` when no PATTERN was given and the real process argv held a
+    /// `-s…`/`-t…` token with a concatenated value (BUG-5 / DEC-356, review
+    /// fix): the shape a leading-dash PATTERN takes once clap reads it as
+    /// `--section`/`--tag` plus the rest of the token instead. Computed once
+    /// from `std::env::args_os()` by the CLI entry point
+    /// (`argv_has_concatenated_short_flag`), not re-derived from whether the
+    /// resulting filter happened to match many headings or none -- that
+    /// conflated "the filter is unusual" with "the filter was never typed".
+    pub(crate) dash_swallowed_argv: bool,
+}
+
+/// `true` when `args` (a real or simulated argv, PROGRAM name included or
+/// not) contains a short-flag token for `--section` (`-s`) or `--tag`
+/// (`-t`) with a value concatenated onto the same token (`-ssnapshot`,
+/// `-tag:iteration`) rather than given separately (`-s Task`) or spelled
+/// long (`--section Task`) -- the exact shape clap produces when a
+/// leading-dash PATTERN the shell passed through untouched is read as a
+/// short flag plus the rest of the token (BUG-5 / DEC-356).
+///
+/// Pure over an argv slice, independent of `std::env::args_os()`, so the
+/// detection itself is unit-testable without spawning a process.
+pub(crate) fn argv_has_concatenated_short_flag(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        let bytes = a.as_bytes();
+        !a.starts_with("--")
+            && bytes.len() > 2
+            && bytes[0] == b'-'
+            && matches!(bytes[1], b's' | b't')
+    })
 }
 
 /// How the hint layer addresses one section hit with `hyalo read`.
@@ -267,6 +296,12 @@ pub(crate) struct SearchReport {
     /// negated (UX-10 text polish): a zero-result answer says so instead of
     /// pointing at `properties summary` as if the vocabulary were the issue.
     pub(crate) pure_negative_query: bool,
+    /// Every positive query word with literally zero postings (review fix,
+    /// SHOULD-FIX 5) -- unlike `suggestions`, populated even when the word
+    /// has no close dictionary candidate either, so "Try OR instead of AND"
+    /// can tell a truly hopeless word (`qqqzzz`) from one `suggest()` simply
+    /// chose not to propose a correction for.
+    pub(crate) zero_posting_terms: Vec<String>,
 }
 
 /// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
@@ -322,6 +357,7 @@ fn score_corpus(
     if scored.is_empty() {
         report.suggestions = corpus.suggest(query);
         report.corrected_query = hyalo_core::bm25::corrected_query(query, &report.suggestions);
+        report.zero_posting_terms = corpus.words_without_postings(query);
     }
     scored
 }
@@ -624,7 +660,14 @@ pub(crate) fn find_prepared(
     // `-q`-proof warning rather than being silently reinterpreted.
     if let Some(query) = &compiled_query {
         let warnings = query.warnings();
-        if warnings.dangling_operator {
+        // Review fix (part of SHOULD-FIX 7): a query made ENTIRELY of
+        // operator keywords (`find OR`, `find "and or"`) already gets the
+        // more specific "was interpreted as a boolean operator, leaving an
+        // empty query" warning once the empty BM25 result is diagnosed
+        // below -- skip the generic dangling-operator one so the two do not
+        // both fire for the exact same cause.
+        let operator_only_query = pattern.is_some_and(query_is_operator_only);
+        if warnings.dangling_operator && !operator_only_query {
             crate::warn::warn_always(
                 "'OR' with no term on one side was dropped -- it widens a match, \
                  not narrows it, so a dangling 'OR' changes nothing",
@@ -1767,11 +1810,12 @@ pub(crate) fn find_prepared(
         // BUG-5 / DEC-356: with no PATTERN, `-section` (a leading-dash term
         // the shell never saw as the body-search PATTERN) is swallowed by
         // clap as `-s` plus the rest of the token, e.g. `hyalo find
-        // '-snapshot'` silently becomes `--section napshot`. That almost
-        // always explains an ambiguous multi-heading match this wide, so the
-        // warning spells out the fix rather than leaving the user to guess
-        // why a `--section` they never typed matched so much.
-        let dash_hint = if pattern.is_none() {
+        // '-snapshot'` silently becomes `--section napshot`. Review fix:
+        // keyed on the real argv shape (`extras.dash_swallowed_argv`), not
+        // on "no PATTERN" alone -- a deliberate `hyalo find --section Task`
+        // with no PATTERN and a genuinely ambiguous heading is not this bug
+        // and should not get a hint about a dash it never typed.
+        let dash_hint = if extras.dash_swallowed_argv {
             " -- to search for a term starting with '-', write `hyalo find -- '-term'`"
         } else {
             ""
@@ -1781,6 +1825,16 @@ pub(crate) fn find_prepared(
              -- each such file's results include content from every matched section \
              (see `hyalo find --help`){dash_hint}"
         ));
+    } else if extras.dash_swallowed_argv && !section_filters.is_empty() {
+        // Review fix (SHOULD-FIX 3): the common case is a *single* matching
+        // heading, which never set `ambiguous_section_files` and so never
+        // warned at all -- `hyalo find '-sqlite'` (clap: `-s` + "qlite")
+        // silently returned the one file whose heading contains "qlite"
+        // with no sign a dash-prefixed PATTERN had been swallowed.
+        crate::warn::warn(
+            "--section matched a heading, but no PATTERN was given -- if '-term' was meant \
+             as the search pattern, write `hyalo find -- '-term'`",
+        );
     }
 
     // F-4: warn when a --sort property key holds more than one JSON type

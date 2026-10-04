@@ -301,11 +301,14 @@ fn read_lines_single() {
     assert_eq!(content, "# Heading One");
 }
 
-/// BUG-4 / DEC-355: a window with no overlap with the body at all — here,
-/// entirely inside the frontmatter block — warns instead of silently
-/// returning an empty read.
+/// BUG-4 / DEC-355, review fix (SHOULD-FIX 6): a frontmatter line *is* a
+/// file line under the file-absolute contract, so a `--lines` window that
+/// falls entirely inside the frontmatter block returns those raw lines
+/// (fence included) instead of warning "no overlap" — that warning is now
+/// reserved for a request past the end of the file (see
+/// `read_lines_past_end_of_file_warns`, below).
 #[test]
-fn read_lines_wholly_inside_frontmatter_warns() {
+fn read_lines_wholly_inside_frontmatter_returns_those_lines() {
     let tmp = setup();
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -315,14 +318,14 @@ fn read_lines_wholly_inside_frontmatter_warns() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "a warning is not a failure");
+    assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"]["content"].as_str(), Some(""));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("no overlap") && stderr.contains("frontmatter"),
-        "stderr: {stderr}"
+    assert_eq!(
+        json["results"]["content"].as_str(),
+        Some("---\ntitle: Test Note\nstatus: draft")
     );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.is_empty(), "no overlap issue here: stderr={stderr}");
 }
 
 /// The same out-of-range report fires past the end of the file, not just
@@ -363,10 +366,11 @@ fn read_lines_open_end() {
 
 #[test]
 fn read_lines_open_start() {
-    // BUG-4 / DEC-355: `--lines` is file-absolute (frontmatter counted), so
-    // `:9` here means "file lines 1-9", which — the fixture's 7-line
-    // frontmatter block plus "# Heading One" and the blank line after it —
-    // is the body's first two lines.
+    // BUG-4 / DEC-355, review fix (SHOULD-FIX 6): `--lines` is file-absolute
+    // (frontmatter counted) and a frontmatter line is returnable like any
+    // other, so `:9` here means "file lines 1-9" literally — the whole
+    // 7-line frontmatter block plus "# Heading One" and the blank line
+    // after it.
     let tmp = setup();
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -377,7 +381,20 @@ fn read_lines_open_start() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines, vec!["# Heading One", ""]);
+    assert_eq!(
+        lines,
+        vec![
+            "---",
+            "title: Test Note",
+            "status: draft",
+            "tags:",
+            "  - cli",
+            "  - rust",
+            "---",
+            "# Heading One",
+            ""
+        ]
+    );
 }
 
 #[test]

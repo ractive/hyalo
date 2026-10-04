@@ -149,17 +149,26 @@ pub(crate) fn run(
         }
         None => None,
     };
+    // BUG-5 / DEC-356 (review fix): keyed on the real argv shape -- a `-s…`
+    // or `-t…` token with a value concatenated onto it -- rather than on
+    // "no PATTERN" alone, which also matched a deliberate `--section`/`--tag`
+    // used without a PATTERN and had no way to catch the case where clap's
+    // short-flag read still produced a *valid* value (`-sqlite` -> `--section
+    // qlite`, one clean heading match, nothing to even warn about below).
+    let argv: Vec<String> = std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let dash_swallowed_argv = pattern.is_none() && super::argv_has_concatenated_short_flag(&argv);
     for t in &tag {
         if let Err(msg) = crate::commands::tags::validate_tag(t) {
-            // BUG-5 / DEC-356: with no PATTERN, a leading-dash term the shell
-            // never saw as the body-search PATTERN is swallowed by clap as
-            // the short flag `-t` plus the rest of the token, e.g.
-            // `hyalo find '-tag:iteration snapshot'` silently becomes
-            // `--tag 'ag:iteration snapshot'`. An invalid-tag-character
-            // error with no PATTERN in play is the signature of that
-            // confusion, so name the fix instead of leaving it a dead end.
-            let hint = pattern
-                .is_none()
+            // With no PATTERN, a leading-dash term the shell never saw as
+            // the body-search PATTERN is swallowed by clap as the short flag
+            // `-t` plus the rest of the token, e.g. `hyalo find
+            // '-tag:iteration snapshot'` silently becomes `--tag
+            // 'ag:iteration snapshot'`. An invalid-tag-character error with
+            // that argv shape in play is the signature of that confusion, so
+            // name the fix instead of leaving it a dead end.
+            let hint = dash_swallowed_argv
                 .then_some("to search for a term starting with '-', write `hyalo find -- '-term'`");
             return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
@@ -273,6 +282,7 @@ pub(crate) fn run(
                 &super::FindExtras {
                     section_mode,
                     facets: &facet_specs,
+                    dash_swallowed_argv,
                 },
                 &mut search_report,
             )?;

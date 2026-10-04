@@ -277,13 +277,17 @@ pub(super) fn hints_for_find(
                 .collect();
             // UX-1 / DEC-357: offering OR is pointless when every word in the
             // query has zero postings — OR of nothing still matches nothing.
-            // `ctx.search_suggestions` holds exactly the positive words with
-            // no dictionary match at all, so at least one word must be
-            // missing from it for OR to have a chance of helping.
+            // Review fix (SHOULD-FIX 5): checked against
+            // `ctx.zero_posting_terms`, not `ctx.search_suggestions` --
+            // `suggest()` (which fills `search_suggestions`) silently drops
+            // a word with *no* close dictionary candidate either, so a
+            // truly hopeless word like `qqqzzz` was absent from
+            // `search_suggestions` and `any_word_has_docs` wrongly read that
+            // absence as "this word has matches".
             let any_word_has_docs = words.iter().any(|w| {
-                !ctx.search_suggestions
+                !ctx.zero_posting_terms
                     .iter()
-                    .any(|s| s.term.eq_ignore_ascii_case(w))
+                    .any(|t| t.eq_ignore_ascii_case(w))
             });
             if !has_quotes && words.len() >= 2 && any_word_has_docs {
                 let or_query = words.join(" OR ");

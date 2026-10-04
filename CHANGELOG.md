@@ -84,21 +84,23 @@ and this project adheres to
 
 ### Fixed
 
-- `read --lines A:B` counts from line 1 of the file (frontmatter included),
-  matching `find`'s section hits, lint and `task --line`, instead of from the
-  first line of the body; a window with no overlap with the body at all warns
-  instead of silently returning empty content (DEC-355).
 - A leading-dash PATTERN that clap reads as a short flag (`hyalo find
-  '-snapshot'`) now gets a hint naming `hyalo find -- '-term'` in the
-  resulting `--tag`/`--section` error or warning (DEC-356).
+  '-snapshot'`) now gets a hint naming `hyalo find -- '-term'` on the
+  resulting `--tag`/`--section` error or warning, keyed on the actual argv
+  shape rather than merely "no PATTERN was given" — so a deliberate
+  `--section Task` with no PATTERN does not get the hint, and the common
+  single-clean-match case (`-sqlite` → `--section qlite`) that previously
+  warned about nothing now does too (DEC-356).
 - `prefix*` unions the typed prefix's own expansion with its stem's, so a
   one-document typo sharing the raw prefix no longer suppresses the stem
   fallback (`configuration*` now also finds `configur`, like `config*`).
 - Did-you-mean candidates rank by Damerau-Levenshtein distance then document
-  frequency; `corrected_query` fixes every suggested term, not just the
-  first; a misspelled word inside a quoted phrase now gets a suggestion
-  too; the "Try OR" hint only fires when at least one query word has any
-  postings (DEC-357).
+  frequency; `corrected_query` fixes every suggested term, including a term
+  repeated more than once, not just the first occurrence of the first term;
+  a misspelled word inside a quoted phrase now gets a suggestion too; the
+  "Try OR" hint only fires when at least one query word has any postings,
+  checked independently of whether a correction happened to be proposed for
+  it (DEC-357).
 - `--sort property:K` and the zero-result `--property` diagnostic resolve a
   dot-path exactly like `--property K=V` and `--facet property:K`; the
   diagnostic now covers `!=`/`~=`/the ordering operators, not just `=`, and
@@ -110,10 +112,19 @@ and this project adheres to
   needs a positive term; `--granularity section` snippet lines print in
   line order in text mode; the corrected-query hint keeps `--granularity
   section` when the original query ran in section mode.
-- A dangling `OR`, an unterminated `"`, a misplaced `*` (`*foo`, `sn*p`) and
-  a `~N` slop clamped above 64 all warn (`-q`-proof); `"a b"~abc` exits 1
-  with `invalid search query` instead of silently treating `abc` as a new
-  search word (DEC-358).
+- A dangling `OR`, an unterminated `"` (checked only right after an actual
+  closing quote is found, so an ordinary phrase whose content starts with
+  `~`, e.g. `"~home dir"`, is unaffected), a misplaced `*` (`*foo`, `sn*p`)
+  and a `~N` slop clamped above 64 all warn (`-q`-proof) — a query made
+  entirely of operator keywords (`find OR`) gets exactly one warning, not
+  this one plus the more specific "interpreted as a boolean operator" one;
+  `"a b"~abc` exits 1 with `invalid search query` instead of silently
+  treating `abc` as a new search word (DEC-358).
+- `read --section` combined with `--lines` now keeps the file-absolute
+  numbering too: the range is intersected with the matched section's own
+  file-absolute span instead of being read relative to the extracted
+  section text, so a range copied from a `find --granularity section` hit
+  works whether or not `--section` also narrowed the read.
 - Batch `mv` no longer panics on a filename containing a 4-byte emoji.
 - A path-form wikilink with a dotted stem (`[[sub/rel-1.2]]`) resolves to
   `sub/rel-1.2.md`; `find --broken-links`, HYALO006, `summary`, `links fix`
@@ -198,6 +209,16 @@ and this project adheres to
 
 ### Changed
 
+- **Breaking: `read --lines A:B` is file-absolute.** It used to count from
+  the first line of the body, with the frontmatter block excluded; it now
+  counts from line 1 of the file, frontmatter included — the same numbering
+  `find`'s section hits, lint and `task --line` already used (DEC-355). A
+  range copied out of any of those now pastes into `--lines` unchanged,
+  where it used to need the frontmatter's line count subtracted by hand. A
+  request that falls (even partially) inside the frontmatter block now
+  returns those raw lines rather than being silently narrowed to the body;
+  a window with no overlap with the file at all (past its end) warns
+  instead of returning empty content at exit 0.
 - **Breaking: an `enum` constraint must list its `values`.** A
   `.hyalo.toml` with `type = "enum"` and no (or an empty) `values` list used
   to load and then fail every value at lint time; it is now refused as

@@ -129,3 +129,88 @@ on retry — the workaround needs a few minutes, not a real failure), and
 `hyalo lint --strict` on the whole vault. The last acceptance criterion's
 "CI green on three platforms" half is left unticked for the orchestrator to
 confirm on the PR.
+
+## Review follow-up (2 MUST-FIX, 5 SHOULD-FIX)
+
+All seven findings from the independent review fixed on the same branch,
+with new tests for each:
+
+1. **MUST-FIX — malformed-slop false positive.** The pre-lex scan for `"` +
+   `~` + a letter matched any `"` in the query, including an *opening* one,
+   so `hyalo find '"~home dir"'` (an ordinary phrase whose content starts
+   with `~`) wrongly exited 1. Moved the check into `lex()` itself, right
+   after `read_phrase` confirms it found a *closing* quote
+   (`peek_malformed_slop`, a 2-char lookahead on the still-unconsumed
+   stream) — `lex()` is now fallible (`Result<(Vec<Lexeme>, QueryWarnings),
+   QuerySyntaxError>`), `classify_word` too. New unit test
+   `phrase_content_starting_with_tilde_letter_is_not_malformed_slop`.
+2. **MUST-FIX — `--section` + `--lines` stayed section-local.** `read a.md
+   --section Sub --lines 8:9` (file lines 8-9 ARE that section) printed
+   nothing with no warning, while the help text and claims paragraph
+   promised file-absolute everywhere. `extract_sections` now returns each
+   matched section's body-relative start line; `--lines` intersects the
+   requested file-absolute range with every matched section's own
+   file-absolute span (`section_range_overlap`) and joins the overlapping
+   parts, warning only when no section overlaps at all. New unit tests in
+   `read.rs` plus e2e coverage via the dash-hint/frontmatter tests below.
+3. **SHOULD-FIX — dash hint over/under-fired.** Was keyed on "no PATTERN",
+   which also caught a deliberate `--section Task` with no PATTERN, and
+   missed the common single-heading-match case entirely (`-sqlite` ->
+   `--section qlite`, one clean match, no warning at all). Now keyed on the
+   real argv shape: `argv_has_concatenated_short_flag` (pure, unit-tested)
+   detects a `-s…`/`-t…` token with a value concatenated onto it, computed
+   once from `std::env::args_os()` and threaded through `FindExtras`. Fires
+   on both the ambiguous-heading warning and a new standalone
+   single-match warning; the `--tag` validation-error hint uses the same
+   signal. Four new e2e tests in `search_query_language.rs` (ambiguous
+   `-s`, single-match `-s`, `-t`, and the legit long-form negative case).
+4. **SHOULD-FIX — `corrected_query` missed repeated terms.** `suggest()`
+   dedups by raw term, so `ostrch ostrch kangroo` had one `TermSuggestion`
+   for `ostrch`, and `corrected_query`'s `.find()` (singular) fixed only the
+   first occurrence. Now replaces every `QueryWord` whose raw matches a
+   suggestion's term; the hint description also names every corrected word,
+   not just the first. New unit test `corrected_query_fixes_a_repeated_misspelled_word`
+   plus an e2e test for the hint description.
+5. **SHOULD-FIX — "Try OR" still offered when no word had any postings.**
+   `ctx.search_suggestions` undercounts: `suggest()` drops a word silently
+   when it has *no* close dictionary candidate either, so `qqqzzz` was
+   absent from it and `any_word_has_docs` read that absence as "has
+   matches". Added `Bm25InvertedIndex::words_without_postings` (independent
+   of `suggest()`'s candidate search) threaded through a new
+   `SearchReport`/`HintContext` field `zero_posting_terms`; `any_word_has_docs`
+   now checks that instead. New unit test
+   `words_without_postings_reports_a_hopeless_word_suggest_drops` plus an
+   e2e test for both directions (withheld / still offered).
+6. **SHOULD-FIX — `--frontmatter --lines` regressed, and the large-file hint
+   broke on any frontmatter.** Decided the sensible behaviour the reviewer
+   asked for: a frontmatter line *is* a file line, so `--lines 1:2` now
+   returns those two lines (the raw fence/key bytes, via a new
+   `read_body_lines` return value `frontmatter_raw_lines`) rather than
+   warning "no overlap" — that warning is now reserved for a request past
+   the end of the file. `translate_file_range` (the old body-relative
+   translator) is gone, replaced by a direct slice over
+   `frontmatter_raw_lines ++ body_lines`. Separately, `hints/mutation.rs`'s
+   "read the first 80 lines" hint now offsets by the frontmatter's own line
+   count (derived from `lines - content.lines().count()`, no extra read) so
+   it still previews body text instead of YAML. New unit tests in
+   `read.rs` (`lines_wholly_inside_frontmatter_returns_those_lines`,
+   `lines_spanning_frontmatter_and_body_returns_both_parts`,
+   `lines_past_end_of_file_still_warns`,
+   `frontmatter_flag_and_lines_combine_the_frontmatter_block_with_a_content_slice`)
+   and two e2e tests for the large-file hint (with and without frontmatter).
+7. **SHOULD-FIX — CHANGELOG placement, duplicate warning, undocumented
+   recall widening.** Moved the `read --lines` renumbering from `Fixed` to
+   `Changed` as a `**Breaking:**` bullet (it changes what a previously
+   well-formed command returns). Collapsed `find OR`'s two overlapping
+   warnings (the generic dangling-operator one and the more specific
+   "interpreted as a boolean operator" one) to one: `find/mod.rs` skips the
+   dangling-operator warning when `query_is_operator_only(pattern)`. Added a
+   short addendum under DEC-358 (no new DEC number) documenting that BUG-10's
+   `prefix*` union is an intentional widening of recall. New e2e test
+   `operator_only_query_warns_exactly_once`.
+
+Gates rerun clean after all seven fixes: `cargo fmt`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
+(2443 e2e tests), `check-jq-recipes`, `check-help-drift`, and
+`hyalo lint --strict` (exit 0; the only violation is the same
+expected-and-unticked CI checkbox note on this file itself).

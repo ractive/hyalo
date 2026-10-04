@@ -7440,7 +7440,20 @@ updated (there was exactly one: `parse_with_stemmers`). `read_slop`'s
 digit-overflow handling (saturating `u32` arithmetic, unchanged from before
 this DEC) means a slop typed with enough digits to overflow `u32` is
 reported clamped from `u32::MAX`, not from the literal (unparseable as
-`u32`) string the user typed — truthful, if not pretty.
+`u32`) string the user typed — truthful, if not pretty. An operator-only
+query (`find OR`, `find "and or"`) gets exactly one warning: the more
+specific "was interpreted as a boolean operator" one from the empty-BM25-
+result check, not the generic dangling-operator one too (review fix) —
+`find/mod.rs` skips the latter whenever `query_is_operator_only(pattern)`.
+
+**Note (BUG-10, no new DEC number — review addendum).** `effective_prefixes`
+unions the typed `prefix*` expansion with its stem's, instead of trying the
+stem only when the raw prefix matched nothing. This is a deliberate
+widening of recall, not a narrowly-scoped fix: `organization*` now also
+expands through `organ*`'s stem matches, same as `configuration*` through
+`configur`'s — any prefix sharing a raw-text match with an unrelated typo
+stem now also reaches its own correctly-stemmed family. No query that
+matched before matches fewer documents after; some match more. Intended.
 
 **Rejected alternatives.** Reject every dangling `OR`/unterminated
 quote/misplaced `*` as a hard parse error instead of warning: rejected

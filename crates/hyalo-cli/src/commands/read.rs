@@ -81,29 +81,35 @@ fn slice_lines_in_place(lines: &mut Vec<String>, start: Option<usize>, end: Opti
     }
 }
 
-/// Translate a file-absolute, 1-based inclusive `range` into the
-/// body-relative `(start, end)` pair to slice `content_lines` with
-/// (BUG-4 / DEC-355): `--lines` numbers from line 1 of the *file*, matching
-/// `find`'s section hits, lint and `task --line`, while `content_lines` only
-/// holds the body (`fm_lines` lines shorter).
-///
-/// Returns `None` when the requested window has no overlap with the body at
-/// all: entirely inside the frontmatter block, or starting past the end of
-/// the file. The caller reports that case instead of silently slicing to
-/// nothing.
-fn translate_file_range(
+/// The lines of one matched `--section` extract (`section_lines`, starting
+/// at the file-absolute line `section_file_start`) that fall inside the
+/// file-absolute `range` (BUG-2 / DEC-355's `--section` companion fix):
+/// `--lines` keeps counting from line 1 of the file even once `--section`
+/// has narrowed what is addressable, so a range copied from a `find
+/// --granularity section` hit still works when `--section` also happens to
+/// be in play. Empty when this section has no overlap with `range` at all.
+fn section_range_overlap<'a>(
+    section_file_start: usize,
+    section_lines: &'a [String],
     range: &LineRange,
-    fm_lines: usize,
-    total_lines: usize,
-) -> Option<(Option<usize>, Option<usize>)> {
+    total_file_lines: usize,
+) -> &'a [String] {
+    let Some(section_file_end) = section_file_start
+        .checked_add(section_lines.len())
+        .and_then(|n| n.checked_sub(1))
+    else {
+        return &[];
+    };
     let req_start = range.start.unwrap_or(1);
-    let req_end = range.end.unwrap_or(total_lines);
-    if req_start > total_lines || req_end <= fm_lines {
-        return None;
+    let req_end = range.end.unwrap_or(total_file_lines);
+    let overlap_start = req_start.max(section_file_start);
+    let overlap_end = req_end.min(section_file_end);
+    if overlap_start > overlap_end {
+        return &[];
     }
-    let body_start = req_start.saturating_sub(fm_lines).max(1);
-    let body_end = req_end.saturating_sub(fm_lines);
-    Some((Some(body_start), Some(body_end)))
+    let local_start = overlap_start - section_file_start;
+    let local_end = overlap_end - section_file_start + 1;
+    &section_lines[local_start..local_end]
 }
 
 // ---------------------------------------------------------------------------
@@ -111,12 +117,14 @@ fn translate_file_range(
 // ---------------------------------------------------------------------------
 
 /// Extract all sections matching `filter` (case-insensitive substring match on heading text,
-/// optional level pinning). Returns a `Vec<Vec<String>>`, where each inner `Vec<String>`
-/// contains the lines of a matched section, from the heading through to (but not including)
-/// the next heading of equal or higher level.
-fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<String>> {
-    let mut sections: Vec<Vec<String>> = Vec::new();
-    let mut current_section: Option<(u8, Vec<String>)> = None;
+/// optional level pinning). Returns one `(start, lines)` pair per matched section: `start` is
+/// the section's 1-based line number *within `body_lines`* (body-relative — the caller adds
+/// the frontmatter line count for the file-absolute number, BUG-2 / DEC-355's `--section`
+/// companion fix), `lines` are the section's own lines, from the heading through to (but not
+/// including) the next heading of equal or higher level.
+fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<(usize, Vec<String>)> {
+    let mut sections: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut current_section: Option<(u8, usize, Vec<String>)> = None;
     let syntax = BodySyntax::new(&body_lines.join("\n"));
 
     for (index, line) in body_lines.iter().enumerate() {
@@ -125,29 +133,29 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<St
         if let Some((level, _)) = parse_atx_heading(visible) {
             let text = parse_atx_heading(line).map_or("", |(_, text)| text);
             // Flush current section if a heading of equal or higher level is encountered
-            if let Some((sec_level, sec_lines)) = current_section.take() {
+            if let Some((sec_level, start, sec_lines)) = current_section.take() {
                 if level <= sec_level {
-                    sections.push(sec_lines);
+                    sections.push((start, sec_lines));
                 } else {
                     // Lower-level heading (deeper nesting) — still part of current section
                     let mut lines = sec_lines;
                     lines.push(line.clone());
-                    current_section = Some((sec_level, lines));
+                    current_section = Some((sec_level, start, lines));
                     continue;
                 }
             }
 
             if filter.matches(level, text) {
-                current_section = Some((level, vec![line.clone()]));
+                current_section = Some((level, index + 1, vec![line.clone()]));
             }
-        } else if let Some((_, ref mut lines)) = current_section {
+        } else if let Some((_, _, ref mut lines)) = current_section {
             lines.push(line.clone());
         }
     }
 
     // Flush final section
-    if let Some((_, lines)) = current_section {
-        sections.push(lines);
+    if let Some((_, start, lines)) = current_section {
+        sections.push((start, lines));
     }
 
     sections
@@ -246,10 +254,26 @@ fn invalid_utf8_line_placeholder() -> String {
     )
 }
 
+/// Split frontmatter block bytes (fences included, as read by
+/// [`frontmatter::read_frame_for_body`]) into lines, trailing `\r`/`\n`
+/// stripped like every other line this module produces. Used only to answer
+/// `--lines` inside the frontmatter block (BUG-2's sibling fix, review
+/// SHOULD-FIX 6): under the file-absolute contract a frontmatter line *is*
+/// a file line, and reusing the bytes this read already buffered costs no
+/// extra I/O.
+fn split_frontmatter_lines(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Read the raw body lines from a markdown file, skipping frontmatter.
-/// Returns `(body_lines, frontmatter_line_count)`: the body lines with their
-/// trailing newlines stripped, plus how many leading lines the frontmatter
-/// block occupied (0 when the file has none).
+/// Returns `(body_lines, frontmatter_line_count, frontmatter_raw_lines)`:
+/// the body lines with their trailing newlines stripped, how many leading
+/// lines the frontmatter block occupied (0 when the file has none), and
+/// those same leading lines split out (fences included) so `--lines` can
+/// still answer a request that falls inside the frontmatter block.
 ///
 /// The frontmatter line count is a by-product of [`frontmatter::read_frame_for_body`]
 /// — returning it costs no extra I/O and lets the caller derive the whole
@@ -265,7 +289,7 @@ fn invalid_utf8_line_placeholder() -> String {
 /// single pathological line (e.g. a minified blob with no newlines) cannot
 /// balloon memory — such a line is replaced with [`oversized_line_placeholder`]
 /// instead of being buffered in full.
-fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize)> {
+fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize, Vec<String>)> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
@@ -273,13 +297,15 @@ fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize)> {
     let framed = frontmatter::read_frame_for_body(&mut reader, scanner::MAX_BODY_LINE_BYTES)
         .with_context(|| format!("failed to read {}", path.display()))?;
     if framed.bytes().is_empty() {
-        return Ok((Vec::new(), 0));
+        return Ok((Vec::new(), 0, Vec::new()));
     }
 
     let mut lines = Vec::new();
     let frontmatter_lines;
+    let mut frontmatter_raw_lines = Vec::new();
     if framed.frame().frontmatter().is_some() {
         frontmatter_lines = scanner::count_lines(framed.bytes());
+        frontmatter_raw_lines = split_frontmatter_lines(framed.bytes());
     } else if !framed.first_line_complete() {
         frontmatter_lines = 0;
         lines.push(oversized_line_placeholder());
@@ -309,7 +335,7 @@ fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize)> {
         }
     }
 
-    Ok((lines, frontmatter_lines))
+    Ok((lines, frontmatter_lines, frontmatter_raw_lines))
 }
 
 // ---------------------------------------------------------------------------
@@ -429,17 +455,22 @@ fn read_resolved(
     // (`--frontmatter` only), and the count is scanned separately further down.
     let mut whole_file_lines: Option<usize> = None;
     let mut frontmatter_line_count: usize = 0;
+    let mut frontmatter_raw_lines: Vec<String> = Vec::new();
     let mut content_lines: Vec<String> = if need_body {
-        let (body_lines, fm_lines) = read_body_lines(&full_path)?;
+        let (body_lines, fm_lines, fm_raw_lines) = read_body_lines(&full_path)?;
         whole_file_lines = Some(fm_lines + body_lines.len());
         frontmatter_line_count = fm_lines;
+        frontmatter_raw_lines = fm_raw_lines;
         body_lines
     } else {
         Vec::new()
     };
 
-    // Apply section filter
-    if let Some(query) = section {
+    // Apply section filter. Each matched section keeps its body-relative
+    // start line (from `extract_sections`) so `--lines`, below, can still
+    // translate through the file-absolute contract (BUG-2 / DEC-355) instead
+    // of switching to a second, section-local numbering.
+    let matched_sections: Option<Vec<(usize, Vec<String>)>> = if let Some(query) = section {
         let filter = match SectionFilter::parse(query) {
             Ok(f) => f,
             Err(e) => {
@@ -464,51 +495,92 @@ fn read_resolved(
                 None,
             )));
         }
+        Some(sections)
+    } else {
+        None
+    };
 
-        // Join multiple matching sections with a blank line separator
-        content_lines = Vec::new();
-        for (i, sec) in sections.iter().enumerate() {
-            if i > 0 {
-                content_lines.push(String::new());
-            }
-            content_lines.extend_from_slice(sec);
-        }
-    }
-
-    // Apply line range — truncate/drain in place to avoid cloning.
+    // Apply line range — truncate/drain in place to avoid cloning where
+    // possible.
     //
     // BUG-4 / DEC-355: `--lines A:B` is file-absolute, the same numbering
     // `find`, lint, section hits (DEC-334) and `task --line` all print — not
-    // relative to the body. When `--section` narrowed `content_lines` first,
-    // the extracted text is its own addressable unit and `--lines` stays
-    // relative to *that* (unchanged iter-253 behaviour: slicing a slice).
-    // Otherwise the requested file-absolute range is translated to the
-    // body-relative indices that `content_lines` actually holds, and a
-    // window with no overlap with the body at all — entirely inside the
-    // frontmatter block, or past the end of the file — is reported with a
-    // `-q`-proof warning instead of a silent empty read.
-    if let Some(ref range) = line_range {
-        if section.is_some() {
-            slice_lines_in_place(&mut content_lines, range.start, range.end);
-        } else {
+    // relative to the body, and (BUG-2, the reviewer's companion fix) not
+    // relative to a `--section`-narrowed extract either: `read a.md --section
+    // Sub --lines 8:9`, where file lines 8-9 are that section, must return
+    // them, the same as it would without `--section` in play. Each matched
+    // section's body-relative start (above) plus the frontmatter line count
+    // gives its file-absolute span; the requested range is intersected with
+    // that span per section, and the overlapping lines from every
+    // contributing section are joined (blank-line separated, as the
+    // no-`--lines` join already did). A window with no overlap with the body
+    // (or, under `--section`, with any matched section) at all is reported
+    // with a `-q`-proof warning instead of a silent empty read.
+    match (matched_sections, line_range) {
+        (Some(sections), Some(range)) => {
             let total = whole_file_lines.unwrap_or(frontmatter_line_count + content_lines.len());
-            if let Some((start, end)) = translate_file_range(range, frontmatter_line_count, total) {
-                slice_lines_in_place(&mut content_lines, start, end);
-            } else {
+            let mut out: Vec<String> = Vec::new();
+            for (start_body, lines) in &sections {
+                let file_start = start_body + frontmatter_line_count;
+                let overlap = section_range_overlap(file_start, lines, &range, total);
+                if overlap.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(String::new());
+                }
+                out.extend_from_slice(overlap);
+            }
+            if out.is_empty() {
                 let req_start = range.start.unwrap_or(1);
                 let req_end = range.end.unwrap_or(total);
-                let frontmatter_note = if frontmatter_line_count > 0 {
-                    format!(" (the frontmatter block occupies lines 1-{frontmatter_line_count})")
-                } else {
-                    String::new()
-                };
                 crate::warn::warn_always(format!(
-                    "requested lines {req_start}:{req_end} have no overlap with {rel_path} \
-                     ({total} lines in the file){frontmatter_note}"
+                    "requested lines {req_start}:{req_end} have no overlap with the \
+                     section(s) of {rel_path} matched by --section"
                 ));
-                content_lines.clear();
+            }
+            content_lines = out;
+        }
+        (Some(sections), None) => {
+            // No `--lines`: join every matched section with a blank-line
+            // separator, as before (iter-253).
+            content_lines = Vec::new();
+            for (i, (_, lines)) in sections.iter().enumerate() {
+                if i > 0 {
+                    content_lines.push(String::new());
+                }
+                content_lines.extend_from_slice(lines);
             }
         }
+        (None, Some(range)) => {
+            // Review fix (SHOULD-FIX 6): a frontmatter line *is* a file
+            // line under the file-absolute contract, so `--lines 1:2` on a
+            // file with a frontmatter block returns those two lines (the
+            // opening fence and the first key) instead of warning "no
+            // overlap" -- that warning is now reserved for a request that
+            // falls outside the file entirely. Concatenating the
+            // frontmatter's own raw lines (fences included) ahead of the
+            // body gives one file-absolute sequence to slice directly, no
+            // separate body/frontmatter translation needed.
+            let total = whole_file_lines
+                .unwrap_or(frontmatter_line_count + content_lines.len())
+                .max(frontmatter_raw_lines.len() + content_lines.len());
+            let req_start = range.start.unwrap_or(1);
+            let req_end = range.end.unwrap_or(total);
+            if req_start > total {
+                crate::warn::warn_always(format!(
+                    "requested lines {req_start}:{req_end} have no overlap with {rel_path} \
+                     ({total} lines in the file)"
+                ));
+                content_lines.clear();
+            } else {
+                let mut whole = frontmatter_raw_lines;
+                whole.append(&mut content_lines);
+                slice_lines_in_place(&mut whole, Some(req_start), Some(req_end.min(total)));
+                content_lines = whole;
+            }
+        }
+        (None, None) => {}
     }
 
     // Format output
@@ -605,7 +677,7 @@ mod tests {
         )
         .unwrap();
 
-        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        let (lines, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
         assert_eq!(lines, vec!["Line one", "Line two", "Line three"]);
         assert_eq!(fm_lines, 3, "opening `---`, one key, closing `---`");
     }
@@ -616,7 +688,7 @@ mod tests {
         let path = tmp.path().join("normal.md");
         std::fs::write(&path, "# Heading\n\nBody text\n").unwrap();
 
-        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        let (lines, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
         assert_eq!(lines, vec!["# Heading", "", "Body text"]);
         assert_eq!(fm_lines, 0, "no frontmatter block");
     }
@@ -632,7 +704,7 @@ mod tests {
         let content = format!("before\n{huge}\nafter\n");
         std::fs::write(&path, &content).unwrap();
 
-        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        let (lines, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
         assert_eq!(fm_lines, 0);
         assert_eq!(lines.len(), 3, "line count must be preserved: {lines:?}");
         assert_eq!(lines[0], "before");
@@ -657,7 +729,7 @@ mod tests {
         let huge: String = "y".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
         std::fs::write(&path, format!("{huge}\nafter\n")).unwrap();
 
-        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        let (lines, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
         assert_eq!(fm_lines, 0);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("skipped"));
@@ -671,7 +743,7 @@ mod tests {
         let exact: String = "z".repeat(scanner::MAX_BODY_LINE_BYTES);
         std::fs::write(&path, format!("{exact}\nnext\n")).unwrap();
 
-        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        let (lines, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
         assert_eq!(fm_lines, 0);
         assert_eq!(
             lines[0], exact,
@@ -752,7 +824,7 @@ mod tests {
         for (name, content) in cases {
             let path = tmp.path().join("case.md");
             std::fs::write(&path, &content).unwrap();
-            let (body, fm_lines) = read_body_lines(&path).unwrap();
+            let (body, fm_lines, _fm_raw) = read_body_lines(&path).unwrap();
             assert_eq!(
                 fm_lines + body.len(),
                 scanner::count_lines(&content),
@@ -842,77 +914,85 @@ mod tests {
         v
     }
 
-    // -- translate_file_range (BUG-4 / DEC-355) --
+    // -- `--lines` under the file-absolute contract, frontmatter included
+    //    (BUG-4 / DEC-355, review fix SHOULD-FIX 6) --
 
-    #[test]
-    fn translate_file_range_no_frontmatter_is_identity() {
-        // No frontmatter: file-absolute and body-relative coincide.
-        let range = LineRange {
-            start: Some(2),
-            end: Some(4),
-        };
-        assert_eq!(
-            translate_file_range(&range, 0, 10),
-            Some((Some(2), Some(4)))
-        );
+    /// Run `read_resolved` against a real temp file and return its JSON
+    /// `results` object, so these tests exercise the actual code path
+    /// `--lines` goes through rather than a since-removed helper.
+    fn read_json(
+        path: &std::path::Path,
+        lines: Option<&str>,
+        frontmatter: bool,
+    ) -> serde_json::Value {
+        let rel = path.file_name().unwrap().to_string_lossy().into_owned();
+        match read_resolved(
+            (path.to_owned(), rel),
+            None,
+            lines,
+            frontmatter,
+            Format::Json,
+            Format::Json,
+        )
+        .unwrap()
+        {
+            CommandOutcome::Success { output, .. } => output,
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    fn write_fixture(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("a.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: Test\nstatus: draft\n---\n# Heading\n\nbody line\n",
+        )
+        .unwrap();
+        path
     }
 
     #[test]
-    fn translate_file_range_shifts_past_frontmatter() {
-        // 16-line frontmatter, file lines 125-135 (a section hit's printed
-        // range) -> body lines 109-119.
-        let range = LineRange {
-            start: Some(125),
-            end: Some(135),
-        };
-        assert_eq!(
-            translate_file_range(&range, 16, 500),
-            Some((Some(109), Some(119)))
-        );
+    fn lines_wholly_inside_frontmatter_returns_those_lines() {
+        // Frontmatter is file lines 1-4 (`---`, title, status, `---`).
+        // `--lines 1:2` falls entirely inside it and must return those two
+        // lines -- a frontmatter line IS a file line -- not warn "no
+        // overlap" the way an out-of-range request still does.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_fixture(tmp.path());
+        let json = read_json(&path, Some("1:2"), false);
+        assert_eq!(json["content"], "---\ntitle: Test");
     }
 
     #[test]
-    fn translate_file_range_wholly_inside_frontmatter_is_none() {
-        let range = LineRange {
-            start: Some(1),
-            end: Some(10),
-        };
-        assert_eq!(translate_file_range(&range, 16, 150), None);
+    fn lines_spanning_frontmatter_and_body_returns_both_parts() {
+        // File lines 3-5: "status: draft", "---", "# Heading".
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_fixture(tmp.path());
+        let json = read_json(&path, Some("3:5"), false);
+        assert_eq!(json["content"], "status: draft\n---\n# Heading");
     }
 
     #[test]
-    fn translate_file_range_past_end_of_file_is_none() {
-        let range = LineRange {
-            start: Some(999),
-            end: Some(1000),
-        };
-        assert_eq!(translate_file_range(&range, 16, 150), None);
+    fn lines_past_end_of_file_still_warns() {
+        // The one case that still has no overlap at all: past EOF.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_fixture(tmp.path());
+        let json = read_json(&path, Some("999:1000"), false);
+        assert_eq!(json["content"], "");
     }
 
     #[test]
-    fn translate_file_range_partial_overlap_clamps_into_body() {
-        // start inside the frontmatter, end inside the body: clamp to body
-        // line 1 rather than reporting no overlap.
-        let range = LineRange {
-            start: Some(10),
-            end: Some(20),
-        };
-        assert_eq!(
-            translate_file_range(&range, 16, 150),
-            Some((Some(1), Some(4)))
-        );
-    }
-
-    #[test]
-    fn translate_file_range_open_end_uses_total_lines() {
-        let range = LineRange {
-            start: Some(20),
-            end: None,
-        };
-        assert_eq!(
-            translate_file_range(&range, 16, 20),
-            Some((Some(4), Some(4)))
-        );
+    fn frontmatter_flag_and_lines_combine_the_frontmatter_block_with_a_content_slice() {
+        // `--frontmatter --lines 1:2`: `frontmatter`/`frontmatter_raw` carry
+        // the whole block as always, and `content` is still the requested
+        // file-absolute slice (the fence plus the first key) -- the two
+        // flags answer independent questions.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_fixture(tmp.path());
+        let json = read_json(&path, Some("1:2"), true);
+        assert_eq!(json["content"], "---\ntitle: Test");
+        assert_eq!(json["frontmatter"]["title"], "Test");
+        assert_eq!(json["frontmatter"]["status"], "draft");
     }
 
     #[test]
@@ -989,9 +1069,11 @@ mod tests {
         let filter = SectionFilter::parse("Problem").unwrap();
         let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].len(), 2);
-        assert_eq!(sections[0][0], "## Problem");
-        assert_eq!(sections[0][1], "problem text");
+        let (start, lines) = &sections[0];
+        assert_eq!(*start, 3, "'## Problem' is body line 3");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "## Problem");
+        assert_eq!(lines[1], "problem text");
     }
 
     #[test]
@@ -1049,7 +1131,7 @@ mod tests {
         let filter = SectionFilter::parse("Section").unwrap();
         let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].len(), 4); // heading + text + sub heading + sub text
+        assert_eq!(sections[0].1.len(), 4); // heading + text + sub heading + sub text
     }
 
     #[test]
@@ -1065,6 +1147,8 @@ mod tests {
         let filter = SectionFilter::parse("Notes").unwrap();
         let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].0, 1, "first '## Notes' is body line 1");
+        assert_eq!(sections[1].0, 5, "second '## Notes' is body line 5");
     }
 
     #[test]
@@ -1078,7 +1162,8 @@ mod tests {
         let filter = SectionFilter::parse("Last").unwrap();
         let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].len(), 2);
+        assert_eq!(sections[0].0, 3, "'## Last' is body line 3");
+        assert_eq!(sections[0].1.len(), 2);
     }
 
     #[test]
@@ -1096,8 +1181,61 @@ mod tests {
         let filter = SectionFilter::parse("Proposal").unwrap();
         let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].len(), 7); // heading + intro + code block (4 lines) + after code
-        assert!(sections[0].contains(&"# This is a comment, not a heading".to_owned()));
+        assert_eq!(sections[0].1.len(), 7); // heading + intro + code block (4 lines) + after code
+        assert!(
+            sections[0]
+                .1
+                .contains(&"# This is a comment, not a heading".to_owned())
+        );
+    }
+
+    // -- section_range_overlap (BUG-2 / DEC-355's --section companion fix) --
+
+    #[test]
+    fn section_range_overlap_full_overlap() {
+        let lines: Vec<String> = vec!["## Sub".into(), "a".into(), "b".into()];
+        // Section starts at file-absolute line 8 (e.g. a 5-line frontmatter
+        // block then 2 preamble lines): file lines 8-10 are this section.
+        let overlap = section_range_overlap(
+            8,
+            &lines,
+            &LineRange {
+                start: Some(8),
+                end: Some(9),
+            },
+            20,
+        );
+        assert_eq!(overlap, &lines[0..2]);
+    }
+
+    #[test]
+    fn section_range_overlap_partial_overlap() {
+        let lines: Vec<String> = vec!["## Sub".into(), "a".into(), "b".into()];
+        let overlap = section_range_overlap(
+            8,
+            &lines,
+            &LineRange {
+                start: Some(9),
+                end: Some(100),
+            },
+            20,
+        );
+        assert_eq!(overlap, &lines[1..3]);
+    }
+
+    #[test]
+    fn section_range_overlap_no_overlap() {
+        let lines: Vec<String> = vec!["## Sub".into(), "a".into()];
+        let overlap = section_range_overlap(
+            8,
+            &lines,
+            &LineRange {
+                start: Some(1),
+                end: Some(7),
+            },
+            20,
+        );
+        assert_eq!(overlap, [] as [String; 0]);
     }
 }
 

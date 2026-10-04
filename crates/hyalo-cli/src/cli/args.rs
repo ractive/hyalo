@@ -954,9 +954,15 @@ pub(crate) struct ReadArgs {
     ///
     /// Counts from line 1 of the file, frontmatter included — the same numbering `find`'s
     /// section hits, lint and `task --line` all print, so a range copied out of any of them
-    /// can be pasted here unchanged (DEC-355). A window with no overlap with the body at all
-    /// — entirely inside the frontmatter block, or past the end of the file — warns instead
-    /// of returning an empty read silently.
+    /// can be pasted here unchanged (DEC-355). A frontmatter line is a file line like any
+    /// other: a range that falls (even partially) inside the frontmatter block returns that
+    /// raw text, fence included — combine with --frontmatter to also get the parsed/raw
+    /// frontmatter under their own keys. Combined with --section, the range stays
+    /// file-absolute: it is intersected with the matched section's own file-absolute span,
+    /// so a range copied from a `find --granularity section` hit works whether or not
+    /// --section also narrowed the read. A window with no overlap at all — past the end of
+    /// the file, or (under --section) outside every matched section — warns instead of
+    /// returning an empty read silently.
     #[arg(short, long, value_name = "RANGE")]
     pub lines: Option<String>,
     /// Return YAML frontmatter only, or combine it with a body selector

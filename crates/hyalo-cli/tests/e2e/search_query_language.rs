@@ -151,6 +151,45 @@ fn malformed_query_input_warns_even_with_quiet() {
     }
 }
 
+/// Review fix (SHOULD-FIX 7): a query made entirely of operator keywords
+/// (`find OR`) used to print BOTH the generic dangling-operator warning and
+/// the more specific "was interpreted as a boolean operator" one -- the two
+/// describe the exact same cause and must collapse to one.
+#[test]
+fn operator_only_query_warns_exactly_once() {
+    let tmp = vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--format", "text", "--", "OR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("warning:").count(),
+        1,
+        "exactly one warning, not the dangling-operator one too: {stderr}"
+    );
+    assert!(
+        stderr.contains("was interpreted as a boolean operator"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("dropped"), "{stderr}");
+
+    // A dangling OR that is NOT the whole query still warns -- this is not
+    // the operator-only case, there is a real word to search for.
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--format", "text", "--", "rust OR"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dropped"), "{stderr}");
+}
+
 /// The companion error case: `"a b"~abc` is not a word trailing a phrase,
 /// it is a malformed slop, and must be rejected rather than silently
 /// reinterpreted.
@@ -410,5 +449,213 @@ fn whole_word_prefix_uses_its_stem() {
     assert_eq!(
         files(&tmp, "configuration*", &[]),
         vec!["notes/rust-async.md"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-5 / DEC-356 (review fix): dash-swallowed PATTERN hint, keyed on the
+// real argv shape rather than on "no PATTERN" alone.
+// ---------------------------------------------------------------------------
+
+fn dash_hint_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    // `find --section` unions every matching heading *within a file*
+    // (DEC-333) -- "ambiguous" means one file with 2+ matches, not two
+    // files with one match each. `a.md` has two headings containing
+    // "config" (ambiguous for `-sconfig`) but only one containing "section"
+    // (a clean single match for `-ssection`); `b.md` is unrelated noise.
+    write_md(
+        tmp.path(),
+        "a.md",
+        "# A\n\n## Config section\n\ntext\n\n## Config setup\n\nmore text\n",
+    );
+    write_md(tmp.path(), "b.md", "# B\n\n## Other\n\ntext\n");
+    tmp
+}
+
+/// `hyalo find -sconfig`: clap reads `-s` + "config" as `--section config`,
+/// matching two headings in the same file (`Config section`, `Config
+/// setup`) -- the ambiguous case already warned about, now also naming the
+/// dash fix.
+#[test]
+fn dash_swallowed_short_section_flag_ambiguous_match_gets_the_hint() {
+    let tmp = dash_hint_vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "-sconfig"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("matched more than one heading")
+            && stderr.contains("hyalo find -- '-term'"),
+        "{stderr}"
+    );
+}
+
+/// The common case the dash-swallow bug actually produces: exactly one
+/// heading matches (`-ssection` -> `--section section`, only `Config
+/// section` contains "section"), which never set `ambiguous_section_files`
+/// and so used to return silently with no warning at all.
+#[test]
+fn dash_swallowed_short_section_flag_single_match_gets_the_hint() {
+    let tmp = dash_hint_vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "-ssection"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no PATTERN was given") && stderr.contains("hyalo find -- '-term'"),
+        "{stderr}"
+    );
+}
+
+/// `hyalo find -tag:iteration`: clap reads `-t` + "ag:iteration" as `--tag
+/// 'ag:iteration'`, an invalid tag name (contains ':') -- the resulting
+/// error names the dash fix.
+#[test]
+fn dash_swallowed_short_tag_flag_gets_the_hint() {
+    let tmp = dash_hint_vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "-tag:iteration"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid character ':'"),
+        "{json}"
+    );
+    assert_eq!(
+        json["hint"].as_str().unwrap(),
+        "to search for a term starting with '-', write `hyalo find -- '-term'`"
+    );
+}
+
+/// A deliberate long-form `--section config` with no PATTERN is not the
+/// dash-swallow bug -- clap read exactly what was typed -- so its ambiguous
+/// multi-heading warning must stay plain.
+#[test]
+fn explicit_long_form_section_with_no_pattern_does_not_get_the_hint() {
+    let tmp = dash_hint_vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--section", "config"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("matched more than one heading"), "{stderr}");
+    assert!(
+        !stderr.contains("hyalo find -- '-term'"),
+        "a deliberate --section Task must not get the dash hint: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-1 / DEC-357 (review fix): corrected_query fixes every suggested term,
+// not just the first, and the hint description names all of them.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn corrected_query_hint_fixes_every_misspelled_term() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "ostrich kangaroo\n");
+    write_md(tmp.path(), "b.md", "ostrich only\n");
+    write_md(tmp.path(), "c.md", "kangaroo only\n");
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "ostrch kangroo", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["cmd"].as_str().unwrap())
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.ends_with("-- 'ostrich kangaroo'")),
+        "{cmds:?}"
+    );
+
+    // Running the hinted, fully-corrected query actually returns a result.
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--format", "json", "--", "ostrich kangaroo"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["results"][0]["file"], "a.md");
+}
+
+/// UX-1 / DEC-357 (review fix, SHOULD-FIX 5): "Try OR instead of AND" must
+/// not be offered when every word in the query has zero postings --
+/// `search_suggestions` alone undercounts this, because `suggest()` drops a
+/// word silently when it has no close dictionary candidate either.
+#[test]
+fn try_or_hint_is_withheld_when_no_word_has_any_postings() {
+    let tmp = vault();
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "qqqzzz wwwxxx", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 0);
+    let descriptions: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["description"].as_str().unwrap())
+        .collect();
+    assert!(
+        !descriptions
+            .iter()
+            .any(|d| d.contains("Try OR instead of AND")),
+        "neither word has any postings at all, OR cannot help: {descriptions:?}"
+    );
+
+    // Sanity check the opposite: when one word does have postings, the
+    // hint is still offered.
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "rust qqqzzz", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let descriptions: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["description"].as_str().unwrap())
+        .collect();
+    assert!(
+        descriptions
+            .iter()
+            .any(|d| d.contains("Try OR instead of AND")),
+        "{descriptions:?}"
     );
 }
