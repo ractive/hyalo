@@ -7204,3 +7204,255 @@ budgets, silent last-wins on duplicate keys, and it accepts kepano-obsidian's
 `{{date}}` templates that every other parser rejects. Staying on 0.0.23: an
 unmaintained pin that keeps the `NaN` corruption. Always parsing through
 `Spanned`: 2.1× the parse cost for a rule that almost no block needs.
+
+## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
+
+**Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the
+first line of the file, frontmatter included — the same numbering `find`'s
+section hits (`section.line_start`/`line_end`, DEC-334), lint and
+`task --line` already use. `read.rs::translate_file_range` converts the
+requested file-absolute range into the body-relative slice `read_body_lines`
+actually holds (`body_line = file_line - frontmatter_line_count`, clamped to
+1). When the requested window has no overlap with the body at all — entirely
+inside the frontmatter block, or starting past the end of the file — the read
+returns empty content *and* a `-q`-proof `warn_always` naming the file's line
+count and, when relevant, the frontmatter's extent, instead of answering with
+a silent empty string at exit 0. A window that partially overlaps the body
+(start inside the frontmatter, end inside the body) clamps into the body
+rather than warning — that is an ordinary slice, not an out-of-range one.
+The companion fix in `find`'s section-hit hint (DEC-334) stops subtracting
+the frontmatter offset before emitting its `--lines A:B` suggestion, since
+the hint and the command it builds now agree on what "line" means.
+
+**Why.** Every other line-numbered surface in hyalo is file-absolute; only
+`--lines` disagreed, silently. Pasting a range straight out of
+`find --granularity section` (`(lines 125-135)`) into `read --lines 125:135`
+read the wrong 11 lines, 16 lines short on a file with a 16-line frontmatter
+block, with no error to say so — `read --lines 999:1000` on a 135-line file
+answered `{"content": ""}` at exit 0, indistinguishable from a legitimately
+empty section. A reader has no way to recover from a wrong-but-plausible
+answer; an out-of-range line window is at least as diagnosable as an
+unknown flag.
+
+**Consequences.** `ReadArgs::lines`' `--help` text and the three `task --line`
+help blocks (`read`/`toggle`/`set`) no longer describe a numbering
+discrepancy that no longer exists. `--lines` combined with `--section`
+keeps its iter-253 behaviour unchanged: the extracted (and possibly
+multi-section-joined) text is its own addressable unit, and `--lines` stays
+relative to *that*, not to the file — a section's extracted text has no
+single file-absolute line range once multiple matched sections are joined
+with a blank-line separator. Disk and `--index` reads are unaffected (the
+translation is pure arithmetic over counts both paths already compute).
+
+**Rejected alternatives.** Keep `--lines` body-relative and instead translate
+every OTHER surface's line numbers down to body-relative before showing
+them to make `read --lines` paste-compatible: rejected because `lint`,
+`backlinks` and `task --line` already define the vault's shared, documented
+numbering (file-absolute), and changing three established surfaces to fix
+one newer one inverts which side should move. Warn instead of erroring on
+an out-of-range window: an out-of-range line window is not malformed
+input — `--lines 999:1000` is a well-formed request about a file that turns
+out to be shorter — so it is DEC-358's `warn_always` treatment, not a parse
+error, and the dry/empty answer (`content: ""`, exit 0) stays intact for a
+script that only checks the exit code.
+
+## DEC-356: a leading-dash PATTERN names `--` in its own error, never only in `--help` (2026-10-04)
+
+**Decision.** `hyalo find '-tag:iteration snapshot'` and `hyalo find
+'-snapshot'` are not new failure modes — clap has always read a bare
+leading-dash positional as a short-flag cluster (`-t` plus the rest of the
+token, or `-s` plus the rest) when no PATTERN was already present on the
+command line. What changes is what the two paths that confusion lands on say
+once it has happened and PATTERN is `None`: the `--tag` validation error
+(`crate::commands::tags::validate_tag`, surfaced from `find/run.rs`) gets a
+hint — `"to search for a term starting with '-', write \`hyalo find --
+'-term'\`"` — and the `--section`-matched-many-headings warning
+(`find/mod.rs`, DEC-333's union-scope note) appends the same sentence to its
+own text. Both are conditioned on `pattern.is_none()`: a real `--tag`/
+`--section` filter run alongside an actual PATTERN never gets the unrelated
+dash hint. `hyalo find '-snapshot'` keeps its existing behaviour (returns
+the `--section` match set it was always going to return under clap's own
+flag-splitting rule) but now warns with the fix inline, satisfying "either
+exits 1 naming `--`, or warns with the `--` form".
+
+**Why.** `--help` has always documented the `--` requirement ("A query
+beginning with '-' or '(' must follow '--' …"), but nothing at *runtime*
+pointed back at it: the two most common failure shapes — an invalid-tag-name
+error with no PATTERN in play, and a `--section` matching an improbably wide
+set of files with no PATTERN in play — are both lossy enough (the original
+`-snapshot`/`-tag:iteration snapshot` text is gone by the time clap is done
+with it) that a reader cannot reconstruct what happened from the error alone.
+Both signatures are specific enough that a false positive is very unlikely:
+a real multi-heading `--section` match and a real tag-name typo rarely
+coincide with an absent PATTERN by chance in the vaults this was checked
+against (the project's own knowledgebase, 515 files).
+
+**Consequences.** `why not allow_hyphen_values`: clap's `allow_hyphen_values`
+on the PATTERN positional would let `-snapshot` through as a literal
+positional value directly, without `--`, but it does so *unconditionally
+for every value of every arg whose type allows it on that positional* —
+it does not know "this flag was short-flag-split from a dash-leading
+token the user actually meant as PATTERN" versus "this flag's short form
+really was typed deliberately" (`-s foo` as `--section foo` is common and
+correct). Turning it on would silently swallow a *typo'd* short flag into
+the pattern instead of erroring, trading one class of silent
+misinterpretation for another, and it does not fix `--tag`/`--section`
+specifically — every other short flag on `find` would need the same
+treatment, each with its own ambiguity. The targeted, after-the-fact hint
+only fires in the exact shape this iteration's dogfood report reproduced,
+and leaves clap's flag parsing untouched.
+
+**Rejected alternatives.** `allow_hyphen_values` (above). Detecting the
+confusion by inspecting raw `std::env::args()` before clap parses: fragile
+across every other way `find` can be invoked (a config default, a view,
+`--files-from`), and duplicates clap's own tokenisation rules outside clap.
+Rejecting any bare leading-dash positional outright before clap sees it:
+breaks the documented, valid `hyalo find -- '-draft notes'` form, which
+must still work unchanged.
+
+## DEC-357: did-you-mean ranks by Damerau-Levenshtein, corrects every term, and reaches into phrases (2026-10-04)
+
+**Decision.** `Bm25InvertedIndex::suggest` orders candidates by
+Damerau-Levenshtein distance (transposition-aware: `snapshto` → `snapshot`
+is 1 edit, not the 2 plain Levenshtein counts for two adjacent
+substitutions) ascending, then document frequency descending, then
+alphabetically for determinism — replacing the old (normalised Levenshtein
+descending, Jaro-Winkler descending, docs only as a last-resort tie-break)
+order, which let a same-edit-distance typo with more documents but an extra
+real transposition outrank the actual correct spelling. The *inclusion*
+gate (`close_enough`: Levenshtein ≤ 2 within a length-relative ceiling, or
+Jaro-Winkler ≥ 0.85) is unchanged — only the ranking of what passes it.
+`corrected_query` now splices in **every** suggested term's top candidate in
+one pass (sorted by byte offset, applied left to right against a fresh
+string) instead of only the first suggestion's — `ostrch kangroo` now
+corrects to `ostrich kangaroo`, not `ostrich kangroo`. And a misspelled word
+*inside* a quoted phrase (`"stale indx"`) now gets a suggestion at all:
+`Lexeme::Phrase`/`RawNode::Phrase` carry the byte offset of the phrase
+content's first character (threaded through `lex()`'s two phrase-reading
+sites), and `Compiler::compile`'s `RawNode::Phrase` arm splits the phrase
+text on whitespace (`phrase_raw_words`) and registers each simple
+single-token word as a `QueryWord` at its absolute span — mirroring what
+`Compiler::word()` already did for a plain top-level word — so
+`corrected_query` can splice a fix into a phrase exactly as it does outside
+one.
+
+In the hint layer, "Try OR instead of AND" (`hints/find.rs`) now checks
+`ctx.search_suggestions` (the zero-match-term list `suggest()` produces) and
+only offers the OR rewrite when at least one of the query's words is absent
+from that list — i.e. at least one word has a chance of matching something;
+OR-ing together words that all match nothing still matches nothing. The
+corrected-query hint's rebuilt command (`zero_result.rs::rebuild_find_with`)
+now also re-appends `--granularity section` when `ctx.section_file_matches`
+is `Some` (section mode ran), since that field was never part of
+`ActiveFilter` and silently reverted a section-mode zero-result query back
+to file mode.
+
+**Why.** All three defects were independently observed on the project's own
+vault: `find snapshto` ranked `snapshoton` (a 1-document typo stem) and
+`snapshots` ahead of `snapshot` (158 documents) because plain Levenshtein
+rates all three "2 edits" and the real signal — that `snapshot` is only a
+transposition away — was never computed. `find "ostrch kangroo"` corrected
+only `ostrch`, so the hinted command still returned zero results while
+`suggestions` plainly carried both fixes — the hint was strictly less
+informative than its own payload. `find '"stale indx"'` returned
+`suggestions: null` even though `indx` was exactly the kind of one-character
+typo the same-query-outside-a-phrase case already handled, because only the
+plain-word compile path had ever populated `Compiler.words`.
+
+**Consequences.** The hint layer (`hints/zero_result.rs`'s `0b.` did-you-mean
+hint) needed no change at all for the multi-term fix: it already substitutes
+the *whole* corrected-query string for the pattern token, so widening
+`corrected_query`'s own output was sufficient. Phrase-word suggestions are
+scoped to simple single-token words (the same `only.whole.is_none() &&
+only.parts.len() == 1` condition `word()` uses) — a hyphenated or
+underscored identifier inside a phrase does not get a suggestion, matching
+the plain-word behaviour outside phrases. A negated phrase (`-"typo
+phrase"`) registers no suggestion, matching a negated plain word.
+
+**Rejected alternatives.** Keep Jaro-Winkler as the primary ranking key and
+only add Damerau-Levenshtein as an earlier tie-break: rejected because the
+dogfood report's own example shows normalised-Levenshtein-then-Jaro-Winkler
+already ties or near-ties on exactly the cases that matter, so a tie-break
+addition would not reliably change the outcome — Damerau-Levenshtein needed
+to be the *primary* key. Rewriting `corrected_query` to try every
+combination of candidates and re-score each rewritten query against the
+corpus to pick the "best" overall correction: far more expensive (one BM25
+score per combination) for a cosmetic hint whose only contract is "a
+plausible single-substitution-per-term fix", which the simple first-candidate
+splice already delivers correctly once applied to every term.
+
+## DEC-358: malformed-but-recoverable query input warns; a malformed phrase slop errors (2026-10-04)
+
+**Decision.** `CompiledQuery` carries a `QueryWarnings` struct
+(`dangling_operator`, `unterminated_quote`, `clamped_slops: Vec<u32>`,
+`misplaced_wildcard_terms: Vec<String>`), populated while lexing and parsing
+and exposed via `CompiledQuery::warnings()`. `find`'s dispatch
+(`find/mod.rs`) reads it right after compiling the query and emits one
+`warn_always` (`-q`-proof, matching the existing `prefix*`-capped and
+BM25-low-discriminative warnings' precedent) per populated field:
+
+- **Dangling `OR`** (`a OR` or `OR a`, no operand on one side): flagged in
+  `Parser::parse_and` (an `Or` lexeme reached with no left operand — a
+  leading or repeated `OR`) and `Parser::parse_or` (the trailing-`OR` break
+  path already there, DEC-333) — both already-correct no-ops, now observed.
+- **An unterminated `"`**: `read_phrase` returns `(String, bool)` — whether
+  it actually found a closing quote — instead of just the phrase text; the
+  historical behaviour (run to the end of the query) is unchanged, only
+  reported.
+- **A clamped `~N`**: `read_slop` returns `(u32, Option<u32>)` — the
+  (possibly clamped) slop and, when clamping happened, the value as typed —
+  instead of silently `.min()`-ing it away.
+- **A misplaced `*`** (`*foo`, `sn*p` — anywhere but the trailing position
+  `Compiler::word()`'s prefix branch already owns): flagged in the
+  general-word branch of `Compiler::word()`, which is only reached once the
+  trailing-`*` prefix branch has already declined the word.
+
+Separately, and as a hard parse **error** rather than a warning: `"a
+b"~abc` — a `~` directly after a closing quote followed by a letter — is
+rejected before lexing even starts (`has_malformed_phrase_slop`, a
+character scan for `"` + `~` + an alphabetic character) with "'~' after a
+phrase takes a number of extra words … — not a word", instead of silently
+reading slop 0 and lexing `abc` as a brand new word appended after the
+phrase.
+
+**Why.** Every one of these four warning cases and the one error case
+previously produced a *plausible-looking, wrong* answer with no signal at
+all that anything unusual happened: `a OR` matched exactly what `a` alone
+matches (OR with an absent operand is exactly AND's identity, so it looks
+like "it worked"); an unterminated `"snapshot` silently ran to end-of-query,
+which is "probably fine" until the query has a second intended phrase after
+it; `*foo`/`sn*p` tokenise with the `*` dropped as ordinary punctuation,
+quietly returning results (or, for `sn*p`, the already-existing zero-result
+did-you-mean path) for a search that was never what `*` was meant to
+express; `~65` through `~99999999999999999999` clamp to 64 with no sign
+anything was adjusted; and `"a b"~abc` is not a stray trailing word, it is
+a typo'd slop number whose silent fallback (slop 0, `abc` as a new word)
+changes what the query means without saying so.
+
+**Consequences.** `-q` does not suppress any of these (`warn_always`,
+matching DEC-333's `prefix*`-cap precedent — malformed input, not routine
+noise). The `close_enough` similarity gate inside `suggest()` (DEC-357) is
+untouched; `misplaced_wildcard_terms` is populated independently in
+`Compiler::word()`, not derived from suggestions. `operator_only` (the
+existing "the whole query was boolean keywords" check) and `lex()`'s
+signature both changed to thread `QueryWarnings` through; every call site
+updated (there was exactly one: `parse_with_stemmers`). `read_slop`'s
+digit-overflow handling (saturating `u32` arithmetic, unchanged from before
+this DEC) means a slop typed with enough digits to overflow `u32` is
+reported clamped from `u32::MAX`, not from the literal (unparseable as
+`u32`) string the user typed — truthful, if not pretty.
+
+**Rejected alternatives.** Reject every dangling `OR`/unterminated
+quote/misplaced `*` as a hard parse error instead of warning: rejected
+because all four are well-formed, unambiguous queries that already have a
+defined (if surprising) meaning under DEC-333's grammar — turning a working
+query into an error on every reader who had learned to live with the old
+silent behaviour is a bigger compatibility break than the dogfood report
+asked for, and the task's own framing ("warn … like bare `OR` does") already
+established the precedent. Treating `"a b"~abc` as a warning too (clamp to
+slop 0, warn that `~abc` was not a number): rejected because unlike the other
+four, the *data* that would be silently discarded here (`abc`, lexed as a
+brand new word joined by implicit AND) materially changes which documents
+match — a warning a script does not read still leaves it searching for the
+word "abc" it never typed as a search term, which is a correctness problem,
+not merely a confusing-but-harmless one.
