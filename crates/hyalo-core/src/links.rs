@@ -231,11 +231,7 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
 /// `cleaned` and `original` must describe the same line with identical byte
 /// lengths and identical byte positions for all link syntax characters (`[`,
 /// `]`, `(`, `)`).
-pub(crate) fn extract_links_from_text_with_original(
-    cleaned: &str,
-    original: &str,
-    out: &mut Vec<Link>,
-) {
+pub fn extract_links_from_text_with_original(cleaned: &str, original: &str, out: &mut Vec<Link>) {
     extract_links_and_anchors(cleaned, original, out, None);
 }
 
@@ -280,7 +276,7 @@ fn extract_links_and_anchors(
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
             && !is_escaped(bytes, i)
-            && let Some((mut link, end)) = try_parse_wikilink_at(cleaned, i + 1)
+            && let Some((mut link, end)) = try_parse_wikilink_at(cleaned, original, i + 1)
         {
             // iter-261 (UX-6): `![[…]]` is an embed. Resolution is identical to
             // a plain wikilink; only the reported `kind` differs.
@@ -293,7 +289,7 @@ fn extract_links_and_anchors(
             && i + 1 < len
             && bytes[i + 1] == b'['
             && !is_escaped(bytes, i)
-            && let Some((link, end)) = try_parse_wikilink_at(cleaned, i)
+            && let Some((link, end)) = try_parse_wikilink_at(cleaned, original, i)
         {
             out.push(link);
             i = end;
@@ -305,7 +301,7 @@ fn extract_links_and_anchors(
             && i + 1 < len
             && bytes[i + 1] == b'['
             && !is_escaped(bytes, i)
-            && let Some((anchor, end)) = try_parse_self_anchor_wikilink_at(cleaned, i)
+            && let Some((anchor, end)) = try_parse_self_anchor_wikilink_at(cleaned, original, i)
         {
             anchors.push(anchor);
             i = end;
@@ -444,11 +440,15 @@ fn try_parse_self_anchor_markdown_at(
 /// Parse `[[#fragment]]` (optionally `[[#fragment|alias]]`) at `start`,
 /// returning the anchor (fragment without the leading `#`, plus the alias as
 /// its label when one is written).
-fn try_parse_self_anchor_wikilink_at(text: &str, start: usize) -> Option<(SelfAnchor, usize)> {
+fn try_parse_self_anchor_wikilink_at(
+    text: &str,
+    original: &str,
+    start: usize,
+) -> Option<(SelfAnchor, usize)> {
     let content_start = start + 2;
     let rest = &text[content_start..];
     let close = find_wikilink_close(rest)?;
-    let inner = &rest[..close];
+    let inner = wikilink_inner(text, original, content_start, close);
     if inner.trim().is_empty() {
         return None;
     }
@@ -701,7 +701,7 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
             && !is_escaped(bytes, i)
-            && let Some((mut span, end)) = try_parse_wikilink_span_at(cleaned, i + 1)
+            && let Some((mut span, end)) = try_parse_wikilink_span_at(cleaned, original, i + 1)
         {
             // Extend full_start back to the `!`
             span.full_start = i;
@@ -716,7 +716,7 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
             && i + 1 < len
             && bytes[i + 1] == b'['
             && !is_escaped(bytes, i)
-            && let Some((span, end)) = try_parse_wikilink_span_at(cleaned, i)
+            && let Some((span, end)) = try_parse_wikilink_span_at(cleaned, original, i)
         {
             out.push(span);
             i = end;
@@ -760,13 +760,15 @@ pub(crate) fn extract_fragment_spans(cleaned: &str, original: &str) -> Vec<Fragm
             continue;
         }
         let parsed = if bytes.get(i + 1) == Some(&b'[') {
-            try_parse_wikilink_span_at(cleaned, i)
+            try_parse_wikilink_span_at(cleaned, original, i)
         } else {
             try_parse_markdown_link_span_at(cleaned, original, i)
         };
         if let Some((span, end)) = parsed {
             if let Some(fragment) = span.link.fragment
-                && let Some(hash) = cleaned[span.target_end..end].find('#')
+                && let Some(hash) = original
+                    .get(span.target_end..end)
+                    .and_then(|rest| rest.find('#'))
             {
                 let start = span.target_end + hash + 1;
                 if original.get(start..start + fragment.len()) == Some(fragment.as_str()) {
@@ -781,7 +783,7 @@ pub(crate) fn extract_fragment_spans(cleaned: &str, original: &str) -> Vec<Fragm
             continue;
         }
         let parsed = if bytes.get(i + 1) == Some(&b'[') {
-            try_parse_self_anchor_wikilink_at(cleaned, i)
+            try_parse_self_anchor_wikilink_at(cleaned, original, i)
         } else {
             try_parse_self_anchor_markdown_at(cleaned, original, i)
         };
@@ -814,12 +816,16 @@ pub(crate) fn extract_fragment_spans(cleaned: &str, original: &str) -> Vec<Fragm
 
 /// Try to parse a wikilink span starting at `start` (the first `[` of `[[`).
 /// Returns the [`LinkSpan`] and the byte position after the closing `]]`.
-fn try_parse_wikilink_span_at(text: &str, start: usize) -> Option<(LinkSpan, usize)> {
+fn try_parse_wikilink_span_at(
+    text: &str,
+    original: &str,
+    start: usize,
+) -> Option<(LinkSpan, usize)> {
     let content_start = start + 2; // skip [[
     let rest = &text[content_start..];
 
     let close = find_wikilink_close(rest)?;
-    let inner = &rest[..close];
+    let inner = wikilink_inner(text, original, content_start, close);
 
     if inner.trim().is_empty() {
         return None;
@@ -927,7 +933,7 @@ fn try_parse_markdown_link_span_at(
 
 /// Try to parse a wikilink starting at position `start` (the first `[`).
 /// Returns the parsed Link and the position after the closing `]]`.
-fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
+fn try_parse_wikilink_at(text: &str, original: &str, start: usize) -> Option<(Link, usize)> {
     // start points to first `[`, start+1 is second `[`
     let content_start = start + 2;
     let rest = &text[content_start..];
@@ -935,7 +941,7 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     // Find the closing `]]`, stopping at any boundary a wikilink target cannot
     // contain (iter-272 BOUND-1/BOUND-2).
     let close = find_wikilink_close(rest)?;
-    let inner = &rest[..close];
+    let inner = wikilink_inner(text, original, content_start, close);
 
     // Reject an empty or whitespace-only capture: `[[]]` and `[[ ]]` name
     // nothing.
@@ -946,6 +952,30 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     let link = parse_wikilink(inner)?;
     let end_pos = content_start + close + 2;
     Some((link, end_pos))
+}
+
+/// The inner text of a wikilink whose `[[` and `]]` were located in `text`.
+///
+/// iter-309 (DEC-348): `text` has had inline code spans blanked, which decides
+/// *whether* a wikilink exists — a `[[x]]` inside a code span is never one.
+/// The inner text, though, is read from `original` (the un-stripped line with
+/// the same byte layout), exactly as markdown link labels already are. A code
+/// span wholly inside the brackets is part of what the author wrote:
+/// `[[log#DEC-068: `links auto` ships]]` names the heading
+/// "DEC-068: `links auto` ships", and blanking it left
+/// `DEC-068:              ships` — a fragment no heading can match, while
+/// the `suggested_fragment` hyalo itself offered carried the backticks.
+fn wikilink_inner<'a>(
+    text: &'a str,
+    original: &'a str,
+    content_start: usize,
+    close: usize,
+) -> &'a str {
+    let end = content_start + close;
+    match original.get(content_start..end) {
+        Some(raw) if original.len() == text.len() => raw,
+        _ => &text[content_start..end],
+    }
 }
 
 /// Find the `]]` that closes a wikilink opened just before `rest`, refusing to
@@ -3112,6 +3142,74 @@ mod tests {
             Some("`file.ts`"),
             "span label should preserve backtick-wrapped content"
         );
+    }
+
+    /// iter-309 (DEC-348): a code span wholly inside a wikilink's brackets is
+    /// part of its heading fragment, not blanked out of it.
+    #[test]
+    fn wikilink_fragment_keeps_code_span_with_original() {
+        use crate::scanner::strip_inline_code;
+
+        let original = "see [[log#DEC-068: `links auto` ships|`alias`]] here";
+        let cleaned = strip_inline_code(original);
+        assert_ne!(cleaned.as_ref(), original);
+
+        let mut links = Vec::new();
+        extract_links_from_text_with_original(cleaned.as_ref(), original, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "log");
+        assert_eq!(
+            links[0].fragment.as_deref(),
+            Some("DEC-068: `links auto` ships")
+        );
+        assert_eq!(links[0].label.as_deref(), Some("`alias`"));
+
+        let spans = extract_link_spans_with_original(cleaned.as_ref(), original);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(&original[spans[0].target_start..spans[0].target_end], "log");
+        assert_eq!(
+            spans[0].link.fragment.as_deref(),
+            Some("DEC-068: `links auto` ships")
+        );
+
+        let frags = extract_fragment_spans(cleaned.as_ref(), original);
+        assert_eq!(frags.len(), 1);
+        assert_eq!(frags[0].fragment, "DEC-068: `links auto` ships");
+        assert_eq!(
+            &original[frags[0].start..frags[0].start + frags[0].fragment.len()],
+            "DEC-068: `links auto` ships"
+        );
+    }
+
+    /// The other half of DEC-348: a wikilink *inside* a code span is still
+    /// not a link, and a span that opens inside the brackets and closes
+    /// outside them still hides the `]]`.
+    #[test]
+    fn wikilink_inside_code_span_is_still_not_a_link() {
+        use crate::scanner::strip_inline_code;
+
+        for original in ["`[[nolink]]` text", "[[a `b]] c` d"] {
+            let cleaned = strip_inline_code(original);
+            let mut links = Vec::new();
+            extract_links_from_text_with_original(cleaned.as_ref(), original, &mut links);
+            assert_eq!(links.len(), 0, "{original:?} produced {links:?}");
+        }
+    }
+
+    /// Same-file `[[#Heading `code`]]` anchors read the fragment from the
+    /// original line too.
+    #[test]
+    fn self_anchor_wikilink_keeps_code_span_with_original() {
+        use crate::scanner::strip_inline_code;
+
+        let original = "[[#Use `find` first]]";
+        let cleaned = strip_inline_code(original);
+        let mut links = Vec::new();
+        let mut anchors = Vec::new();
+        extract_links_and_self_anchors(cleaned.as_ref(), original, &mut links, &mut anchors);
+        assert_eq!(links.len(), 0, "a same-file anchor is not a file link");
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].fragment, "Use `find` first");
     }
 
     #[test]

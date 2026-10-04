@@ -132,9 +132,9 @@ impl FileVisitor for LinkCollector<'_> {
     }
 
     fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
-        // Resolution only needs the target, not the label, so scanning the
-        // inline-code-stripped `cleaned` line as both text and original is
-        // sufficient (label fidelity is irrelevant to HYALO006).
+        // `cleaned` decides where links are; `raw` supplies their text, so a
+        // code span inside a wikilink's brackets stays part of its target or
+        // heading fragment (DEC-348).
         self.scratch.clear();
         if self.collect_anchors {
             let start = self.anchors.len();
@@ -148,7 +148,7 @@ impl FileVisitor for LinkCollector<'_> {
                 anchor.line = line_num;
             }
         } else {
-            links::extract_links_from_text(cleaned, &mut self.scratch);
+            links::extract_links_from_text_with_original(cleaned, raw, &mut self.scratch);
         }
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));

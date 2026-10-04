@@ -16,7 +16,7 @@ related:
 
 ## Goal
 
-Carried over from [[decision-log#DEC-068]] (2026-08-18, filed by the iter-198
+Carried over from [[decision-log#DEC-068: `links auto --no-first-only` ships as a conflicting counter-flag (2026-08-18)]] (2026-08-18, filed by the iter-198
 review/merge sweep). DEC-068 gave `links auto` a `--no-first-only`
 counter-flag for the one boolean `[links.auto]` key, and closed with an
 explicit "Not done":

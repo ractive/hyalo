@@ -13,7 +13,7 @@ branch: iter-260/lazy-bm25-snapshot-load
 ## Goal
 
 Land the fix [[iterations/iteration-259-index-snapshot-load-perf]] measured and
-[[decision-log#DEC-264]] approved: stop decoding the BM25 inverted index when
+[[decision-log#DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)]] approved: stop decoding the BM25 inverted index when
 loading a `.hyalo-index` snapshot, and decode it only when a command actually
 searches text.
 
@@ -112,7 +112,7 @@ the *same* binary (`created_at`/`pid` in the header, `HashMap` iteration order
 in the graph) — pre-existing nondeterminism, unrelated to this change; the
 schema and key order are what stayed identical.
 
-Design decisions recorded as [[decision-log#DEC-265]]: keep the snapshot buffer
+Design decisions recorded as [[decision-log#DEC-265: the deferred BM25 section keeps the snapshot bytes, and refuses at use (2026-09-01)]]: keep the snapshot buffer
 rather than re-read the file, force the decode on save rather than splice raw
 bytes, and demote SEC-3/MED-1 from "reject the snapshot" to "refuse the
 section". Full numbers in [[research/snapshot-load-floor-2026-09-01]].
@@ -133,5 +133,5 @@ section". Full numbers in [[research/snapshot-load-floor-2026-09-01]].
 
 - [[iterations/iteration-259-index-snapshot-load-perf]]
 - [[research/snapshot-load-floor-2026-09-01]]
-- [[decision-log#DEC-264]]
-- [[decision-log#DEC-265]]
+- [[decision-log#DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)]]
+- [[decision-log#DEC-265: the deferred BM25 section keeps the snapshot bytes, and refuses at use (2026-09-01)]]

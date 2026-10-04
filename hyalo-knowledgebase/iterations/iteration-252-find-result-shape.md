@@ -76,7 +76,7 @@ old shape and then some. Default items carry `file, modified, size, lines,
 title, properties, tags`.
 
 Two deliberate departures from the plan, both recorded in
-[[decision-log#DEC-252]]:
+[[decision-log#DEC-252: `title` is promoted out of `properties`, and `--fields all` is hinted only where it is affordable (2026-08-30)]]:
 
 - **`title` is promoted out of `properties`.** Adding `title` to the default
   set made the duplicate copy inside `properties` visible — the same string

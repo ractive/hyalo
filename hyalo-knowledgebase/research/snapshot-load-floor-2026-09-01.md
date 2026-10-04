@@ -8,7 +8,7 @@ related:
   - "[[iterations/iteration-259-index-snapshot-load-perf]]"
   - "[[iterations/iteration-256-envelope-help-forwarding-and-index-cost]]"
   - "[[iterations/iteration-260-lazy-bm25-snapshot-load]]"
-  - "[[decision-log#DEC-264]]"
+  - "[[decision-log#DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)]]"
 ---
 
 # Where the snapshot-index load floor goes
@@ -179,7 +179,7 @@ of which is a design decision, not a coding chore:
    not care.
 
 Filed as [[iterations/iteration-260-lazy-bm25-snapshot-load]]. The decision to
-pursue it rather than record the floor as inherent is [[decision-log#DEC-264]].
+pursue it rather than record the floor as inherent is [[decision-log#DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)]].
 
 ## What was ruled out
 
@@ -231,4 +231,4 @@ what the compatibility claim rests on.
 The design decisions that made this safe — retaining the snapshot buffer rather
 than re-reading the file, forcing the decode on save rather than splicing raw
 bytes, and demoting SEC-3/MED-1 from "reject the snapshot" to "refuse the
-section" — are [[decision-log#DEC-265]].
+section" — are [[decision-log#DEC-265: the deferred BM25 section keeps the snapshot bytes, and refuses at use (2026-09-01)]].

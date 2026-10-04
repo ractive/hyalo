@@ -122,7 +122,7 @@ The gap by shape, not by command:
 | array payload | `task toggle`, `task set` | no top-level object at all |
 | outside the contract | `init`, `deinit`, `create-index`, `drop-index` | text-only or index-only |
 
-Resolved by [[decision-log#DEC-257]]: `dry_run` made universal on every
+Resolved by [[decision-log#DEC-257: `dry_run` is universal on object-shaped mutation results; `skipped_count` is bulk-family-only (2026-08-31)]]: `dry_run` made universal on every
 object-shaped result (`apply`/`applied` retained as its exact inverse),
 `skipped_count` scoped to the bulk family in the contract text, `task
 toggle`/`task set` named as the array exception. R2/R3/R4 stand; the sentence

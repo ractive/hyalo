@@ -119,7 +119,7 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 
 **Why:** serde_yaml_ng cannot preserve formatting (comments, quoting style, blank lines). Obsidian itself rewrites frontmatter on save. The files are machine-managed. Keeps the implementation simple. Can revisit if hand-edited YAML preservation becomes important.
 
-**Superseded by [[decision-log#DEC-080]] (iter-214):** "hand-edited YAML preservation"
+**Superseded by [[decision-log#DEC-080: frontmatter writes splice per-key line spans instead of re-serializing (2026-08-23)]] (iter-214):** "hand-edited YAML preservation"
 did become important — a one-key change rewrote 116 of 198 lines on a real
 GitHub Docs file. Formatting is now preserved by splicing per-key line spans
 in the write path; the parser choice in this decision is unaffected.
@@ -1288,7 +1288,7 @@ first-mention-only **off** for a single run, overriding
 No other `[links.auto]` key gets a counter-flag.
 
 **Why:** [[iterations/iteration-195a-auto-link-config-exclusions]] made
-`first_only` persistable, and [[decision-log#DEC-067]] deferred the counter-flag
+`first_only` persistable, and [[decision-log#DEC-067: `links fix --ignore-target` keeps its name; only `links auto` gains persistence (2026-08-18)]] deferred the counter-flag
 "pending a real user hitting it". The re-evaluation this iteration opened with
 found no external report — but it did find an internal inconsistency that is
 evidence enough on its own: `warn_common_titles`, the other boolean key in the
@@ -3191,7 +3191,7 @@ recording that the accumulated work is minor-bump-shaped.
 
 ## DEC-245: stale snapshots stay warn-but-serve by default; `--strict-index` is the opt-in fallback (2026-08-28)
 
-> **Superseded (implementation only) by [[decision-log#DEC-249|DEC-249]]
+> **Superseded (implementation only) by [[decision-log#DEC-249: `--strict-index` is removed, not kept as a documented opt-in (2026-08-28)|DEC-249]]
 > (2026-08-28):** `--strict-index` itself was removed the same day, as an
 > owner call unrelated to this decision's reasoning. The warn-but-serve
 > default recorded below is still current and unaffected.
@@ -3316,7 +3316,7 @@ which is the same failure in the other direction.
 
 ## DEC-249: `--strict-index` is removed, not kept as a documented opt-in (2026-08-28)
 
-Supersedes the implementation half of [[decision-log#DEC-245|DEC-245]] (the
+Supersedes the implementation half of [[decision-log#DEC-245: stale snapshots stay warn-but-serve by default; `--strict-index` is the opt-in fallback (2026-08-28)|DEC-245]] (the
 warn-but-serve default it recorded as permanent is untouched). Closes
 [[iterations/iteration-248-remove-strict-index]].
 
@@ -3435,7 +3435,7 @@ errors on stderr with exit codes.
   tasks is enough evidence for a solo tool.
 
 **Constraint carried into both iterations.** No new CLI flags
-([[decision-log#DEC-249]] discipline): every adoption is a default, a
+([[decision-log#DEC-249: `--strict-index` is removed, not kept as a documented opt-in (2026-08-28)]] discipline): every adoption is a default, a
 layout, a hint, or metadata on existing output.
 
 ## DEC-252: `title` is promoted out of `properties`, and `--fields all` is hinted only where it is affordable (2026-08-30)

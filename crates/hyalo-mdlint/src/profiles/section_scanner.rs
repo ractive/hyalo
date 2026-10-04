@@ -119,7 +119,7 @@ impl FileVisitor for SectionScanner {
         // Normal text line — use cleaned (inline code spans stripped) so that
         // [[links]] inside backtick spans are not extracted as real links.
         let mut line_links: Vec<links::Link> = Vec::new();
-        links::extract_links_from_text(cleaned, &mut line_links);
+        links::extract_links_from_text_with_original(cleaned, raw, &mut line_links);
 
         for link in line_links {
             // iter-261: a section's link list is a vault-link inventory; an

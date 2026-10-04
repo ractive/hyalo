@@ -89,7 +89,7 @@ advance.
 ## Outcome
 
 Characterized, decided, and the decision is *not* "inherent". One decision
-recorded — [[decision-log#DEC-264]] — and one follow-up filed,
+recorded — [[decision-log#DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)]] — and one follow-up filed,
 [[iterations/iteration-260-lazy-bm25-snapshot-load]]. No production code
 changed in this iteration; the instrumentation used to get the numbers was
 temporary and was reverted before commit. Full write-up with every measurement:

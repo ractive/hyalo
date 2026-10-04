@@ -3230,7 +3230,7 @@ impl FileVisitor for SectionScanner {
         }
 
         let mut line_links: Vec<links::Link> = Vec::new();
-        links::extract_links_from_text(cleaned, &mut line_links);
+        links::extract_links_from_text_with_original(cleaned, raw, &mut line_links);
         for link in line_links {
             // iter-261: a section's link list is a vault-link inventory; an
             // external URI (now parsed rather than dropped) does not belong.
