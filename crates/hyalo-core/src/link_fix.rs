@@ -290,9 +290,21 @@ pub struct FixReport {
 /// rewritten target genuinely resolves, and the corruption is semantic.
 ///
 /// Such targets are reported in [`FixReport::templated`] and never fixed.
+///
+/// A target wrapped in angle brackets (`[[<plugin-id>]]`) is the same
+/// problem in a different plugin-manifest convention (iteration 311, Hints
+/// task): hyalo cannot know what `<plugin-id>` renders to either, and at a
+/// low enough `--min-confidence` it fuzzy-matched real files anyway (0.56 on
+/// the Obsidian Hub). A markdown destination written with CommonMark's own
+/// `<dest with spaces>` escape never reaches here with its brackets intact --
+/// the parser strips them when building [`crate::links::Link::target`] -- so
+/// this cannot misfire on that legitimate syntax.
 #[must_use]
 pub fn is_templated_target(target: &str) -> bool {
-    target.contains("{%") || target.contains("{{") || target.contains("${")
+    target.contains("{%")
+        || target.contains("{{")
+        || target.contains("${")
+        || (target.starts_with('<') && target.ends_with('>') && target.len() > 2)
 }
 
 /// What one `--apply` pass did with the fixes it was handed.

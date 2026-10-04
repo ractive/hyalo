@@ -403,3 +403,35 @@ fn apply_fuzzy_without_apply_reports_not_written_and_pass_apply() {
     let plain_text = String::from_utf8(plain_text).unwrap();
     assert!(plain_text.contains("not written — pass --apply-fuzzy"));
 }
+
+// ---------------------------------------------------------------------------
+// Hints task: `[[<placeholder>]]` angle-bracket targets go to the templated
+// bucket with `{{…}}`, never to fuzzy candidates -- a plugin-manifest
+// placeholder is exactly as unknowable as a template expression, and at a
+// low enough --min-confidence it used to fuzzy-match a real file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn angle_bracket_placeholder_is_templated_not_fuzzy() {
+    let tmp = TempDir::new().unwrap();
+    // A plausible fuzzy-match decoy: a note whose basename a low
+    // --min-confidence would otherwise happily match the placeholder against.
+    write_md(tmp.path(), "plugin-id.md", "# Plugin\n");
+    write_md(tmp.path(), "manifest.md", "[[<plugin-id>]]\n");
+
+    let fix = links_fix(tmp.path(), &["--min-confidence", "0.0"]);
+    assert_eq!(fix["templated"], 1, "{fix:?}");
+    let templated = fix["templated_links"].as_array().unwrap();
+    assert!(
+        templated.iter().any(|l| l["target"] == "<plugin-id>"),
+        "{templated:?}"
+    );
+    assert!(
+        fix["fuzzy_fixes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["old_target"] != "<plugin-id>"),
+        "a placeholder target must never be offered as a fuzzy candidate: {fix:?}"
+    );
+}
