@@ -283,11 +283,16 @@ verbose_skips = true
   (for example the YAML parse excerpt) to stderr as it happens instead of one
   end-of-run summary line; `RUST_LOG=hyalo=debug` does the same for one run.
 - **Ignore files.** The walk honours `.ignore` files everywhere and, inside a
-  git repository, `.gitignore`, `.git/info/exclude` and the global gitignore.
-  A file they hide is not discovered and is not counted under
-  `summary.skipped` or `excluded`. An explicit Markdown link to an existing
-  hidden file (`.gitignore`, `.github/workflows/ci.yml`) still resolves, without
-  adding the file to the vault.
+  git repository, `.gitignore`, `.git/info/exclude` and the global gitignore
+  (DEC-342). A note they hide never appears in an unscoped read, is not a
+  graph edge for `--orphan`/`--dead-end`, and is counted under `summary`'s
+  `files.excluded` (not `skipped`); the count is recorded in the snapshot, so
+  `summary --index` does no walk. A path you name (`--file`, a positional
+  argument, a `--files-from` list) is still returned under every `--fields`;
+  its own backlinks list its referrers while their links to it stay broken.
+  An explicit Markdown link to an existing hidden file (`.gitignore`,
+  `.github/workflows/ci.yml`) still resolves, without adding the file to the
+  vault.
 
 `hyalo config --jq '.results.scan'` reports the effective `include`, `exclude`
 and `verbose_skips`.

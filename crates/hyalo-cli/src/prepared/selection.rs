@@ -181,7 +181,13 @@ pub(crate) fn refresh_named_selection(
     // Whole-set preflight remains ahead of the first scan or state mutation.
     selection.precheck(root)?;
     index.begin_changes();
-    let result = refresh_named_with(root, selection, index, insert_missing, scan_checked_target);
+    let result = refresh_named_with(
+        root,
+        selection,
+        index,
+        insert_missing,
+        |index, target, op| scan_checked_target(root, index, target, op),
+    );
     index.finish_changes();
     result
 }
@@ -219,6 +225,7 @@ fn refresh_named_with(
     Ok(summary)
 }
 fn scan_checked_target(
+    root: &VaultRoot,
     index: &mut SnapshotIndex,
     target: &CheckedTarget,
     operation: RefreshOperation,
@@ -235,8 +242,19 @@ fn scan_checked_target(
                 ));
                 return false;
             }
+            // Iteration 306 review (finding 7): "fold it in" is a false
+            // promise for a file `.gitignore` (or another VCS ignore source)
+            // excludes — the very walk `create-index` would run drops it
+            // again, so it never folds in. `would_discover` reuses the real
+            // walk's own ignore machinery rather than guessing, and the
+            // suggestion is simply dropped when it would be a lie.
+            let fold_in_hint = if hyalo_core::discovery::would_discover(root.path(), rel) {
+                " (run `hyalo create-index` to fold it in)"
+            } else {
+                ""
+            };
             crate::warn::note(format!(
-                "{rel}: absent from the snapshot index — read from disk for this run (run `hyalo create-index` to fold it in)"
+                "{rel}: absent from the snapshot index — read from disk for this run{fold_in_hint}"
             ));
             true
         }
@@ -284,14 +302,15 @@ mod tests {
         ])
         .unwrap();
         let mut calls = Vec::new();
+        let root = VaultRoot::new(dir.path()).unwrap();
         let summary = refresh_named_with(
-            &VaultRoot::new(dir.path()).unwrap(),
+            &root,
             &selection,
             &mut index,
             true,
             |index, target, operation| {
                 calls.push((target.target.relative().to_owned(), operation));
-                let result = scan_checked_target(index, target, operation);
+                let result = scan_checked_target(&root, index, target, operation);
                 // A false result must not prevent later refresh OR insertion.
                 result && target.target.relative() != "first.md"
             },
@@ -358,14 +377,15 @@ mod tests {
                 let before = index.get("first.md").unwrap().properties.clone();
                 let persisted = std::fs::read(dir.join(".hyalo-index")).unwrap();
                 let mut calls = 0;
+                let root = VaultRoot::new(&dir).unwrap();
                 let result = refresh_named_with(
-                    &VaultRoot::new(&dir).unwrap(),
+                    &root,
                     &selection,
                     &mut index,
                     true,
                     |index, target, operation| {
                         calls += 1;
-                        scan_checked_target(index, target, operation)
+                        scan_checked_target(&root, index, target, operation)
                     },
                 );
                 assert!(result.is_err());

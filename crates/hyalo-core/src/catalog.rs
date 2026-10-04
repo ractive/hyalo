@@ -209,7 +209,15 @@ fn resolve_path(
     if let Some(path) = explicit_path(target) {
         return Resolution::Attachment(Some(path));
     }
-    if strip_md(target) != target || crate::discovery::has_non_md_extension(target) {
+    // `target` already failed the literal (and case-insensitive) lookup above,
+    // so it is not a *known* file under its own spelling — attachment or
+    // note. A target already ending in `.md` has nothing left to append
+    // (`foo.md.md` / `foo.md/index.md` are never useful), but a dotted stem
+    // whose trailing segment merely *looks* like a non-`.md` extension
+    // (`sub/rel-1.2`, `v1.2.3`) must still get the `.md`-suffix attempt below:
+    // it may be a note whose stem happens to contain a dot, and no existing
+    // attachment has claimed the unsuffixed spelling (bug: F3, iteration 306 review).
+    if strip_md(target) != target {
         return Resolution::Missing;
     }
     for suffix in if trailing {
@@ -301,6 +309,52 @@ mod tests {
         assert!(catalog.is_complete());
         assert_eq!(catalog.generation(), 7);
     }
+    #[test]
+    fn dotted_stem_with_path_segment_still_tries_md_suffix() {
+        // F3 (iteration 306 review): `[[sub/rel-1.2]]` was reported broken
+        // because `.2` was mistaken for a non-`.md` extension once a
+        // directory segment made `has_non_md_extension` apply; the bare form
+        // `[[rel-1.2]]` already resolved via the stem-lookup path, which
+        // never ran this extension check.
+        let mut index = CaseInsensitiveIndex::new();
+        index.insert("sub/rel-1.2.md");
+        index.set_complete(true);
+        let options = ResolutionOptions {
+            aliases: false,
+            site_prefix: None,
+        };
+        assert_eq!(
+            resolve(&index, "a.md", LinkKind::Wikilink, "sub/rel-1.2", options).path(),
+            Some("sub/rel-1.2.md")
+        );
+        assert_eq!(
+            resolve(&index, "a.md", LinkKind::Markdown, "sub/rel-1.2", options).path(),
+            Some("sub/rel-1.2.md")
+        );
+    }
+
+    #[test]
+    fn genuine_non_md_extension_in_a_subpath_stays_an_attachment() {
+        // A real attachment reference (no matching `.md` anywhere) must keep
+        // reporting as an unresolved attachment, not a broken note link.
+        let mut index = CaseInsensitiveIndex::new();
+        index.set_complete(true);
+        let options = ResolutionOptions {
+            aliases: false,
+            site_prefix: None,
+        };
+        assert_eq!(
+            resolve(
+                &index,
+                "a.md",
+                LinkKind::Wikilink,
+                "sub/missing.png",
+                options
+            ),
+            Resolution::Attachment(None)
+        );
+    }
+
     #[test]
     fn ambiguity_outranks_alias_and_survives_catalog_generations() {
         let mut index = CaseInsensitiveIndex::new();

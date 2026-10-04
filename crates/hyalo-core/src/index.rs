@@ -454,6 +454,22 @@ struct SnapshotHeader {
     /// file writes the same bytes as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     skipped: Vec<String>,
+    /// How many `.md` files `.gitignore` (or another VCS ignore source)
+    /// dropped while this snapshot was built (iteration 306 / F5, DEC-342).
+    ///
+    /// Sibling of [`Self::scan_excluded`] and recorded for the same reason: a
+    /// gitignored file never enters `entries`, so a load has no way to
+    /// recount it without the `.gitignore`-disabled walk `create-index`
+    /// already paid for once at build time — `summary --index` reads this
+    /// instead of re-walking. No version bump (follows DEC-303's precedent
+    /// for `scan_excluded`): defaulted and skipped when zero, so an older
+    /// snapshot still loads and a vault with nothing gitignored writes the
+    /// same bytes as before. Unlike `scan_excluded`, there is no
+    /// `.hyalo.toml`-side pattern to compare against staleness with
+    /// (`.gitignore` lives outside hyalo's config), so this is replayed
+    /// unconditionally on load, same as `skipped`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    gitignore_dropped: u64,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -1790,6 +1806,18 @@ impl SnapshotIndex {
                 crate::warn::SkipKind::Frontmatter,
             );
         }
+        // DEC-342 (iteration 306 review): replay the build-time gitignore-drop
+        // count so `summary --index` reports the same `excluded` figure as a
+        // disk scan without an extra `.gitignore`-disabled walk on every read.
+        // Unconditional (no pattern-staleness check like `scan_excluded`'s,
+        // since `.gitignore` is not part of `.hyalo.toml`): a `.gitignore`
+        // edited since the index was built makes this as stale as any other
+        // snapshot figure until the next `create-index`.
+        if replay {
+            crate::discovery::note_gitignore_dropped(
+                usize::try_from(header.gitignore_dropped).unwrap_or(usize::MAX),
+            );
+        }
 
         let path_index: HashMap<String, usize> = entries
             .iter()
@@ -2073,6 +2101,7 @@ fn write_snapshot_with_session(
             .map(|f| f.path)
             .collect(),
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
+        gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -2180,8 +2209,10 @@ impl VaultIndex for SnapshotIndex {
 /// Check whether a PID corresponds to a running process.
 ///
 /// On Unix this uses `kill(pid, 0)` (signal 0 is a no-op that only tests
-/// existence). On all other platforms we conservatively assume the PID is
-/// alive so that we never falsely claim a running process is stale.
+/// existence). On Windows this opens the process with
+/// `PROCESS_QUERY_LIMITED_INFORMATION` and checks its exit code. On any other
+/// platform we conservatively assume the PID is alive so that we never
+/// falsely claim a running process is stale.
 fn is_pid_alive(pid: u32) -> bool {
     // pid 0 means "my own process group" for kill() on Unix, not a specific
     // process.  A crafted snapshot with pid=0 would always pass the liveness
@@ -2216,8 +2247,53 @@ fn is_pid_alive(pid: u32) -> bool {
             errno != libc::ESRCH
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, HANDLE, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        // SAFETY: `PROCESS_QUERY_LIMITED_INFORMATION` requests query-only
+        // rights (no control over the target process), `pid` is a plain u32
+        // with no aliasing concerns, and the returned handle is checked for
+        // null before any further use.
+        let handle: HANDLE = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            // ERROR_ACCESS_DENIED means the process exists but we lack
+            // permission to query it — still alive (mirrors the Unix EPERM
+            // branch above). Any other error (e.g. ERROR_INVALID_PARAMETER
+            // for a PID with no such process) means dead.
+            let last_error = std::io::Error::last_os_error()
+                .raw_os_error()
+                .map(i32::cast_unsigned);
+            return last_error == Some(ERROR_ACCESS_DENIED);
+        }
+
+        let mut exit_code: u32 = 0;
+        // SAFETY: `handle` was just returned non-null by `OpenProcess` above
+        // and is closed exactly once below; `exit_code` is a valid, unique
+        // local the call writes into.
+        let got_exit_code = unsafe { GetExitCodeProcess(handle, &raw mut exit_code) };
+        // SAFETY: `handle` is owned solely by this function and this is its
+        // single, final close.
+        unsafe {
+            CloseHandle(handle);
+        }
+
+        if got_exit_code == 0 {
+            // Could not query the exit code — conservative default is alive.
+            return true;
+        }
+        exit_code == STILL_ACTIVE as u32
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Neither liveness probe above is available on this platform —
+        // conservatively assume alive so a stale-index sweep never removes a
+        // snapshot that's still owned by a running process.
         let _ = pid;
         true
     }
@@ -3810,6 +3886,7 @@ Content.
                 scan_excluded: 0,
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
+                gitignore_dropped: 0,
             },
             entries,
             graph: &graph,
@@ -4175,6 +4252,7 @@ Content.
                 scan_excluded: 0,
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
+                gitignore_dropped: 0,
             },
             bm25_index: Some(&original),
             entries: &entries,
@@ -4315,6 +4393,32 @@ Content.
         assert!(
             !is_pid_alive(0),
             "pid 0 must not be treated as an alive process"
+        );
+    }
+
+    /// The Windows `OpenProcess` + `GetExitCodeProcess` probe reports the
+    /// current process alive and a spawned-then-waited child dead.
+    #[cfg(windows)]
+    #[test]
+    fn is_pid_alive_windows_probe_distinguishes_live_and_exited() {
+        let current = std::process::id();
+        assert!(
+            is_pid_alive(current),
+            "the running process's own pid must read as alive"
+        );
+
+        // `cmd /C exit 0` starts, exits immediately, and `wait()` blocks
+        // until it has, so by the time we check, the pid is definitely gone.
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("failed to spawn child process");
+        let child_pid = child.id();
+        child.wait().expect("failed to wait for child process");
+
+        assert!(
+            !is_pid_alive(child_pid),
+            "a waited-for, exited child pid must read as dead"
         );
     }
 

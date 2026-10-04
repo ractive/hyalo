@@ -162,6 +162,40 @@ pub fn reset_scan_excluded_count() {
     EXCLUDED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// How many `.md` files the last completed vault walk dropped because of
+/// `.gitignore` (and the other VCS ignore sources the walker honours: `.ignore`
+/// files, `.git/info/exclude`, global excludes), for `summary`'s
+/// `results.files.excluded` (iteration 306 / F5, DEC-342).
+///
+/// Mirrors [`EXCLUDED_COUNT`] exactly: a process-global counter rather than a
+/// value threaded through every caller, seeded either by a live `create-index`
+/// walk or replayed from a loaded snapshot's header (DEC-303's pattern for
+/// `scan_excluded`).
+static GITIGNORE_DROPPED_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Files dropped by `.gitignore` (or another VCS ignore source) during this
+/// process's walks, or replayed from a loaded snapshot's header.
+#[must_use]
+pub fn gitignore_dropped_count() -> usize {
+    GITIGNORE_DROPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record that a walk (or an index load) found `dropped` gitignore-excluded files.
+///
+/// `fetch_max`, matching [`note_scan_excluded`]: one CLI run can touch this
+/// more than once (a live computation, then a snapshot load replaying its
+/// header) and the figure reported is "how many files this vault lost", not
+/// "how many drops happened".
+pub fn note_gitignore_dropped(dropped: usize) {
+    GITIGNORE_DROPPED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Reset the gitignore-dropped counter. **Tests only.**
+pub fn reset_gitignore_dropped_count() {
+    GITIGNORE_DROPPED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Compiled `[scan] include` configuration.
 #[derive(Clone)]
 struct ScanInclude {
@@ -380,11 +414,138 @@ fn discover_files_with_include_ext(
     include: Option<&ScanInclude>,
     kind: FileKind,
 ) -> Result<Vec<PathBuf>> {
+    discover_files_with_include_ext_policy(dir, include, kind, true, true)
+}
+
+/// [`discover_files`] variant that does not honour `.gitignore` **or any of
+/// the other VCS ignore sources the normal walk applies** — `.ignore` files,
+/// `.git/info/exclude`, and git's global excludes file (iteration 306 / F5,
+/// review-round finding 6: `git_ignore(false)` alone leaves those three
+/// enabled, which silently under-counted a file excluded only by one of
+/// them). Used only to measure how many `.md` files the normal walk is
+/// hiding to any of these sources. Never used for a read or write path: an
+/// ignored file stays invisible to every other command unless named
+/// explicitly (DEC-301).
+pub fn discover_files_ignoring_gitignore(dir: &Path) -> Result<Vec<PathBuf>> {
+    let include = match SCAN_INCLUDE.get() {
+        Some(Some(inc)) => Some(inc),
+        _ => None,
+    };
+    // `record_scan_exclude_stats: false` — this walk's own `[scan] exclude`
+    // drops must not perturb `scan_excluded_count()`, which `summary` already
+    // populates from the real (ignore-respecting) walk.
+    discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, false, false)
+}
+
+/// How many `.md` files under `dir` a normal (ignore-respecting) vault sweep
+/// never sees because `.gitignore`, `.ignore`, `.git/info/exclude` or a
+/// global exclude file hides them (iteration 306 / F5, review-round perf
+/// fix), given the vault-relative paths of the files a normal sweep *did*
+/// keep.
+///
+/// Takes the already-discovered respecting set rather than re-walking for it
+/// (the review round's perf finding: the first implementation called
+/// [`discover_files`] again here, duplicating a walk every caller had already
+/// paid for). Only the ignore-disabled walk is extra; `summary`'s disk-scan
+/// path pays it once, and `create-index` pays it once at build time so
+/// `summary --index` can read the count back from the snapshot instead of
+/// walking at all (see `SnapshotHeader::gitignore_dropped`, DEC-342).
+///
+/// A fully single-pass computation (walking once and classifying each entry
+/// against the layered ignore-source stack directly) is not possible from
+/// the `ignore` crate's public API: the type that resolves that stack
+/// (`ignore::dir::Ignore`) is a private implementation detail the crate
+/// deliberately does not expose.
+#[allow(clippy::implicit_hasher)] // every caller builds a plain HashSet<String>; genericity buys nothing here
+pub fn count_gitignore_dropped_against(
+    dir: &Path,
+    respecting_rel: &HashSet<String>,
+) -> Result<usize> {
+    let ignoring = discover_files_ignoring_gitignore(dir)?;
+    Ok(ignoring
+        .into_iter()
+        .filter(|p| !respecting_rel.contains(&relative_path(dir, p)))
+        .count())
+}
+
+/// Whether a normal, ignore-respecting vault walk would currently admit the
+/// vault-relative path `rel` (iteration 306 review, finding 7).
+///
+/// A named file the snapshot has never seen is read from disk for that run
+/// with a note pointing at `hyalo create-index` to "fold it in" — but that
+/// fold-in never happens for a file `.gitignore` (or another VCS ignore
+/// source) excludes, since the very same walk `create-index` uses would drop
+/// it again. Callers suppress the "fold it in" clause when this returns
+/// `false`.
+///
+/// Scoped to `rel`'s own ancestry chain via `filter_entry`, so the walk's
+/// cost is proportional to the path's depth, not the vault's size — this
+/// deliberately does not call [`discover_files`] or either of its
+/// ignore-toggling siblings, since checking one named file need not pay for
+/// walking the whole tree. Reuses the same `ignore::WalkBuilder` machinery
+/// `discover_files` does (rather than a hand-rolled gitignore matcher), so it
+/// agrees with the real walk on every ignore-source precedence rule by
+/// construction.
+#[must_use]
+pub fn would_discover(dir: &Path, rel: &str) -> bool {
+    let target = Path::new(rel);
+    let target_components: Vec<std::ffi::OsString> = target
+        .components()
+        .map(|c| c.as_os_str().to_owned())
+        .collect();
+    if target_components.is_empty() {
+        return false;
+    }
+    let depth_wanted = target_components.len();
+    let mut builder = WalkBuilder::new(dir);
+    builder.hidden(true);
+    // Deliberately the SAME defaults `discover_files` uses (every ignore
+    // source enabled) — this answers "would the real walk see it", not "is
+    // it reachable with ignoring disabled".
+    builder.filter_entry(move |entry| {
+        // depth() is 0 for the walk root itself, 1 for its direct children —
+        // keep only entries that lie on `rel`'s own ancestry chain, so the
+        // walker never descends into (or even lists) an unrelated sibling.
+        let depth = entry.depth();
+        if depth == 0 {
+            return true;
+        }
+        target_components
+            .get(depth - 1)
+            .is_some_and(|c| c.as_os_str() == entry.file_name())
+    });
+    let full = dir.join(target);
+    builder
+        .build()
+        .filter_map(std::result::Result::ok)
+        .any(|entry| entry.depth() == depth_wanted && entry.path() == full)
+}
+
+/// The shared vault walk, parameterized by which files to keep, whether the
+/// VCS ignore sources (`.gitignore`, `.ignore`, `.git/info/exclude`, global
+/// excludes) apply, and whether a `[scan] exclude` drop on this walk should
+/// be folded into the process-wide `scan_excluded_count()` (iteration 306 /
+/// F5: the ignore-counting walk above must not double-count against that
+/// statistic).
+fn discover_files_with_include_ext_policy(
+    dir: &Path,
+    include: Option<&ScanInclude>,
+    kind: FileKind,
+    respect_vcs_ignores: bool,
+    record_scan_exclude_stats: bool,
+) -> Result<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel::<String>();
     let walk_root = dir.to_path_buf();
     let mut builder = WalkBuilder::new(dir);
-    builder.git_ignore(true);
+    // All four toggles move together: `git_ignore` alone leaves `.ignore`,
+    // `.git/info/exclude` and the global excludes file at their (enabled)
+    // default, which under-counted a file dropped only by one of those three
+    // (iteration 306 review round, finding 6).
+    builder.git_ignore(respect_vcs_ignores);
+    builder.ignore(respect_vcs_ignores);
+    builder.git_exclude(respect_vcs_ignores);
+    builder.git_global(respect_vcs_ignores);
     if let Some(inc) = include {
         // Take over hidden-skipping so `[scan] include` can re-admit specific
         // dot-subtrees. `filter_entry` prunes hidden dirs/files not covered by
@@ -512,7 +673,7 @@ fn discover_files_with_include_ext(
         let before = kept.len();
         kept.retain(|p| !exc.is_excluded(&relative_path(dir, p)));
         let dropped = before - kept.len();
-        if dropped > 0 {
+        if dropped > 0 && record_scan_exclude_stats {
             note_scan_excluded(dropped);
         }
     }
@@ -2250,8 +2411,18 @@ pub fn directory_for_index_file(rel: &str) -> Option<&str> {
     if rel.len() <= SUFFIX_LEN {
         return None;
     }
-    let (dir, suffix) = rel.split_at(rel.len() - SUFFIX_LEN);
-    suffix.eq_ignore_ascii_case("/index.md").then_some(dir)
+    let split_at = rel.len() - SUFFIX_LEN;
+    // Compare bytes first: `rel.split_at(split_at)` can panic when a
+    // multi-byte character straddles `split_at` and `rel` does not actually
+    // end in `/index.md` (F2, dogfood 2026-10-03 — a filename containing a
+    // 4-byte emoji crashed batch `mv`'s outbound-link resolution). Matching
+    // on the raw bytes needs no char-boundary check; only the ASCII suffix
+    // `/index.md` guarantees `split_at` lands on one, so the string slice
+    // below is safe exactly when the comparison succeeds.
+    let suffix = &rel.as_bytes()[split_at..];
+    suffix
+        .eq_ignore_ascii_case(b"/index.md")
+        .then(|| &rel[..split_at])
 }
 
 /// Resolve a link target to a file path relative to the vault root.
@@ -5226,5 +5397,103 @@ mod tests {
         let mut found = discover_attachments(tmp.path()).unwrap();
         found.sort();
         assert_eq!(found, vec!["Templates/B.base", "img/x.png"]);
+    }
+
+    // --- iteration 306 review (F5 / DEC-342): gitignore-dropped counting ---
+
+    /// `.gitignore` is honoured by the `ignore` crate only inside something
+    /// that looks like a git repository — a bare `.git` directory is enough,
+    /// no `git init` needed (same technique the e2e `hidden_link_vault` uses).
+    fn gitignore_vault(ignored: &[&str], kept: &[&str]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join(".gitignore"), ignored.join("\n") + "\n").unwrap();
+        for name in ignored.iter().chain(kept.iter()) {
+            if let Some(parent) = Path::new(name)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                fs::create_dir_all(tmp.path().join(parent)).unwrap();
+            }
+            fs::write(tmp.path().join(name), "# doc\n").unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn count_gitignore_dropped_against_counts_only_the_ignored_files() {
+        let tmp = gitignore_vault(&["Secret.md", "sub/Also.md"], &["visible.md"]);
+        let respecting: HashSet<String> = discover_files(tmp.path())
+            .unwrap()
+            .iter()
+            .map(|p| relative_path(tmp.path(), p))
+            .collect();
+        assert_eq!(respecting, HashSet::from(["visible.md".to_owned()]));
+        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        assert_eq!(dropped, 2);
+    }
+
+    /// Review round finding (6): `.ignore` files and `.git/info/exclude`
+    /// must be counted too, not just `.gitignore` — `git_ignore(false)`
+    /// alone leaves those sources enabled and silently under-counts.
+    #[test]
+    fn count_gitignore_dropped_against_counts_dot_ignore_and_git_info_exclude_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+        fs::write(tmp.path().join(".ignore"), "FromDotIgnore.md\n").unwrap();
+        fs::write(
+            tmp.path().join(".git/info/exclude"),
+            "FromGitInfoExclude.md\n",
+        )
+        .unwrap();
+        make_files(
+            tmp.path(),
+            &["visible.md", "FromDotIgnore.md", "FromGitInfoExclude.md"],
+        );
+        let respecting: HashSet<String> = discover_files(tmp.path())
+            .unwrap()
+            .iter()
+            .map(|p| relative_path(tmp.path(), p))
+            .collect();
+        assert_eq!(respecting, HashSet::from(["visible.md".to_owned()]));
+        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        assert_eq!(
+            dropped, 2,
+            "both the .ignore and .git/info/exclude drops must be counted"
+        );
+    }
+
+    #[test]
+    fn count_gitignore_dropped_against_is_zero_with_no_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md", "sub/b.md"]);
+        let respecting: HashSet<String> = discover_files(tmp.path())
+            .unwrap()
+            .iter()
+            .map(|p| relative_path(tmp.path(), p))
+            .collect();
+        let dropped = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn count_gitignore_dropped_against_does_not_perturb_scan_excluded_count() {
+        // The `.gitignore`-disabled walk this uses internally must not call
+        // `note_scan_excluded`, or it would inflate `summary`'s `[scan]
+        // exclude`-only counter with gitignore drops it never dropped under
+        // that policy.
+        let before = scan_excluded_count();
+        let tmp = gitignore_vault(&["Secret.md"], &["visible.md"]);
+        let respecting: HashSet<String> = discover_files(tmp.path())
+            .unwrap()
+            .iter()
+            .map(|p| relative_path(tmp.path(), p))
+            .collect();
+        let _ = count_gitignore_dropped_against(tmp.path(), &respecting).unwrap();
+        assert_eq!(
+            scan_excluded_count(),
+            before,
+            "the gitignore-counting walk must not touch the [scan] exclude counter"
+        );
     }
 }

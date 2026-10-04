@@ -42,36 +42,40 @@ fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
     )
 }
 
-fn publish_exact_fix(
+/// Publish a replacement body/frontmatter for the batched `lint --fix` pass
+/// (DEC-317 follow-up, codebase review 2026-10-03 item 3; PR #369 review
+/// item 4).
+///
+/// Unlike a plain single-file publish, this never finishes `session` itself:
+/// the caller holds one worker session for the whole file (itself cloned
+/// from one top-level [`hyalo_core::rooted::WriteSession`] shared across
+/// every file in the run), absorbed into the top level and finished exactly
+/// once after the whole parallel pass completes. Finishing per file is
+/// exactly the per-file fsync DEC-317 batching exists to avoid.
+///
+/// `session` is taken by `&mut` rather than by value: an earlier write to
+/// this same file (e.g. the frontmatter fix) may already have queued a
+/// directory fence into it, and this call's own `?` on a failed `prepare`
+/// must not drop that queued fence along with an owned session nobody now
+/// holds. The caller keeps `session` regardless of this call's outcome.
+fn publish_exact_fix_with_worker_session(
     captured: hyalo_core::rooted::CapturedInput,
     rel_path: &str,
     replacement: &[u8],
-) -> Result<(
-    crate::commands::apply::PathEffect,
-    hyalo_core::rooted::OwnedPublication,
-)> {
-    use hyalo_core::rooted::{Durability, WriteSession};
-    let session = WriteSession::new(Durability::PerFile);
-    publish_exact_fix_with_session(captured, rel_path, replacement, session)
-}
-
-fn publish_exact_fix_with_session(
-    captured: hyalo_core::rooted::CapturedInput,
-    rel_path: &str,
-    replacement: &[u8],
-    mut session: hyalo_core::rooted::WriteSession,
+    session: &mut hyalo_core::rooted::WriteSession,
 ) -> Result<(
     crate::commands::apply::PathEffect,
     hyalo_core::rooted::OwnedPublication,
 )> {
     use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
     let (effect, receipt) = captured
-        .prepare(replacement, &session)?
-        .commit_with_receipt(&mut session)?;
-    let error = effect
-        .finalization_error()
-        .map(str::to_owned)
-        .or_else(|| session.finish().err().map(|error| error.to_string()));
+        .prepare(replacement, session)?
+        .commit_with_receipt(session)?;
+    // There is no `session.finish()` here to fold in as a second source of
+    // error: finishing is deferred to the run's single top-level session, so
+    // only `record()`'s own outcome (synchronous even under
+    // `Durability::PerDirectory` — see `WriteSession::record`) is visible yet.
+    let error = effect.finalization_error().map(str::to_owned);
     let category = error.as_ref().map(|_| EffectFailure::Finalization);
     Ok((
         PathEffect {
@@ -88,10 +92,12 @@ fn publish_exact_fix_with_session(
     ))
 }
 
-fn publish_frontmatter_fix(
+/// Frontmatter-fix counterpart to [`publish_exact_fix_with_worker_session`].
+fn publish_frontmatter_fix_with_worker_session(
     captured: hyalo_core::rooted::CapturedInput,
     rel_path: &str,
     properties: &indexmap::IndexMap<String, serde_json::Value>,
+    session: &mut hyalo_core::rooted::WriteSession,
 ) -> Result<(
     crate::commands::apply::PathEffect,
     Vec<u8>,
@@ -101,7 +107,8 @@ fn publish_frontmatter_fix(
     let replacement =
         hyalo_core::frontmatter::render_frontmatter(&mut reader, Path::new(rel_path), properties)?;
     drop(reader);
-    let (effect, receipt) = publish_exact_fix(captured, rel_path, &replacement)?;
+    let (effect, receipt) =
+        publish_exact_fix_with_worker_session(captured, rel_path, &replacement, session)?;
     Ok((effect, replacement, receipt))
 }
 
@@ -120,6 +127,12 @@ fn token_could_name_a_rule(token: &str) -> bool {
 pub(super) struct ObservedLintWorkerError {
     detail: String,
     pub(super) effects: Vec<crate::commands::apply::PathEffect>,
+    /// This file's share of the shared `--fix` write session (DEC-317
+    /// batching, iter-306 review follow-up): any directory this file's
+    /// already-committed writes queued for a deferred fsync must still be
+    /// absorbed into the run's top-level session even though this file
+    /// itself failed partway through, exactly like `effects` above.
+    pub(super) write_session: hyalo_core::rooted::WriteSession,
 }
 
 impl std::fmt::Display for ObservedLintWorkerError {
@@ -133,10 +146,12 @@ impl std::error::Error for ObservedLintWorkerError {}
 fn observed_lint_worker_error(
     error: &anyhow::Error,
     effects: Vec<crate::commands::apply::PathEffect>,
+    write_session: hyalo_core::rooted::WriteSession,
 ) -> anyhow::Error {
     ObservedLintWorkerError {
         detail: format!("{error:#}"),
         effects,
+        write_session,
     }
     .into()
 }
@@ -206,6 +221,7 @@ pub(super) fn lint_one_file_extended(
     vault_dir: &Path,
     case_insensitive: bool,
     link_ctx: Option<&hyalo_mdlint::profiles::link::LinkLintContext>,
+    write_session: &hyalo_core::rooted::WriteSession,
 ) -> Result<PerFileLintResult> {
     lint_one_file_extended_with_after_frontmatter(
         full_path,
@@ -226,6 +242,7 @@ pub(super) fn lint_one_file_extended(
         vault_dir,
         case_insensitive,
         link_ctx,
+        write_session,
         || Ok(()),
     )
 }
@@ -250,25 +267,37 @@ fn lint_one_file_extended_with_after_frontmatter(
     vault_dir: &Path,
     case_insensitive: bool,
     link_ctx: Option<&hyalo_mdlint::profiles::link::LinkLintContext>,
+    write_session: &hyalo_core::rooted::WriteSession,
     mut after_frontmatter: impl FnMut() -> Result<()>,
 ) -> Result<PerFileLintResult> {
+    // This file's share of the run's shared write session (DEC-317
+    // batching): every fix write in this file queues its directory fence
+    // here instead of flushing immediately, and the final `PerFileLintResult`
+    // hands it back to `lint_files_extended` to absorb into the top-level
+    // session, finished exactly once after the whole parallel pass. Threaded
+    // through each write call as `&mut worker_session` (PR #369 review item
+    // 4) rather than checked out and handed back by value: a write that
+    // fails partway must not drop a directory fence an earlier write in this
+    // same file already queued into it.
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
     // single lint→fix pass over the body does not always converge. Bounds
     // the lint→fix→re-lint loop below.
     const MAX_BODY_FIX_PASSES: usize = 5;
 
+    let mut worker_session: hyalo_core::rooted::WriteSession = write_session.worker();
+
     // Stat before reading: oversized files are skipped rather than loaded
     // whole into memory (mirrors `scanner::scan_file_multi`'s own guard).
     let meta =
         std::fs::metadata(full_path).with_context(|| format!("failed to stat {rel_path}"))?;
     if meta.len() > scanner::MAX_FILE_SIZE {
-        eprintln!(
-            "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+        crate::warn::note(format!(
+            "skipping {} ({} MiB exceeds {} MiB limit)",
             full_path.display(),
             meta.len() / (1024 * 1024),
             scanner::MAX_FILE_SIZE / (1024 * 1024)
-        );
+        ));
         let mut violations_by_rule = indexmap::IndexMap::new();
         violations_by_rule.insert(
             "FILE".to_owned(),
@@ -295,6 +324,7 @@ fn lint_one_file_extended_with_after_frontmatter(
             fix_actions: Vec::new(),
             body_fix_outcomes: Vec::new(),
             post_fix_schema_remaining: None,
+            write_session: worker_session,
         });
     }
 
@@ -319,7 +349,7 @@ fn lint_one_file_extended_with_after_frontmatter(
     let mut captured_source = match lint_root.capture(&lint_name) {
         Ok(captured) => Some(captured),
         Err(e) => {
-            eprintln!("warning: skipping {} ({e})", full_path.display());
+            crate::warn::note(format!("skipping {} ({e})", full_path.display()));
             let mut violations_by_rule = indexmap::IndexMap::new();
             violations_by_rule.insert(
                 "FILE".to_owned(),
@@ -343,6 +373,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
+                write_session: worker_session,
             });
         }
     };
@@ -354,7 +385,7 @@ fn lint_one_file_extended_with_after_frontmatter(
     {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("warning: skipping {} ({e})", full_path.display());
+            crate::warn::note(format!("skipping {} ({e})", full_path.display()));
             let mut violations_by_rule = indexmap::IndexMap::new();
             violations_by_rule.insert(
                 "FILE".to_owned(),
@@ -378,6 +409,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
+                write_session: worker_session,
             });
         }
     };
@@ -418,6 +450,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                     fix_actions: Vec::new(),
                     body_fix_outcomes: Vec::new(),
                     post_fix_schema_remaining: None,
+                    write_session: worker_session,
                 });
             }
             // Malformed frontmatter — report as a single error-severity
@@ -462,6 +495,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
+                write_session: worker_session,
             });
         }
         Err(e) => return Err(e).context(format!("reading frontmatter from {rel_path}")),
@@ -671,8 +705,13 @@ fn lint_one_file_extended_with_after_frontmatter(
                         let source = captured_source
                             .take()
                             .context("original lint source capture unavailable")?;
-                        publish_frontmatter_fix(source, rel_path, &mutable)
-                            .with_context(|| format!("writing fixed frontmatter to {rel_path}"))
+                        publish_frontmatter_fix_with_worker_session(
+                            source,
+                            rel_path,
+                            &mutable,
+                            &mut worker_session,
+                        )
+                        .with_context(|| format!("writing fixed frontmatter to {rel_path}"))
                     });
                     match write_result {
                         Ok((effect, expected, receipt)) => {
@@ -688,7 +727,11 @@ fn lint_one_file_extended_with_after_frontmatter(
                             }
                             mutation_effects.push(effect);
                             if let Err(error) = after_frontmatter() {
-                                return Err(observed_lint_worker_error(&error, mutation_effects));
+                                return Err(observed_lint_worker_error(
+                                    &error,
+                                    mutation_effects,
+                                    worker_session,
+                                ));
                             }
                             // Re-baseline: the write above legitimately
                             // changed the file's mtime, and a later
@@ -825,7 +868,11 @@ fn lint_one_file_extended_with_after_frontmatter(
             ) {
                 Ok(violations) => violations,
                 Err(error) => {
-                    return Err(observed_lint_worker_error(&error, mutation_effects));
+                    return Err(observed_lint_worker_error(
+                        &error,
+                        mutation_effects,
+                        worker_session,
+                    ));
                 }
             };
             for v in section_violations {
@@ -879,7 +926,13 @@ fn lint_one_file_extended_with_after_frontmatter(
         rule_filter,
     ) {
         Ok(diagnostics) => diagnostics,
-        Err(error) => return Err(observed_lint_worker_error(&error, mutation_effects)),
+        Err(error) => {
+            return Err(observed_lint_worker_error(
+                &error,
+                mutation_effects,
+                worker_session,
+            ));
+        }
     };
 
     if matches!(fix, FixMode::Apply | FixMode::DryRun) {
@@ -961,7 +1014,13 @@ fn lint_one_file_extended_with_after_frontmatter(
                 rule_filter,
             ) {
                 Ok(diagnostics) => diagnostics,
-                Err(error) => return Err(observed_lint_worker_error(&error, mutation_effects)),
+                Err(error) => {
+                    return Err(observed_lint_worker_error(
+                        &error,
+                        mutation_effects,
+                        worker_session,
+                    ));
+                }
             };
         }
     }
@@ -997,9 +1056,14 @@ fn lint_one_file_extended_with_after_frontmatter(
             let source = captured_source
                 .take()
                 .context("captured lint source unavailable")?;
-            publish_exact_fix(source, rel_path, new_content.as_bytes())
-                .map(|(effect, _)| effect)
-                .with_context(|| format!("writing fixed body to {rel_path}"))
+            publish_exact_fix_with_worker_session(
+                source,
+                rel_path,
+                new_content.as_bytes(),
+                &mut worker_session,
+            )
+            .map(|(effect, _)| effect)
+            .with_context(|| format!("writing fixed body to {rel_path}"))
         });
         match write_result {
             Ok(effect) => {
@@ -1366,6 +1430,7 @@ fn lint_one_file_extended_with_after_frontmatter(
         fix_actions,
         body_fix_outcomes,
         post_fix_schema_remaining,
+        write_session: worker_session,
     })
 }
 
@@ -1381,7 +1446,10 @@ mod mutation_tests {
         let root = VaultRoot::new(dir.path()).unwrap();
         let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
         std::fs::write(dir.path().join("a.md"), b"EDITOR!!\n").unwrap();
-        let Err(error) = publish_exact_fix(source, "a.md", b"fixed\n") else {
+        let mut session = WriteSession::new(Durability::PerFile);
+        let Err(error) =
+            publish_exact_fix_with_worker_session(source, "a.md", b"fixed\n", &mut session)
+        else {
             panic!("editor change must refuse publication")
         };
         assert!(
@@ -1401,13 +1469,10 @@ mod mutation_tests {
         std::fs::write(dir.path().join("a.md"), b"original\n").unwrap();
         let root = VaultRoot::new(dir.path()).unwrap();
         let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
-        let (effect, _) = publish_exact_fix_with_session(
-            source,
-            "a.md",
-            b"fixed\n",
-            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
-        )
-        .unwrap();
+        let mut session = WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize);
+        let (effect, _) =
+            publish_exact_fix_with_worker_session(source, "a.md", b"fixed\n", &mut session)
+                .unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.md")).unwrap(), b"fixed\n");
         assert_eq!(
             effect.state,
@@ -1453,6 +1518,7 @@ mod mutation_tests {
             dir.path(),
             false,
             None,
+            &WriteSession::new(Durability::PerFile),
             || {
                 std::fs::remove_file(&path)?;
                 std::fs::create_dir(&path)?;

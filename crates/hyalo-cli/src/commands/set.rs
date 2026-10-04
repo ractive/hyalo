@@ -684,12 +684,12 @@ pub fn set(
         // check would never fire. stdout stays clean for JSON consumers either
         // way, and they also get the file list under `list_collapsed`.
         if !list_collapsed.is_empty() {
-            eprintln!(
-                "note: {name} was a list in {} file{}; `set` replaced it with a scalar — use \
-                 `hyalo append` to keep it a list",
+            crate::warn::note(format!(
+                "{name} was a list in {} file{}; `set` replaced it with a scalar — use `hyalo \
+                 append` to keep it a list",
                 list_collapsed.len(),
                 if list_collapsed.len() == 1 { "" } else { "s" }
-            );
+            ));
         }
         // Advisory note (write still proceeds; lint remains the enforcement gate):
         //   1. BUG-B: a date-typed property receiving a non-date value.

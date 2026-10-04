@@ -43,6 +43,7 @@ ts = ["dep:ts-rs"]
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = { workspace = true }
+windows-sys = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

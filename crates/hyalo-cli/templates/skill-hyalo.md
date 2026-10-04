@@ -884,6 +884,9 @@ same vault, and `--index` reads drop them too (no rebuild needed after changing 
 Naming an excluded file explicitly (`--file Templates/x.md`) is **refused** with the matching
 glob, never silently skipped. `hyalo config` reports the effective list under
 `results.scan.exclude`.
+Discovery also honours `.gitignore`, `.ignore`, `.git/info/exclude` and global excludes the way Git does (DEC-342): an ignored note is absent
+from unscoped reads and counted under `summary`'s `results.files.excluded`, but a path you
+name (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 
 **A broken `.hyalo.toml` fails a gate:** `lint`, `find --strict` and `views run` exit 1 when the
 config does not parse, because their exit code is a verdict and a verdict computed without the

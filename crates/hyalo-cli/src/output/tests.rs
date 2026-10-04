@@ -1333,6 +1333,59 @@ fn mv_result_filter_handles_every_optional_field_combination() {
 }
 
 #[test]
+fn vault_summary_filter_handles_schema_and_index_format_version_combinations() {
+    // `VaultSummary` carries two independently optional fields: `schema`
+    // (only when `[schema]` is configured) and `index_format_version` (only
+    // under `summary --index`, iteration 306 P2 review: "summary --index
+    // --format text prints a raw key dump"). `lookup_filter`'s key-signature
+    // match must cover all four presence combinations, or a run with
+    // `--index` falls back to the generic key:value dump and loses the
+    // compact "Files: N (…)" report every other `summary` shape gets.
+    let base = json!({
+        "dir": ".",
+        "files": {"total": 1, "skipped": 0, "excluded": 0, "directories": []},
+        "orphans": 0,
+        "dead_ends": 0,
+        "links": {"total": 0, "broken": 0},
+        "properties": [],
+        "tags": {"tags": [], "total": 0},
+        "status": [],
+        "tasks": {"done": 0, "total": 0},
+        "recent_files": [],
+    });
+    let mut with_index = base.clone();
+    with_index["index_format_version"] = json!(3);
+    let mut with_schema = base.clone();
+    with_schema["schema"] = json!({"errors": 0, "warnings": 0});
+    let mut with_both = with_index.clone();
+    with_both["schema"] = json!({"errors": 0, "warnings": 0});
+
+    for val in [&base, &with_index, &with_schema, &with_both] {
+        let sig = {
+            let map = val.as_object().unwrap();
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(",")
+        };
+        assert!(
+            lookup_filter(&sig).is_some(),
+            "lookup_filter has no entry for VaultSummary signature {sig:?}"
+        );
+        let formatted = fmt(val);
+        assert!(
+            formatted.starts_with("Files: 1"),
+            "signature {sig:?} fell back to the generic dump: {formatted:?}"
+        );
+        // The generic fallback renders `index_format_version: 3` verbatim —
+        // its absence confirms VAULT_SUMMARY_FILTER actually matched.
+        assert!(
+            !formatted.contains("index_format_version"),
+            "signature {sig:?} rendered via the generic fallback: {formatted:?}"
+        );
+    }
+}
+
+#[test]
 fn format_value_as_text_array_of_typed_objects() {
     let val = json!([
         {"path": "a.md", "tags": ["rust"]},

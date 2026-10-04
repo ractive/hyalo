@@ -1396,7 +1396,12 @@ fn remove_dir_if_empty(dir: &Path, label: &str, report: &mut Report) -> Result<(
 /// it when collapsing any *further* stale pairs, without re-matching the
 /// pair it just wrote (`upsert_managed_section`).
 fn strip_one_managed_section_from(content: &str, from_line: usize) -> Option<String> {
-    let lines: Vec<&str> = content.lines().collect();
+    // `split_inclusive('\n')` keeps each line's original terminator attached
+    // (a `\r\n` line's `\r` rides along with its `\n`), unlike `.lines()`
+    // which discards terminators entirely. Rebuilding from `.lines()` output
+    // always re-joined with a bare `\n`, silently rewriting a CRLF host file
+    // to LF outside the managed region too — this preserves it byte for byte.
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
     let start_idx = lines
         .iter()
         .enumerate()
@@ -1413,19 +1418,43 @@ fn strip_one_managed_section_from(content: &str, from_line: usize) -> Option<Str
     let mut result = String::new();
     for line in &lines[..start_idx] {
         result.push_str(line);
-        result.push('\n');
     }
     for line in &lines[end_idx + 1..] {
         result.push_str(line);
-        result.push('\n');
     }
-    // Trim trailing blank lines that were separating the section.
-    let trimmed = result.trim_end_matches('\n').to_owned();
+    // Trim trailing blank lines that were separating the section, then
+    // restore a single trailing terminator matching the file's own style.
+    let trimmed = result.trim_end_matches(['\r', '\n']);
     Some(if trimmed.is_empty() {
         String::new()
     } else {
-        format!("{trimmed}\n")
+        format!("{trimmed}{}", dominant_line_ending(content))
     })
+}
+
+/// Detect whether `content` predominantly uses CRLF or LF line endings, so
+/// text spliced into it can match the file's existing style instead of
+/// introducing a mix of terminators.
+///
+/// Counts occurrences rather than inspecting just the first line ending, so
+/// a single stray terminator early in an otherwise-consistent file doesn't
+/// flip the verdict.
+fn dominant_line_ending(content: &str) -> &'static str {
+    let crlf = content.matches("\r\n").count();
+    let lone_lf = content.matches('\n').count().saturating_sub(crlf);
+    if crlf > lone_lf { "\r\n" } else { "\n" }
+}
+
+/// Rewrite `text`'s `\n` line endings to `ending`. `text` is always built in
+/// memory with plain `\n`; when it's about to be spliced into CRLF content
+/// this converts it first so the inserted block doesn't mix terminators with
+/// its surroundings.
+fn with_line_ending<'a>(text: &'a str, ending: &str) -> std::borrow::Cow<'a, str> {
+    if ending == "\n" {
+        std::borrow::Cow::Borrowed(text)
+    } else {
+        std::borrow::Cow::Owned(text.replace('\n', ending))
+    }
 }
 
 /// Remove EVERY valid managed-section pair from `content`, not just the
@@ -1647,11 +1676,14 @@ fn parameterize_rule(template: &str, dir: &str) -> String {
 /// Append `line` to `content`, separated by a blank line. Strips trailing newlines from
 /// `content` first, then adds `\n\n` (blank-line separator) before `line` and a final `\n`.
 fn append_line_to_file_content(content: &str, line: &str) -> String {
-    let mut result = content.trim_end_matches('\n').to_owned();
-    result.push('\n');
-    result.push('\n');
-    result.push_str(line);
-    result.push('\n');
+    let ending = dominant_line_ending(content);
+    // Trim both `\r` and `\n`, not just `\n` — trimming `\n` alone on a CRLF
+    // file leaves a stray trailing `\r` that then gets stranded mid-file.
+    let mut result = content.trim_end_matches(['\r', '\n']).to_owned();
+    result.push_str(ending);
+    result.push_str(ending);
+    result.push_str(&with_line_ending(line, ending));
+    result.push_str(ending);
     result
 }
 
@@ -1666,7 +1698,10 @@ fn append_line_to_file_content(content: &str, line: &str) -> String {
 /// 2. If only the start marker is present (no matching end marker), treat as absent.
 /// 3. Otherwise, append `section` separated by a blank line.
 fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str) {
-    let lines: Vec<&str> = content.lines().collect();
+    // See `strip_one_managed_section_from`: `split_inclusive('\n')` keeps each
+    // line's original terminator so lines outside the managed region are
+    // reproduced byte for byte, even on a CRLF host file.
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
 
     // Find the start marker, then search for the end marker only *after* it —
     // mirroring `strip_managed_section`'s anchoring. Searching for the end
@@ -1686,16 +1721,18 @@ fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str
 
     if let (Some(s), Some(e)) = (start_idx, end_idx) {
         // Both markers present in correct order — replace from start to end (inclusive).
+        let line_ending = dominant_line_ending(content);
         let mut result = String::new();
         for line in &lines[..s] {
             result.push_str(line);
-            result.push('\n');
         }
-        result.push_str(section);
-        result.push('\n');
+        // `section` is always built in memory with plain `\n`; convert it to
+        // the host file's terminator before splicing so the managed region
+        // doesn't mix line-ending styles with the rest of the file.
+        result.push_str(&with_line_ending(section, line_ending));
+        result.push_str(line_ending);
         for line in &lines[e + 1..] {
             result.push_str(line);
-            result.push('\n');
         }
 
         // Collapse any FURTHER complete pairs into nothing, so a file that
@@ -2049,6 +2086,101 @@ mod tests {
             "last paragraph preserved"
         );
         assert!(!result.contains("stale"), "stale content replaced");
+    }
+
+    #[test]
+    fn upsert_managed_section_replace_preserves_crlf_outside_region() {
+        // A host CLAUDE.md checked out or hand-edited with CRLF line endings
+        // must keep every byte outside the managed region exactly as is —
+        // the old `.lines()` + `\n` rebuild silently rewrote the whole file
+        // to LF, not just the spliced-in section.
+        let section = make_section();
+        let old_content = format!(
+            "# Before\r\n\r\n{SECTION_START}\r\nold hint text\r\n{SECTION_END}\r\n\r\n# After\r\n"
+        );
+        let (result, action) = upsert_managed_section(&old_content, &section);
+        assert_eq!(action, "replaced managed section");
+        assert!(
+            result.starts_with("# Before\r\n\r\n"),
+            "leading CRLF content preserved byte for byte: {result:?}"
+        );
+        assert!(
+            result.ends_with("\r\n\r\n# After\r\n"),
+            "trailing CRLF content preserved byte for byte: {result:?}"
+        );
+        // The inserted section is itself converted to the host's CRLF style,
+        // so look for the CRLF form of the hint, not the in-memory LF one.
+        assert!(
+            result.contains(&CLAUDE_MD_HINT.replace('\n', "\r\n")),
+            "new hint content present, converted to CRLF: {result:?}"
+        );
+        assert!(!result.contains("old hint text"), "old hint text replaced");
+        assert!(
+            !has_lone_lf(&result),
+            "must not introduce a bare LF into a CRLF file: {result:?}"
+        );
+    }
+
+    #[test]
+    fn upsert_managed_section_append_uses_crlf_when_host_is_crlf() {
+        // No markers yet: the appended section (and its separating blank
+        // lines) must match the host file's own CRLF style rather than
+        // introducing bare `\n`.
+        let content = "# Existing\r\n\r\nSome content.\r\n";
+        let section = make_section();
+        let (result, action) = upsert_managed_section(content, &section);
+        assert_eq!(action, "appended managed section");
+        assert!(
+            result.starts_with("# Existing\r\n\r\nSome content.\r\n"),
+            "original CRLF content preserved byte for byte: {result:?}"
+        );
+        assert!(result.contains(SECTION_START) && result.contains(SECTION_END));
+        // No lone `\n` (a `\n` not immediately preceded by `\r`) anywhere in
+        // the result.
+        assert!(
+            !has_lone_lf(&result),
+            "must not introduce a bare LF into a CRLF file: {result:?}"
+        );
+    }
+
+    #[test]
+    fn strip_one_managed_section_from_preserves_crlf_outside_region() {
+        let content = format!(
+            "# Before\r\n\r\n{SECTION_START}\r\nstale hint\r\n{SECTION_END}\r\n\r\n# After\r\n"
+        );
+        let result = strip_one_managed_section_from(&content, 0).expect("pair found");
+        assert!(
+            result.starts_with("# Before\r\n\r\n"),
+            "leading CRLF content preserved: {result:?}"
+        );
+        assert!(
+            result.ends_with("# After\r\n"),
+            "trailing CRLF content preserved: {result:?}"
+        );
+        assert!(!result.contains("stale hint"));
+        assert!(
+            !has_lone_lf(&result),
+            "must not introduce a bare LF into a CRLF file: {result:?}"
+        );
+    }
+
+    #[test]
+    fn append_line_to_file_content_uses_crlf_when_host_is_crlf() {
+        let content = "# Existing\r\n\r\nSome content.\r\n";
+        let result = append_line_to_file_content(content, "New hint");
+        assert_eq!(
+            result, "# Existing\r\n\r\nSome content.\r\n\r\nNew hint\r\n",
+            "{result:?}"
+        );
+    }
+
+    /// `true` if `s` contains a `\n` not immediately preceded by `\r`.
+    fn has_lone_lf(s: &str) -> bool {
+        let bytes = s.as_bytes();
+        bytes
+            .iter()
+            .enumerate()
+            .any(|(i, &b)| b == b'\n' && (i == 0 || bytes[i - 1] != b'\r'))
     }
 
     #[test]

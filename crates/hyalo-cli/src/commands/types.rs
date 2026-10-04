@@ -288,6 +288,35 @@ pub(crate) fn set_type(
     let toml_path = resolve_toml_path(dir);
     let mut doc = read_toml_doc(&toml_path)?;
 
+    // Review (PR #369, item 1): `--property-type K=enum` with no
+    // `--property-values K=...` used to write `type = "enum"` and strip any
+    // existing `values` array — a malformed enum constraint that exits 0
+    // here but then makes `lint` report SCHEMA as malformed and makes every
+    // later `set --property K=v` refuse. Refuse it up front instead, unless
+    // the property already has a non-empty enum `values` array on disk (a
+    // caller re-declaring `type = "enum"` for a property that is already a
+    // validly-configured enum, without changing its values, is a no-op this
+    // command already tolerates for every other type).
+    for (k, pt) in &prop_type_map {
+        if *pt == "enum"
+            && !prop_values_map.contains_key(k.as_str())
+            && existing_enum_values(&doc, type_name, k).is_empty()
+        {
+            return Ok(CommandOutcome::UserError(user_diagnostic(
+                format,
+                &format!(
+                    "--property-type {k}=enum requires --property-values {k}=val1,val2,... \
+                     (no existing enum values to keep)"
+                ),
+                None,
+                Some(&format!(
+                    "pass --property-values {k}=val1,val2,... alongside --property-type {k}=enum"
+                )),
+                None,
+            )));
+        }
+    }
+
     // Collect what will change (used for dry-run preview and result).
     let mut toml_changes: Vec<String> = Vec::new();
 
@@ -384,7 +413,17 @@ pub(crate) fn set_type(
     }
 
     // Apply --property-type for remaining (non-enum) entries.
+    //
+    // A `pt == "enum"` entry here has already passed the "existing enum
+    // values present" check above (item 1): `set_property_type_field`
+    // unconditionally strips any `values` array when it (re)writes `type`,
+    // which would silently corrupt exactly the config this is meant to
+    // tolerate re-declaring. Leave it untouched instead — the type is
+    // already `enum` with values, so there is nothing to change.
     for (k, pt) in &prop_type_map {
+        if *pt == "enum" {
+            continue;
+        }
         toml_changes.push(format!("set property {k}: type={pt}"));
         if !dry_run {
             set_property_type_field(&mut doc, type_name, k, pt)?;
@@ -434,14 +473,28 @@ pub(crate) fn set_type(
     // configuration. This makes malformed input, aliases, output limits and
     // source conflicts deterministic preflight failures for the whole
     // config+notes operation.
+    //
+    // The vault is discovered up front (instead of after the change set is
+    // constructed) so its size — not a hardcoded `0` — drives the DEC-317
+    // durability threshold below: every file is captured during the scan
+    // regardless of `type:` match (iter-306 review follow-up, item 3), so
+    // `0` forced `Durability::PerFile` even for a `--default` run touching
+    // hundreds of notes.
+    let all_vault_files = if defaults_map.is_empty() {
+        Vec::new()
+    } else {
+        discovery::discover_files(dir)?
+    };
     let mut default_changes = if defaults_map.is_empty() {
         None
     } else {
-        Some(super::apply::PreparedChangeSet::new(dir, 0)?)
+        Some(super::apply::PreparedChangeSet::new(
+            dir,
+            all_vault_files.len(),
+        )?)
     };
     let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
     if let Some(changes) = &mut default_changes {
-        let all_vault_files = discovery::discover_files(dir)?;
         for full_path in &all_vault_files {
             let rel = discovery::relative_path(dir, full_path);
             let captured = changes.capture(&rel)?;
@@ -877,6 +930,33 @@ fn infer_property_type_from_vault(
         .into_iter()
         .max_by_key(|(name, count)| (*count, std::cmp::Reverse(*name)))
         .map_or(DEFAULT, |(name, _)| name)
+}
+
+/// The enum `values` already declared for `type_name`'s `prop`, or an empty
+/// `Vec` when the property does not exist, is not type-local to this type,
+/// or is not itself declared `type = "enum"` (PR #369 review item 1: lets
+/// `set_type` tell "re-declaring an already-valid enum" from "declaring a
+/// new enum with no values" without writing anything first).
+fn existing_enum_values(doc: &toml_edit::DocumentMut, type_name: &str, prop: &str) -> Vec<String> {
+    doc.get("schema")
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|s| s.get("types"))
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|t| t.get(type_name))
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|t| t.get("properties"))
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|p| p.get(prop))
+        .and_then(toml_edit::Item::as_table)
+        .filter(|p| p.get("type").and_then(toml_edit::Item::as_str) == Some("enum"))
+        .and_then(|p| p.get("values"))
+        .and_then(toml_edit::Item::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Set a simple (non-enum) property constraint: `type = "<pt>"`.

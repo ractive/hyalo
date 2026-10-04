@@ -767,6 +767,7 @@ dependencies = [
  "ts-rs",
  "unicode-normalization",
  "winapi-util",
+ "windows-sys",
 ]
 
 [[package]]

@@ -2162,3 +2162,54 @@ fn extract_title_with_source_reports_provenance_for_each_source() {
         (serde_json::Value::Null, None)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 306 review: the empty-body-pattern advisory must respect `-q`.
+// ---------------------------------------------------------------------------
+
+const EMPTY_BODY_PATTERN_MSG: &str = "empty body pattern treated as no pattern (matches all files)";
+
+#[test]
+fn empty_body_pattern_note_fires_on_a_terminal_when_not_quiet() {
+    let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+    crate::warn::reset_for_test();
+    crate::warn::init(false);
+
+    note_empty_body_pattern(true);
+
+    assert!(
+        crate::warn::was_emitted(EMPTY_BODY_PATTERN_MSG),
+        "expected the advisory to fire on a terminal"
+    );
+}
+
+#[test]
+fn empty_body_pattern_note_never_fires_off_a_terminal() {
+    let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+    crate::warn::reset_for_test();
+    crate::warn::init(false);
+
+    note_empty_body_pattern(false);
+
+    assert!(
+        !crate::warn::was_emitted(EMPTY_BODY_PATTERN_MSG),
+        "a piped/redirected run must never get this note"
+    );
+}
+
+#[test]
+fn empty_body_pattern_note_is_silenced_by_quiet_mode() {
+    let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+    crate::warn::reset_for_test();
+    // Iteration 306 review: before routing through `crate::warn::note`, this
+    // advisory used a raw `eprintln!` and so printed even under `-q` whenever
+    // stderr happened to be a terminal. `init(true)` is `-q`.
+    crate::warn::init(true);
+
+    note_empty_body_pattern(true);
+
+    assert!(
+        !crate::warn::was_emitted(EMPTY_BODY_PATTERN_MSG),
+        "-q must silence this advisory even on a terminal"
+    );
+}

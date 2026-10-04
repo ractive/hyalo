@@ -744,6 +744,13 @@ pub(crate) fn build_scanned_index_with(
     // for a file the caller did not actually type (iter-273).
     let mut named_rel: Vec<String> = Vec::new();
     let files: Vec<(PathBuf, String)> = if needs_full_vault {
+        let mut files: Vec<(PathBuf, String)> = discovery::discover_files(dir)?
+            .into_iter()
+            .map(|p| {
+                let rel = discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
         // Validate --file arguments even when doing a full-vault scan.
         // Without this, missing files silently produce zero results instead
         // of the expected UserError.
@@ -764,15 +771,22 @@ pub(crate) fn build_scanned_index_with(
                     e, format, dir,
                 )));
             }
-            named_rel = resolved.into_iter().map(|(_, rel)| rel).collect();
+            named_rel = resolved.iter().map(|(_, rel)| rel.clone()).collect();
+            // DEC-301: a path the caller typed is a promise about *that*
+            // file — a full-vault discovery that excludes it (a `.gitignore`
+            // match, most commonly) must not make it disappear once a field
+            // like `--fields backlinks` needs the whole-vault scan (F5,
+            // iteration 306 review). Fold any resolved-but-undiscovered
+            // named file back into the scanned set.
+            let mut known: std::collections::HashSet<String> =
+                files.iter().map(|(_, rel)| rel.clone()).collect();
+            for (path, rel) in resolved {
+                if known.insert(rel.clone()) {
+                    files.push((path, rel));
+                }
+            }
         }
-        discovery::discover_files(dir)?
-            .into_iter()
-            .map(|p| {
-                let rel = discovery::relative_path(dir, &p);
-                (p, rel)
-            })
-            .collect()
+        files
     } else {
         match collect_files_with(dir, files_arg, globs, format, &resolve)? {
             FilesOrOutcome::Outcome(o) => return Ok(ScannedIndexOutcome::Outcome(o)),

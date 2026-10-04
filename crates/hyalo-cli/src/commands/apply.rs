@@ -182,7 +182,11 @@ impl PreparedChangeSet {
     }
     fn check_budget(&self) -> Result<()> {
         if self.staged_bytes > 8 * 1024 * 1024 * 1024 {
-            bail!("mutation preparation exceeds 8 GiB staging budget");
+            return Err(hyalo_core::user_error_with(
+                "mutation preparation exceeds 8 GiB staging budget",
+                Some("split the operation across smaller batches".into()),
+                None,
+            ));
         }
         Ok(())
     }
@@ -489,6 +493,28 @@ mod tests {
             Some(EffectFailure::SourceConflict)
         );
         assert_eq!(std::fs::read(path).unwrap(), b"edit");
+    }
+
+    /// Codebase review 2026-10-03 item 2: the 8 GiB staging-budget refusal
+    /// used to `bail!` a plain `anyhow::Error`, which `output_pipeline.rs`
+    /// renders as an internal (exit 2) error rather than the standard JSON
+    /// error envelope (exit 1) every other hyalo-own user error gets
+    /// (DEC-307). It must now carry `hyalo_core::UserFacingError` so the
+    /// top-level renderer recognises it.
+    #[test]
+    fn staging_budget_overflow_is_a_user_facing_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut set = PreparedChangeSet::new(dir.path(), 1).unwrap();
+        // Drive the budget over the limit directly rather than staging 8 GiB
+        // of real bytes.
+        set.staged_bytes = 8 * 1024 * 1024 * 1024 + 1;
+        let error = set.check_budget().expect_err("budget must be exceeded");
+        assert!(
+            error
+                .downcast_ref::<hyalo_core::UserFacingError>()
+                .is_some(),
+            "must be a UserFacingError (DEC-307 exit-1 envelope), got: {error:#}"
+        );
     }
 
     #[test]

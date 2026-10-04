@@ -328,6 +328,11 @@ pub(crate) struct AutoLinkHintSpec {
     min_length: usize,
     exclude_titles: Vec<String>,
     first_only: bool,
+    /// What `first_only` would be if the hint's rebuilt command passed
+    /// neither `--first-only` nor `--no-first-only` — i.e. `[links.auto]
+    /// first_only` from config. Only when `first_only` disagrees with this
+    /// does the rebuilt command need to say so explicitly.
+    config_default_first_only: bool,
     exclude_target_globs: Vec<String>,
     no_warn_common_titles: bool,
     file: Option<String>,
@@ -343,10 +348,15 @@ impl AutoLinkHintSpec {
         for title in &self.exclude_titles {
             builder = builder.flag_value("--exclude-title", title);
         }
-        builder = if self.first_only {
+        // Only restate first-only-ness when the rebuilt command (which passes
+        // neither flag by default) would otherwise land somewhere else —
+        // matching `config.auto_first_only` needs no flag at all.
+        builder = if self.first_only && !self.config_default_first_only {
             builder.flag("--first-only")
-        } else {
+        } else if !self.first_only && self.config_default_first_only {
             builder.flag("--no-first-only")
+        } else {
+            builder
         };
         for glob in &self.exclude_target_globs {
             builder = builder.flag_value("--exclude-target-glob", glob);
@@ -482,6 +492,7 @@ pub(crate) fn resolve_hint_spec(
                 min_length: *min_length,
                 exclude_titles: titles,
                 first_only: effective_first_only,
+                config_default_first_only: config.auto_first_only,
                 exclude_target_globs: target_globs,
                 no_warn_common_titles: *no_warn_common_titles
                     || !config.auto_warn_common_titles
@@ -705,6 +716,28 @@ mod tests {
         assert!(
             Cli::try_parse_from(&argv).is_ok(),
             "auto-link continuation must parse: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn auto_link_apply_omits_first_only_flag_when_it_matches_the_config_default() {
+        // Neither `--first-only` nor `--no-first-only` passed, and the
+        // config default is the plain `false` the CLI itself defaults to —
+        // the rebuilt command needs no flag at all to reproduce that.
+        let cli = Cli::try_parse_from(["hyalo", "links", "auto"]).unwrap();
+        let ResolvedHintSpec::LinksAuto(spec) = resolve_hint_spec(&cli.command, config()).unwrap()
+        else {
+            panic!("expected auto-link spec")
+        };
+        let argv = spec
+            .apply(&HintContext::new(HintSource::LinksAuto))
+            .argv()
+            .to_vec();
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg == "--no-first-only" || arg == "--first-only"),
+            "omitting both flags already reproduces first_only=false: {argv:?}"
         );
     }
 

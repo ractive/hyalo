@@ -632,6 +632,7 @@ pub enum FaultPoint {
 }
 
 /// Explicit invocation-owned durability. Drop does not report success.
+#[derive(Debug)]
 pub struct WriteSession {
     durability: Durability,
     directories: BTreeSet<PathBuf>,
@@ -657,16 +658,39 @@ impl WriteSession {
         }
     }
     /// A parallel worker inherits policy, but owns its pending directories.
-    pub(crate) fn worker(&self) -> Self {
+    ///
+    /// `pub` (not `pub(crate)`) so a parallel bulk mutator outside this crate
+    /// — e.g. `hyalo-cli`'s `lint --fix`, which lints files on the rayon pool
+    /// — can give each worker its own session for the actual write and
+    /// [`absorb`](Self::absorb) the results back into one top-level session
+    /// afterward, rather than serializing every worker's write through a
+    /// shared lock just to batch the deferred directory fence (DEC-317,
+    /// codebase review 2026-10-03 item 3).
+    #[must_use]
+    pub fn worker(&self) -> Self {
         Self {
             durability: self.durability,
             directories: BTreeSet::new(),
             fault: self.fault,
         }
     }
-    /// Transfer a worker's pending finalization to the invocation owner.
-    pub(crate) fn absorb(&mut self, mut worker: Self) {
+    /// Transfer a worker's pending finalization to the invocation owner. See
+    /// [`worker`](Self::worker).
+    pub fn absorb(&mut self, mut worker: Self) {
         self.directories.append(&mut worker.directories);
+    }
+    /// How many distinct directories are queued for a deferred fsync under
+    /// `Durability::PerDirectory`/`BulkRewrite` (always 0 under `PerFile`,
+    /// which fsyncs inline in `record()` and never queues).
+    ///
+    /// `pub` for the same cross-crate reason as [`worker`](Self::worker):
+    /// `hyalo-cli`'s batched `lint --fix` proves it absorbed every parallel
+    /// worker into one directory-deduplicated top-level session — not one
+    /// session per file — by checking this count before calling
+    /// [`finish`](Self::finish) (PR #369 review item 5).
+    #[must_use]
+    pub fn pending_directories(&self) -> usize {
+        self.directories.len()
     }
     fn fault(&self, point: FaultPoint) -> Result<()> {
         if self.fault == Some(point) {

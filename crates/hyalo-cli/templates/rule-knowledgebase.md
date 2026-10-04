@@ -85,6 +85,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `[schema] exempt`) still apply within what survives. An explicitly named excluded file
   (`--file Templates/x.md`) is **refused**, naming the glob, rather than silently skipped.
   `hyalo config` reports the effective list as `results.scan.exclude`.
+- **Ignore files are honoured like Git** (DEC-342: `.gitignore`, `.ignore`, `.git/info/exclude`, global excludes): an ignored note is absent from every
+  unscoped read and counted under `summary`'s `results.files.excluded`; a path you name
+  (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 - **Unusable files are summarised, not spelled out** (DEC-278, iter-265): a file whose YAML
   frontmatter will not parse is skipped and counted, and the run ends with one stderr line —
   `warning: skipped N files with unparsable frontmatter (run hyalo lint --rule HYALO005 for

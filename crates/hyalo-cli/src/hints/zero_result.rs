@@ -435,7 +435,7 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
     }
 
     // 2. Name the values the key actually has, so the next query is informed.
-    for (key, _) in equality_property_filters(ctx) {
+    for (key, value) in equality_property_filters(ctx) {
         if hints.len() >= MAX_ZERO_RESULT_HINTS {
             break;
         }
@@ -460,11 +460,39 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 };
                 let files = observation.files;
                 let files_label = if files == 1 { "file" } else { "files" };
-                hints.push(Hint::new(
+                // F3-wording (iteration 306 review): `observation.values` is
+                // gathered from the WHOLE vault, independent of any other
+                // active filter (`--tag`, another `--property`, a body
+                // pattern). The queried value can therefore already be among
+                // them — a file sets `status=planned` but was excluded by,
+                // say, `--tag iteration` — in which case "but never to that
+                // value" is a lie the very list it is attached to disproves.
+                // Say what is actually true in each case. `matched` is the
+                // observed value's OWN count — review round finding (2):
+                // `observation.files` counts every file that sets `key` to
+                // ANY value, so a vault with status=planned (4) and
+                // status=done (1) used to say "status=planned matches 5
+                // files" instead of 4.
+                let matched = observation
+                    .values
+                    .iter()
+                    .find(|v| v.typeable && v.rendered == value);
+                let message = if let Some(matched) = matched {
+                    let matched_label = if matched.count == 1 { "file" } else { "files" };
+                    format!(
+                        "`{key}={value}` matches {} {matched_label}, but another filter \
+                         excludes all of them; here is everything `{key}` is set to: {}{suffix}",
+                        matched.count,
+                        shown.join(", ")
+                    )
+                } else {
                     format!(
                         "`{key}` is set in {files} {files_label}, but never to that value: {}{suffix}",
                         shown.join(", ")
-                    ),
+                    )
+                };
+                hints.push(Hint::new(
+                    message,
                     HintBuilder::cmd("find")
                         .flag_value("--property", key)
                         .flag_value("--fields", "properties")
@@ -629,6 +657,53 @@ mod tests {
                 .iter()
                 .any(|h| h.description.contains("No file has a `status`")),
             "the key exists — do not claim otherwise: {hints:?}"
+        );
+    }
+
+    /// Iteration 306 review (P3 nit): `find --property status=planned --tag
+    /// iteration` returned zero results while `status` genuinely carries
+    /// `planned` in 4 files — another active filter (`--tag`) excluded all of
+    /// them. The old wording said "but never to that value: planned (4)" in
+    /// the very same sentence that lists the value, contradicting itself.
+    #[test]
+    fn queried_value_present_but_excluded_by_another_filter_does_not_contradict_itself() {
+        let mut ctx = ctx_with(&["status=planned"], &["iteration"]);
+        observed_with(
+            &mut ctx,
+            "status",
+            &[("planned", 4, true), ("done", 1, true)],
+        );
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("but never to that value")),
+            "the value IS present; this wording is false here: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("status=planned")
+                    && h.description.contains("another filter")
+                    && h.description.contains("planned (4)")),
+            "should say the value matches but another filter excludes it: {hints:?}"
+        );
+        // Review round finding (2): the headline count must be the matched
+        // value's own count (4), not `observation.files` (5 = 4 + the
+        // unrelated "done" file) — a vault with status=planned (4) and
+        // status=done (1) must say "matches 4 files", never 5.
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("matches 4 files")),
+            "headline count must be the matched value's own count, not the total files \
+             carrying the key: {hints:?}"
+        );
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("matches 5 files")),
+            "must not count the unrelated status=done file toward status=planned's match: {hints:?}"
         );
     }
 

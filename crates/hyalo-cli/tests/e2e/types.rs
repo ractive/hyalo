@@ -348,6 +348,88 @@ fn types_set_required_no_duplicate() {
 // types set --property-type
 // ---------------------------------------------------------------------------
 
+/// PR #369 review item 1: `--property-type K=enum` with no `--property-values`
+/// used to exit 0 and write `type = "enum"` with no `values` array — a
+/// malformed enum that then made `lint` report SCHEMA as malformed and made
+/// a later `set --property status=x` refuse. It must refuse instead.
+#[test]
+fn types_set_property_type_enum_without_values_is_refused() {
+    let tmp = setup_with_type();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--property-type", "status=enum"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Error envelopes render to stderr (see `OutputPipeline::render`).
+    assert!(
+        output.stdout.is_empty(),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--property-values"),
+        "expected an error naming the missing --property-values flag: {json}"
+    );
+
+    // No malformed enum must have been written.
+    let toml_content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        !toml_content.contains("type = \"enum\""),
+        "a refused command must not write anything: {toml_content}"
+    );
+}
+
+/// The same command succeeds, and is a true no-op, when the property already
+/// has enum values declared — re-declaring `type = "enum"` must not strip
+/// them (the bug the naive "refuse enum-without-values" fix would otherwise
+/// introduce: `set_property_type_field` unconditionally clears `values`).
+#[test]
+fn types_set_property_type_enum_keeps_existing_values_on_redeclare() {
+    let tmp = setup_with_type();
+    let apply = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "types",
+            "set",
+            "note",
+            "--property-type",
+            "status=enum",
+            "--property-values",
+            "status=draft,published",
+        ])
+        .output()
+        .unwrap();
+    assert!(apply.status.success());
+
+    let redeclare = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--property-type", "status=enum"])
+        .output()
+        .unwrap();
+    assert!(
+        redeclare.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&redeclare.stderr)
+    );
+
+    let toml_content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        toml_content.contains("values = [\"draft\", \"published\"]"),
+        "existing enum values must survive a bare re-declare: {toml_content}"
+    );
+}
+
 #[test]
 fn types_set_property_type_string() {
     let tmp = setup_with_type();

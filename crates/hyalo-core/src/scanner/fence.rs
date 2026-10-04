@@ -71,8 +71,20 @@ pub(crate) fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -
 
 /// Extract the info-string (language tag) from a fenced code block opening line.
 /// E.g. `` ```rust `` → `"rust"`, `~~~` → `""`
+///
+/// Every in-crate caller derives `fence_char`/`fence_count` from the same
+/// `line` via [`detect_opening_fence`], so the byte offset they imply always
+/// lands on a char boundary within `trimmed`. This function is also `pub`
+/// across the crate boundary (`hyalo-mdlint` calls it directly), so a
+/// mismatched precondition — a `fence_count` the line's actual fence run
+/// does not support, or a multi-byte `fence_char` whose repeated length
+/// overruns the line — must not panic: `.get()` reports no language rather
+/// than slicing past the string (or into the middle of a character).
 pub fn extract_fence_language(line: &str, fence_char: char, fence_count: usize) -> String {
     let trimmed = line.trim_start();
-    let after_fence = &trimmed[fence_count * fence_char.len_utf8()..];
-    after_fence.trim().to_owned()
+    let offset = fence_count.saturating_mul(fence_char.len_utf8());
+    trimmed
+        .get(offset..)
+        .map(|after_fence| after_fence.trim().to_owned())
+        .unwrap_or_default()
 }

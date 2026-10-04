@@ -2,9 +2,13 @@
 //! write path (`fs_util.rs`: temp file + fsync + rename + dir-fsync).
 //!
 //! Before this file, nothing exercised that machinery under contention or
-//! interruption: no two-process mutation race, no kill-mid-write. Both tests
-//! below are built so their assertions hold regardless of exact scheduling —
-//! no sleep-and-hope timing, so there is nothing here to retry-loop around.
+//! interruption: no two-process mutation race, no kill-mid-write. The
+//! kill-mid-write test's assertions hold regardless of exact scheduling — no
+//! sleep-and-hope timing. The racing-writers test's core invariant (no torn
+//! read, ever) holds the same way, enforced inside the reader thread on every
+//! attempt; only "did at least one writer win its race" is scheduling luck
+//! (observed flaky on a loaded Windows runner), which a bounded retry of the
+//! whole race absorbs without weakening the torn-read guarantee.
 
 use super::common::md;
 use std::process::Command as StdCommand;
@@ -24,29 +28,24 @@ fn hyalo_cmd() -> StdCommand {
     StdCommand::new(assert_cmd::cargo::cargo_bin("hyalo"))
 }
 
-/// `N` processes racing `hyalo set` on the same file, with a reader thread
-/// sampling the file throughout, must never observe a torn state.
-///
-/// `atomic_write` never opens the destination for writing — it writes a
-/// sibling temp file and `rename()`s it into place — so any reader that opens
-/// the destination mid-race sees either the pre-race content or one writer's
-/// complete output, never a mix of the two. This test is the regression net
-/// for that guarantee: a reader thread continuously re-reads the frontmatter
-/// while N `hyalo set` processes race on the same file, and every read must
-/// parse cleanly with a `counter` value from the known set.
-#[test]
-#[cfg_attr(
-    all(target_os = "linux", target_arch = "aarch64"),
-    ignore = "raw std::process spawn bypasses the cross/qemu target runner \
-              in the aarch64 release matrix and cannot exec the \
-              target-arch binary"
-)]
-fn concurrent_set_never_observed_partial() {
-    const WRITERS: i64 = 12;
+const RACE_WRITERS: i64 = 12;
 
-    let tmp = tempfile::tempdir().unwrap();
+/// One run of the race: `N` `hyalo set` processes racing on the same file,
+/// a reader thread sampling it throughout. Torn-read detection happens
+/// *inside* the reader thread and panics immediately regardless of how many
+/// times the caller retries the race setup — that invariant must hold on
+/// every single attempt, never just eventually.
+struct RaceOutcome {
+    /// How many of the `RACE_WRITERS` processes won their mtime race.
+    successes: usize,
+    /// How many reads the sampling thread completed during the race.
+    samples: usize,
+}
+
+fn run_set_race(tmp: &std::path::Path) -> RaceOutcome {
+    let path = tmp.join("note.md");
     std::fs::write(
-        tmp.path().join("note.md"),
+        &path,
         md!(r"
 ---
 title: Note
@@ -56,7 +55,6 @@ Body text.
 "),
     )
     .unwrap();
-    let path = tmp.path().join("note.md");
 
     let stop = Arc::new(AtomicBool::new(false));
     let reader_path = path.clone();
@@ -72,7 +70,7 @@ Body text.
                         .and_then(serde_json::Value::as_i64)
                         .unwrap_or_else(|| panic!("torn read: no numeric `counter` in {props:?}"));
                     assert!(
-                        (-1..WRITERS).contains(&counter),
+                        (-1..RACE_WRITERS).contains(&counter),
                         "torn or corrupt read: counter={counter} outside the \
                          range any single writer could have produced"
                     );
@@ -84,12 +82,12 @@ Body text.
     });
 
     let mut children = Vec::new();
-    for i in 0..WRITERS {
+    for i in 0..RACE_WRITERS {
         let child = hyalo_cmd()
             .args([
                 "--no-hints",
                 "--dir",
-                tmp.path().to_str().unwrap(),
+                tmp.to_str().unwrap(),
                 "set",
                 "--file",
                 "note.md",
@@ -122,24 +120,73 @@ Body text.
     stop.store(true, Ordering::Relaxed);
     let samples = match reader.join() {
         Ok(samples) => samples,
+        // A torn/corrupt read is the one failure mode that must never be
+        // retried away: propagate it immediately on every attempt.
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
-    assert!(
-        successes > 0,
-        "no racing writer succeeded — every `hyalo set` lost the mtime race, \
-         so this run exercised nothing"
-    );
-    assert!(
-        samples > 0,
-        "reader thread never completed a read during the race — \
-         widen WRITERS or the race window to make this test meaningful"
-    );
+    RaceOutcome { successes, samples }
+}
 
-    let final_props = hyalo_core::frontmatter::read_frontmatter(&path).unwrap();
+/// `N` processes racing `hyalo set` on the same file, with a reader thread
+/// sampling the file throughout, must never observe a torn state.
+///
+/// `atomic_write` never opens the destination for writing — it writes a
+/// sibling temp file and `rename()`s it into place — so any reader that opens
+/// the destination mid-race sees either the pre-race content or one writer's
+/// complete output, never a mix of the two. This test is the regression net
+/// for that guarantee: a reader thread continuously re-reads the frontmatter
+/// while N `hyalo set` processes race on the same file, and every read must
+/// parse cleanly with a `counter` value from the known set.
+///
+/// "At least one writer won its race" and "the reader sampled at least once"
+/// are scheduling-dependent, not correctness properties: on a slow or
+/// heavily loaded runner (observed on Windows CI) every writer can
+/// legitimately lose the `check_mtime` race to a faster sibling, or the
+/// reader thread can get starved for the whole race window. Retrying the
+/// whole race (fresh file, fresh processes) up to a bounded number of times
+/// keeps the test meaningful without weakening what it actually guards: the
+/// reader thread's torn-read assertions above are never retried away, since
+/// `run_set_race` panics through any retry loop the instant one fires.
+#[test]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "aarch64"),
+    ignore = "raw std::process spawn bypasses the cross/qemu target runner \
+              in the aarch64 release matrix and cannot exec the \
+              target-arch binary"
+)]
+fn concurrent_set_never_observed_partial() {
+    const MAX_ATTEMPTS: usize = 5;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut outcome = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let result = run_set_race(tmp.path());
+        if result.successes > 0 && result.samples > 0 {
+            outcome = Some(result);
+            break;
+        }
+        eprintln!(
+            "note: race attempt {attempt}/{MAX_ATTEMPTS} was inconclusive \
+             (successes={}, samples={}) — retrying",
+            result.successes, result.samples
+        );
+    }
+    let outcome = outcome.unwrap_or_else(|| {
+        panic!(
+            "no racing writer succeeded and/or the reader never sampled in \
+             {MAX_ATTEMPTS} attempts — every `hyalo set` lost the mtime race \
+             every time, which stopped being plausible scheduling noise"
+        )
+    });
+    assert!(outcome.successes > 0);
+    assert!(outcome.samples > 0);
+
+    let final_props =
+        hyalo_core::frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
     let final_counter = final_props["counter"].as_i64().unwrap();
     assert!(
-        (0..WRITERS).contains(&final_counter),
+        (0..RACE_WRITERS).contains(&final_counter),
         "final counter {final_counter} was not written by any of the racing processes"
     );
 }
