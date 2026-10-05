@@ -28,7 +28,16 @@
 //! 3g. (iter-315) Every hint in `crates/hyalo-cli/src` of the form
 //!     "see SECTION in `hyalo <cmd> --help`" names an ALL-CAPS header that
 //!     `hyalo <cmd> --help` actually prints, so a renamed or removed help
-//!     section cannot leave error hints pointing at nothing.
+//!     section cannot leave error hints pointing at nothing. (iter-316,
+//!     DEC-367) Each such prose pointer also needs its runnable twin: the same
+//!     source file must carry one `.with_help_pointer("<cmd>", "SECTION")`
+//!     call per pointer, which puts `-> hyalo <cmd> --help  # SECTION` in the
+//!     envelope's `hints` array.
+//!
+//! 3h. (iter-316, DEC-367) The FIND 101 block that opens `hyalo find --help`
+//!     appears byte for byte in `templates/skill-hyalo.md` and
+//!     `templates/rule-knowledgebase.md`, so the three places an agent learns
+//!     the query language cannot teach three different grammars.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -660,6 +669,28 @@ pub fn section_references(src: &str) -> Vec<Result<SectionReference, String>> {
     out
 }
 
+/// Every `with_help_pointer("<cmd>", "<SECTION>")` call in `src`, as
+/// `(cmd, SECTION)` -- the runnable twin of a prose pointer (DEC-367).
+pub fn help_pointer_twins(src: &str) -> Vec<(String, String)> {
+    const CALL: &str = "with_help_pointer(";
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(at) = rest.find(CALL) {
+        rest = &rest[at + CALL.len()..];
+        let args: Vec<&str> = rest
+            .split(')')
+            .next()
+            .unwrap_or_default()
+            .split(',')
+            .map(|a| a.trim().trim_matches('"'))
+            .collect();
+        if let [command, section] = args.as_slice() {
+            out.push(((*command).to_owned(), (*section).to_owned()));
+        }
+    }
+    out
+}
+
 /// `true` when `help` has a line starting with `section` followed by `:` or
 /// ` (` — the shape of every long-help header (`QUERY SYNTAX (for PATTERN):`,
 /// `EXAMPLES:`).
@@ -700,6 +731,7 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
         let Ok(src) = std::fs::read_to_string(&file) else {
             continue;
         };
+        let mut twins = help_pointer_twins(&src);
         for reference in section_references(&src) {
             let rel = file.strip_prefix(root).unwrap_or(&file);
             let reference = match reference {
@@ -713,6 +745,22 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
                     continue;
                 }
             };
+            let command = reference.command.join(" ");
+            if let Some(i) = twins
+                .iter()
+                .position(|(c, s)| *c == command && *s == reference.section)
+            {
+                twins.swap_remove(i);
+            } else {
+                failures.push(format!(
+                    "Help drift (3g): {} says \"see {} in `hyalo {command} --help`\" without \
+                     its runnable twin -- add `.with_help_pointer(\"{command}\", \"{}\")` so \
+                     the envelope's hints carry `hyalo {command} --help`",
+                    rel.display(),
+                    reference.section,
+                    reference.section
+                ));
+            }
             let help = helps.entry(reference.command.clone()).or_insert_with(|| {
                 let argv: Vec<&str> = reference.command.iter().map(String::as_str).collect();
                 help_text(root, &argv)
@@ -729,6 +777,54 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
                     reference.section
                 ));
             }
+        }
+    }
+    failures
+}
+
+/// First line of the shared find-101 block (3h).
+const FIND_101_HEADER: &str = "FIND 101 ";
+
+/// The find-101 block in `text`: the line starting with
+/// [`FIND_101_HEADER`] through the line before the first blank line or code
+/// fence. `None` when there is no such line.
+pub fn find_101_block(text: &str) -> Option<String> {
+    let mut lines = text
+        .lines()
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .skip_while(|l| !l.starts_with(FIND_101_HEADER));
+    let header = lines.next()?;
+    let mut block = vec![header];
+    block.extend(lines.take_while(|l| !l.trim().is_empty() && !l.starts_with("```")));
+    Some(block.join("\n"))
+}
+
+/// 3h: `find --help`, the skill and the rule carry one identical block.
+fn check_find_101(root: &std::path::Path) -> Vec<String> {
+    let Some(help) = help_text(root, &["find"]) else {
+        return vec!["Help drift (3h): could not run `hyalo find --help`".to_owned()];
+    };
+    let Some(expected) = find_101_block(&help) else {
+        return vec![format!(
+            "Help drift (3h): `hyalo find --help` has no '{FIND_101_HEADER}…' block"
+        )];
+    };
+    let mut failures = Vec::new();
+    for rel in [
+        "crates/hyalo-cli/templates/skill-hyalo.md",
+        "crates/hyalo-cli/templates/rule-knowledgebase.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(rel)).unwrap_or_default();
+        match find_101_block(&text) {
+            Some(block) if block == expected => {}
+            Some(_) => failures.push(format!(
+                "Help drift (3h): {rel}'s FIND 101 block differs from `hyalo find --help`'s \
+                 -- copy crates/hyalo-cli/src/cli/find_101.txt into it verbatim"
+            )),
+            None => failures.push(format!(
+                "Help drift (3h): {rel} has no FIND 101 block -- copy \
+                 crates/hyalo-cli/src/cli/find_101.txt into a ```text fence"
+            )),
         }
     }
     failures
@@ -760,13 +856,15 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     all_failures.extend(indent_failures);
 
     all_failures.extend(check_help_section_references(root));
+    all_failures.extend(check_find_101(root));
 
     if all_failures.is_empty() {
         println!(
             "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, \
              short help within its byte ceilings with no sentence fragments, no leaked \
-             doc-comment indentation, and every `see SECTION in --help` hint names a real \
-             header."
+             doc-comment indentation, every `see SECTION in --help` hint names a real \
+             header and carries its runnable twin, and the FIND 101 block matches in all \
+             three places."
         );
         Ok(true)
     } else {
@@ -833,6 +931,32 @@ mod tests {
         }
         let help = "QUERY SYNTAX (for PATTERN):\n";
         assert!(!has_section_header(help, "QUERYX SYNTAX"));
+    }
+
+    #[test]
+    fn find_101_block_stops_at_a_blank_line_or_fence() {
+        let help = "Intro\n\nFIND 101 -- x:\n  hyalo find 'a b'\n\nReturns\n";
+        let md = "text\n\n```text\nFIND 101 -- x:\r\n  hyalo find 'a b'\n```\n";
+        assert_eq!(
+            find_101_block(help).as_deref(),
+            Some("FIND 101 -- x:\n  hyalo find 'a b'")
+        );
+        assert_eq!(find_101_block(md), find_101_block(help));
+        assert_eq!(find_101_block("no block\n"), None);
+    }
+
+    #[test]
+    fn help_pointer_twins_are_parsed_per_call() {
+        let src = ".with_help_pointer(\"find\", \"FACETS\")));\n\
+                   x.with_help_pointer(\"task toggle\", \"SEARCH MODES\")\n\
+                   with_help_pointer(oops)";
+        assert_eq!(
+            help_pointer_twins(src),
+            vec![
+                ("find".to_owned(), "FACETS".to_owned()),
+                ("task toggle".to_owned(), "SEARCH MODES".to_owned()),
+            ]
+        );
     }
 
     #[test]

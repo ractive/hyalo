@@ -138,3 +138,4 @@ mod iteration309_review_leftovers;
 mod iteration310_yaml_parser;
 mod iteration311_link_repair_and_graph_parity;
 mod iteration313_index_honesty;
+mod iteration316_discoverability;

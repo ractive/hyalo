@@ -187,6 +187,12 @@ type ErrorEnvelope = {
      */
     hint?: string;
     /**
+     * Runnable follow-ups, omitted when there are none. A `hint` that points
+     * at a section of a command's long help carries that `hyalo <cmd> --help`
+     * command here (DEC-367).
+     */
+    hints?: Array<Hint>;
+    /**
      * Relevant path, omitted for failures unrelated to a specific path.
      */
     path?: string;

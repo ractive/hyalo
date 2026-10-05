@@ -510,6 +510,11 @@ pub(crate) struct ErrorEnvelope<'a> {
     /// Suggested recovery action, omitted when unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
+    /// Runnable follow-ups, omitted when there are none. A `hint` that points
+    /// at a section of a command's long help carries that `hyalo <cmd> --help`
+    /// command here (DEC-367).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hints: Option<&'a [crate::hints::Hint]>,
     /// Relevant path, omitted for failures unrelated to a specific path.
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<&'a str>,
@@ -830,6 +835,7 @@ pub fn format_error(
                 cause,
                 error,
                 hint,
+                hints: None,
                 path,
             },
         ),

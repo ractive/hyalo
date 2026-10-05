@@ -383,13 +383,16 @@ fn find_empty_selection_preflight(
             !filters.fields.is_empty(),
         )
     {
-        return Some(CommandOutcome::UserError(crate::output::user_diagnostic(
-            ctx.effective_format,
-            message,
-            None,
-            Some("see SEARCH MODES in `hyalo find --help`"),
-            None,
-        )));
+        return Some(CommandOutcome::UserError(
+            crate::output::user_diagnostic(
+                ctx.effective_format,
+                message,
+                None,
+                Some("see SEARCH MODES in `hyalo find --help`"),
+                None,
+            )
+            .with_help_pointer("find", "SEARCH MODES"),
+        ));
     }
     if filters.facet.is_empty() {
         return None;
@@ -402,13 +405,16 @@ fn find_empty_selection_preflight(
             });
             None
         }
-        Err(message) => Some(CommandOutcome::UserError(crate::output::user_diagnostic(
-            ctx.effective_format,
-            &message,
-            None,
-            Some("see FACETS in `hyalo find --help`"),
-            None,
-        ))),
+        Err(message) => Some(CommandOutcome::UserError(
+            crate::output::user_diagnostic(
+                ctx.effective_format,
+                &message,
+                None,
+                Some("see FACETS in `hyalo find --help`"),
+                None,
+            )
+            .with_help_pointer("find", "FACETS"),
+        )),
     }
 }
 
@@ -2645,6 +2651,7 @@ fn run_inner() -> Result<(), AppError> {
         hctx.section_file_matches = report.section_file_matches;
         hctx.pure_negative_query = report.pure_negative_query;
         hctx.zero_posting_terms = report.zero_posting_terms;
+        hctx.every_query_part_occurs = report.every_part_occurs;
         hctx.legacy_field_terms = report.legacy_field_terms;
         hctx.legacy_field_rest = report.legacy_field_rest;
         if let Some(facets) = &facets {
@@ -2657,6 +2664,7 @@ fn run_inner() -> Result<(), AppError> {
         error_format: output_plan.error_format(),
         jq_filter: output_plan.jq(),
         hint_ctx: hint_ctx.as_ref(),
+        error_hints: hints_flag && output_plan.jq().is_none(),
         count: output_plan.count(),
         projection: output_plan.projection(),
         internal_report: output_plan.internal_report(),

@@ -1069,7 +1069,9 @@ pub(crate) struct TagsSummaryArgs {
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Search and filter markdown files — returns one compact object per file (see --fields)
-    #[command(long_about = "Search and filter markdown files.\n\n\
+    // DEC-367: the FIND 101 block opens `find --help`; skill-hyalo.md and
+    // rule-knowledgebase.md carry it byte for byte (check-help-drift 3h).
+    #[command(long_about = concat!("Search and filter markdown files.\n\n", include_str!("find_101.txt"), "\n\
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
             `truncated: true` appears whenever --limit (or the default 50-item cap) cut \
             `results` short of `total`; the key is omitted (never `false`) when nothing was \
@@ -1329,7 +1331,7 @@ pub(crate) enum Commands {
             hyalo find --section 'Tasks' --task todo\n\
             hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'\n\
             hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
-            git diff --name-only origin/main | hyalo find --files-from -")]
+            git diff --name-only origin/main | hyalo find --files-from -"))]
     Find(FindArgs),
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(

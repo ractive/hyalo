@@ -65,13 +65,16 @@ pub(crate) fn run(
     let facet_specs = match super::parse_facet_specs(&facet) {
         Ok(specs) => specs,
         Err(message) => {
-            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
-                effective_format,
-                &message,
-                None,
-                Some("see FACETS in `hyalo find --help`"),
-                None,
-            )));
+            return Ok(CommandOutcome::UserError(
+                crate::output::user_diagnostic(
+                    effective_format,
+                    &message,
+                    None,
+                    Some("see FACETS in `hyalo find --help`"),
+                    None,
+                )
+                .with_help_pointer("find", "FACETS"),
+            ));
         }
     };
     let section_mode = granularity == Some(crate::cli::args::Granularity::Section);
@@ -84,13 +87,16 @@ pub(crate) fn run(
             !fields.is_empty(),
         )
     {
-        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
-            effective_format,
-            message,
-            None,
-            Some("see SEARCH MODES in `hyalo find --help`"),
-            None,
-        )));
+        return Ok(CommandOutcome::UserError(
+            crate::output::user_diagnostic(
+                effective_format,
+                message,
+                None,
+                Some("see SEARCH MODES in `hyalo find --help`"),
+                None,
+            )
+            .with_help_pointer("find", "SEARCH MODES"),
+        ));
     }
     if orphan && dead_end {
         crate::warn::warn(

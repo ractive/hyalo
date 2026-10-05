@@ -384,6 +384,10 @@ pub struct HintContext {
     /// invisible to a check that used `search_suggestions` as a stand-in
     /// for "this word matched nothing".
     pub zero_posting_terms: Vec<String>,
+    /// Every operand of a zero-result ranked query's top-level AND occurs
+    /// somewhere on its own (DEC-367), decided in core from the compiled
+    /// query -- the condition for "no file holds them all".
+    pub every_query_part_occurs: bool,
     /// Positive words shaped like a removed field term (`title:x`; DEC-366)
     /// as `(field, value)`, recorded only for a zero-result ranked query so
     /// the hint layer can name the flag that replaced it.
@@ -476,6 +480,7 @@ impl HintContext {
             section_file_matches: None,
             pure_negative_query: false,
             zero_posting_terms: Vec::new(),
+            every_query_part_occurs: false,
             legacy_field_terms: Vec::new(),
             legacy_field_rest: None,
             resolved: None,

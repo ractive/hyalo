@@ -79,6 +79,22 @@ and this project adheres to
   definition and frontmatter cases are deferred with a reason. JSON reports
   `anchor_fixable`/`anchor_fixes`, `anchors_applied`/`applied_anchor_fixes` and
   `anchors_deferred`/`deferred_anchor_fixes` beside the target-repair fields.
+- Search discoverability (DEC-367). `find --help` now opens with a 10-line
+  FIND 101 block covering the query operators, section mode, facets and
+  `terms`. The same block appears verbatim in the shipped skill and rule.
+  `hyalo --help` names the operators on its PATTERN line, and its cookbook
+  gains `hyalo terms config`. New `find` hints:
+  - a ranked query of 3+ words with 100+ matching files hints
+    `--granularity section`;
+  - a PATTERN-less `--section` matching 10+ files hints section mode with
+    the heading's words;
+  - an unfiltered zero-result AND of words that all exist says no file holds
+    them all;
+  - a plain AND of 2+ words matching 10+ files is offered `"a b"~5`.
+
+  An error envelope whose `hint` points at a `--help` section also carries a
+  runnable `hyalo <cmd> --help` entry in a new `hints` array, in text and
+  JSON. Like every `hints` array, it is empty under `--no-hints` and `--jq`.
 
 ### Fixed
 

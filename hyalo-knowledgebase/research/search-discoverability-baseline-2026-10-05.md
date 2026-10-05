@@ -50,3 +50,51 @@ cookbook line `hyalo terms config` would remove it.
   opened it.
 - Re-run with a fourth task that needs the grammar: "files that mention snapshot and
   either incremental or refresh, but not MDN".
+
+## Re-run (new binary)
+
+Run after iteration 316's build was green: one fresh Sonnet-class subject, the same
+brief and limits (help and read-only commands only, 25-command budget), and a fourth
+task that needs the grammar.
+
+| Task | Commands | Discovery path | Answer |
+| --- | ---: | --- | --- |
+| The paragraph explaining the proximity bonus | 3 | `hyalo --help`; `hyalo find --help \| grep proximity` (the RANKING blurb); `find "proximity bonus" --granularity section --format json`, crediting the FIND 101 line "one hit per section: the paragraph, not the file" | `decision-log.md`, "DEC-338: Phrase slop and a proximity bonus", lines 6671–6691 |
+| Planned iterations mentioning "snapshot", by directory | 2 | `find snapshot --property status=planned --property type=iteration --facet dir` gave 0, and the zero-result hint showed that `status=planned` (6 files) and `type=iteration` (309) do not overlap; with the type filter dropped, `--facet dir` gave `backlog: 3` | No planned iterations exist now; the 3 planned files that mention snapshot are in `backlog/` |
+| Stems that `config*` expands to | 2 | `terms --help`; `terms config --limit 5` | config 185, configur 122, configexclud 9, configpath 9, configfil 7 |
+| Mentions snapshot and (incremental or refresh) but not MDN | 1 (+1 to verify) | Grammar from the FIND 101 block: `find "snapshot (incremental OR refresh) -mdn" --count` | 24 |
+
+All four tasks were solved, including the one that needs the grammar. The rows
+add up to 9 commands: 8 attributed to tasks plus one verification run. The
+subject reported 12 in total. The other 3 were help lookups it did not assign to
+any task.
+
+**Plain comparison:** on the three tasks both runs shared, the re-run used 7
+attributed commands against the baseline's 5. That is more, not fewer: one extra
+`--help` and one zero-result filter detour. What it gained is the fourth task,
+which needs the grammar and which it solved on the first try from the FIND 101
+block.
+
+### Comparison with the baseline
+
+| | Baseline (old binary) | Re-run (iteration 316) |
+| --- | --- | --- |
+| Tasks / solved | 3 / 3 | 4 / 4 (adds the grammar task) |
+| Commands | 5 | 9 attributed (7 on the three shared tasks, 1 + 1 verify on the grammar task); 12 reported, counting unattributed help lookups |
+| Where the features were found | top-level help only; `find --help` never opened | top-level help, then the FIND 101 block at the top of `find --help`; zero-result hints for the filter detour |
+| Operators used | none (no task needed them) | implicit AND, `OR` inside `( )`, `-term`, all on the first try |
+| Dead ends | none | `--property status=planned --property type=iteration` (no overlap); `--fields` rejected in section mode |
+
+The subject's own assessment: the FIND 101 block was the single most useful text,
+covering `OR` precedence, `( )`/`-`, `--granularity section`, `--facet`, and
+`terms config` for prefix stems. Reading it first would have avoided both dead
+ends. The zero-result hint that named the counts of the conflicting filters was
+faster than trial and error.
+
+### Decision on the optional trim
+
+Not applied (DEC-367). The subject opened `find --help` only to read its head
+and to `grep` one keyword, and it got what it needed both times. It never got
+lost in the 42 KB page. The trim stays conditional on a transcript showing an
+agent reading past FIND 101 and choosing a wrong operator or flag because of
+what it read further down.
