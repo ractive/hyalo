@@ -946,9 +946,9 @@ fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path
 }
 
 fn warn_stale_index(idx: &hyalo_core::index::SnapshotIndex, dir: &Path) {
-    let (_, _, created_at, _) = idx.header_info();
+    let published_at = idx.published_at();
     let dirs_moved = hyalo_core::index::newest_dir_mtime(dir).is_some_and(|newest| {
-        newest > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+        newest > published_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
     });
     if dirs_moved {
         // UX-8 (iter-277): name the probe that fired. Two

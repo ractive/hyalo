@@ -560,6 +560,16 @@ struct SnapshotHeader {
     /// above this format version always writes it.
     #[serde(default)]
     skip_code_blocks: bool,
+    /// Whole-second mtime of the snapshot file this header was loaded from,
+    /// recorded at load time and never serialized (DEC-368, iter-317).
+    ///
+    /// `created_at` is stamped before the serialize-fsync-rename tail, and the
+    /// rename itself bumps the parent directory's mtime. On a slow disk that
+    /// tail can outlast [`STALENESS_TOLERANCE_SECS`], so the directory probe
+    /// compares against [`SnapshotIndex::published_at`] — the later of the two
+    /// — instead of `created_at` alone. `0` for a snapshot built in memory.
+    #[serde(skip)]
+    file_mtime: u64,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -2015,20 +2025,20 @@ impl SnapshotIndex {
     /// fall back to a disk scan. A warning is printed to stderr in this case.
     /// Returns `Err` only for hard I/O failures.
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        let Some(bytes) = read_index_bytes(path, true)? else {
+        let Some((bytes, mtime)) = read_index_bytes(path, true)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(bytes, true))
+        Ok(Self::load_inner(bytes, true).map(|s| s.with_file_mtime(mtime)))
     }
 
     /// Load a snapshot silently — identical to [`load`] but suppresses the
     /// incompatibility warning.  Used by `find_stale_indexes` which expects to
     /// silently skip files that cannot be deserialized.
     fn load_silent(path: &Path) -> Result<Option<Self>> {
-        let Some(bytes) = read_index_bytes(path, false)? else {
+        let Some((bytes, mtime)) = read_index_bytes(path, false)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(bytes, false))
+        Ok(Self::load_inner(bytes, false).map(|s| s.with_file_mtime(mtime)))
     }
 
     /// Load a snapshot only to reuse its entries and BM25 postings
@@ -2036,8 +2046,33 @@ impl SnapshotIndex {
     /// build-time skip/exclusion counters, no graph resolution. `None` for a
     /// missing, unreadable or older-format snapshot.
     pub fn load_for_reuse(path: &Path) -> Option<Self> {
-        let bytes = read_index_bytes(path, false).ok()??;
-        Self::load_inner_with(bytes, false, false).filter(Self::format_is_current)
+        let (bytes, mtime) = read_index_bytes(path, false).ok()??;
+        Self::load_inner_with(bytes, false, false)
+            .filter(Self::format_is_current)
+            .map(|s| s.with_file_mtime(mtime))
+    }
+
+    /// Record the whole-second mtime of the file this snapshot was read from.
+    fn with_file_mtime(mut self, mtime: u64) -> Self {
+        self.header.file_mtime = mtime;
+        self
+    }
+
+    /// When this snapshot was published, as whole seconds since the Unix
+    /// epoch: the later of the header's `created_at` and the snapshot file's
+    /// own mtime (DEC-368, iter-317).
+    ///
+    /// `created_at` is stamped before the serialize-fsync-rename tail; the
+    /// file's mtime is taken at the end of the write, just before the rename
+    /// that bumps the parent directory. The directory-mtime staleness probe
+    /// (`snapshot_drift`'s tree check, `create-index`'s no-op guard, the
+    /// stale-index warning) compares against this so a tail slower than
+    /// [`STALENESS_TOLERANCE_SECS`] does not read as a moved tree forever.
+    /// The per-file racily-clean rule (DEC-339) deliberately keeps using
+    /// `created_at`: it must stay anchored to when the files were scanned.
+    #[must_use]
+    pub fn published_at(&self) -> u64 {
+        self.header.created_at.max(self.header.file_mtime)
     }
 
     /// Take the BM25 postings out of a snapshot loaded for reuse, decoding a
@@ -2166,7 +2201,7 @@ const MAX_INDEX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 /// Returns `Ok(None)` when the file exceeds the limit (a warning is printed
 /// when `warn` is `true`).
 /// Returns `Err` for hard I/O failures.
-fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
+fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<(Vec<u8>, u64)>> {
     use std::io::Read as _;
 
     let file = std::fs::File::open(path)
@@ -2191,7 +2226,12 @@ fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
     file.take(MAX_INDEX_FILE_SIZE + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read index file: {}", path.display()))?;
-    Ok(Some(bytes))
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    Ok(Some((bytes, mtime)))
 }
 
 /// Shared serialization logic for saving a snapshot index to disk.
@@ -2262,6 +2302,7 @@ fn write_snapshot_with_session(
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
         gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
         skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
+        file_mtime: 0,
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -2726,9 +2767,9 @@ pub fn snapshot_drift(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
         })
         .map(|e| e.rel_path.clone())
         .collect();
-    let (_, _, created_at, _) = index.header_info();
+    let published_at = index.published_at();
     let tree_moved = newest_dir_mtime(dir)
-        .is_some_and(|newest| newest > created_at.saturating_add(STALENESS_TOLERANCE_SECS));
+        .is_some_and(|newest| newest > published_at.saturating_add(STALENESS_TOLERANCE_SECS));
     if tree_moved {
         let skipped: std::collections::HashSet<&str> =
             index.header.skipped.iter().map(String::as_str).collect();
@@ -2920,6 +2961,88 @@ mod iso_tests {
         // The snapshot file itself was not rewritten.
         let on_disk = SnapshotIndex::load(&snap).unwrap().unwrap();
         assert_eq!(on_disk.bm25_index().unwrap().doc_count(), 3);
+    }
+
+    /// DEC-368 (iter-317): `created_at` is stamped before the
+    /// serialize-fsync-rename tail. When that tail outlasts the tolerance the
+    /// rename leaves the vault root's mtime past `created_at + 1`, and the
+    /// tree probe must compare against the snapshot file's own mtime
+    /// (`published_at`), not `created_at` alone.
+    #[test]
+    fn slow_publish_tail_does_not_read_as_a_moved_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "# A\nalpha\n").unwrap();
+        let options = ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: None,
+        };
+        let build = ScannedIndex::build(
+            &[(dir.path().join("a.md"), "a.md".to_owned())],
+            None,
+            &options,
+        )
+        .unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap, &vault, None, None).unwrap();
+        // A note the snapshot never saw: only the tree probe's missing-files
+        // walk can surface it, so it is the witness for `tree_moved`.
+        std::fs::write(dir.path().join("b.md"), "# B\nbeta\n").unwrap();
+        let newest = newest_dir_mtime(dir.path()).unwrap();
+
+        let mut index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        // Fake a slow tail: `created_at` three seconds before the vault's
+        // newest directory mtime, the snapshot file written at that mtime.
+        index.header.created_at = newest - 3;
+        index.header.file_mtime = newest;
+        assert_eq!(index.published_at(), newest);
+        assert_eq!(
+            snapshot_drift(&index, dir.path()),
+            Vec::<String>::new(),
+            "a directory mtime no newer than the snapshot file's own must not read as a moved tree"
+        );
+
+        // Without the file mtime (a snapshot built in memory), the same
+        // header does read as a moved tree and the walk finds `b.md`.
+        index.header.file_mtime = 0;
+        assert_eq!(snapshot_drift(&index, dir.path()), vec!["b.md".to_owned()]);
+    }
+
+    /// The loader records the snapshot file's mtime, so `published_at` is
+    /// never earlier than it.
+    #[test]
+    fn load_records_the_snapshot_file_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "# A\n").unwrap();
+        let options = ScanOptions {
+            scan_body: false,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: None,
+        };
+        let build = ScannedIndex::build(
+            &[(dir.path().join("a.md"), "a.md".to_owned())],
+            None,
+            &options,
+        )
+        .unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap, &vault, None, None).unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(30);
+        std::fs::File::options()
+            .write(true)
+            .open(&snap)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let later_secs = later.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        assert_eq!(index.published_at(), later_secs);
+        let reuse = SnapshotIndex::load_for_reuse(&snap).unwrap();
+        assert_eq!(reuse.published_at(), later_secs);
     }
 
     /// UX-1 (iter-249 dogfood): the pre-fix `newest_shallow_dir_mtime` only
@@ -4094,6 +4217,7 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                file_mtime: 0,
             },
             entries,
             graph: &graph,
@@ -4461,6 +4585,7 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                file_mtime: 0,
             },
             bm25_index: Some(&original),
             entries: &entries,

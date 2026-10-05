@@ -3,7 +3,7 @@ title: "Iteration 317: backlog leftovers before 0.25.0"
 type: iteration
 date: 2026-10-05
 tags: [iteration, index, snapshot, links, backlog]
-status: planned
+status: in-progress
 branch: iter-317/backlog-leftovers-before-0250
 priority: 2
 ---

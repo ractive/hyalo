@@ -245,7 +245,10 @@ pub fn create_index(
         && reused == file_count
         && previous.as_ref().is_some_and(|prev| {
             let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
-            let (_, _, created_at, _) = prev.header_info();
+            // DEC-368: `published_at`, not `created_at` — a serialize-fsync-
+            // rename tail slower than the tolerance must not read as a moved
+            // tree on every later run.
+            let published_at = prev.published_at();
             prev.entries().len() == file_count
                 && prev.attachments() == attachments.as_slice()
                 && prev_skipped == current_skipped
@@ -253,7 +256,7 @@ pub fn create_index(
                 && prev.scan_exclude() == current_scan_exclude
                 && prev.gitignore_dropped() == current_gitignore_dropped
                 && newest_dir_mtime(dir).is_none_or(|newest| {
-                    newest <= created_at.saturating_add(STALENESS_TOLERANCE_SECS)
+                    newest <= published_at.saturating_add(STALENESS_TOLERANCE_SECS)
                 })
         });
 
