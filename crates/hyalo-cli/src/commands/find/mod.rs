@@ -958,7 +958,7 @@ pub(crate) fn find_prepared(
                             hyalo_core::warn::record_skip(
                                 entry.rel_path.as_str(),
                                 crate::commands::INVALID_UTF8_CONSEQUENCE,
-                                hyalo_core::warn::SkipKind::Other,
+                                hyalo_core::warn::SkipKind::InvalidUtf8,
                             );
                             return Ok(());
                         }

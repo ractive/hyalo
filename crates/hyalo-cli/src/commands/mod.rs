@@ -828,7 +828,7 @@ pub(crate) fn build_scanned_index_with(
     // `find`'s plain listing and `summary` in step with `lint`.
     for w in &build.warnings {
         let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
-            hyalo_core::warn::SkipKind::Other
+            hyalo_core::warn::SkipKind::InvalidUtf8
         } else {
             hyalo_core::warn::SkipKind::Frontmatter
         };

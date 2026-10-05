@@ -95,7 +95,13 @@ pub enum SkipKind {
     /// The YAML frontmatter would not parse (or was structurally invalid).
     /// Reported by `hyalo lint --rule HYALO005`.
     Frontmatter,
-    /// Anything else: unreadable bytes, invalid UTF-8, an oversized file.
+    /// The file holds invalid UTF-8 bytes. It is still listed — its text was
+    /// read lossily (U+FFFD for each bad sequence) — but it is kept out of
+    /// full-text search, so the summary says "read lossily", not "skipped"
+    /// (DEC-370).
+    InvalidUtf8,
+    /// Anything else: unreadable bytes, an oversized file, a file that
+    /// vanished mid-run.
     Other,
 }
 
@@ -207,6 +213,14 @@ pub fn skipped_files() -> Vec<SkippedFile> {
 pub fn skipped_frontmatter_count() -> usize {
     SKIPPED.lock().map_or(0, |s| {
         s.iter().filter(|f| f.kind == SkipKind::Frontmatter).count()
+    })
+}
+
+/// How many files were read lossily because they hold invalid UTF-8.
+#[must_use]
+pub fn invalid_utf8_count() -> usize {
+    SKIPPED.lock().map_or(0, |s| {
+        s.iter().filter(|f| f.kind == SkipKind::InvalidUtf8).count()
     })
 }
 

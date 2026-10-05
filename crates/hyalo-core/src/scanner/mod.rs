@@ -220,7 +220,13 @@ pub fn scan_file_multi_stats(
             }
         }
         crate::internal_metrics::record_source_read(false);
-        scan_slice_multi(buf, visitors)?;
+        let decoded = scan_slice_multi_utf8(buf, visitors)?;
+        // When a frontmatter block was framed, `buf` ends exactly after the
+        // closing delimiter line, so its validity is the block's own — and
+        // the full-body scan would report the same file (DEC-370). Without
+        // frontmatter `buf` is a prefix of the first line that may end
+        // mid-character, so it says nothing (DEC-365's bodyless exception).
+        let valid_utf8 = framed.frame().frontmatter().is_none() || decoded;
         let lines = match last_byte {
             None => 0,
             Some(b'\n') => newlines,
@@ -229,9 +235,7 @@ pub fn scan_file_multi_stats(
         Ok(ScanStats {
             size: file_size,
             lines,
-            // The 16 KiB prefix can end mid-character, so its validity says
-            // nothing about the file; this path produces no BM25 tokens anyway.
-            valid_utf8: true,
+            valid_utf8,
         })
     }
 }

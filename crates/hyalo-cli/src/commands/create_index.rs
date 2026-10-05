@@ -160,7 +160,7 @@ pub fn create_index(
     // end-of-run summary line names where to see the details.
     for w in &build.warnings {
         let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
-            hyalo_core::warn::SkipKind::Other
+            hyalo_core::warn::SkipKind::InvalidUtf8
         } else {
             hyalo_core::warn::SkipKind::Frontmatter
         };
