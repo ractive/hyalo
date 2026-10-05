@@ -1625,7 +1625,10 @@ pub(crate) fn find_prepared(
                     .into_iter()
                     .filter(|e| !is_self_link(e, &entry.rel_path))
                     .map(|e| {
-                        let source = e.source.to_string_lossy().replace('\\', "/");
+                        let source = hyalo_core::discovery::native_separator_to_forward_slash(
+                            &e.source.to_string_lossy(),
+                        )
+                        .into_owned();
                         BacklinkInfo {
                             source,
                             line: e.line,

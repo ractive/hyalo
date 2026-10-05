@@ -1568,17 +1568,44 @@ Body.
         let huge = "a".repeat(hyalo_options().budget.unwrap().max_total_scalar_bytes + 1);
         let yaml = format!("x: {huge}\n");
         let err = parse_yaml_map(&yaml).unwrap_err();
-        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, &yaml);
         assert!(!msg.contains("ScalarBytes"), "leaked internals: {msg}");
         assert!(!msg.contains('{'), "leaked Debug-struct syntax: {msg}");
         assert!(msg.contains("too large"), "message: {msg}");
     }
 
     #[test]
+    fn friendly_parse_error_names_the_key_on_a_template_placeholder() {
+        // dogfood-v0250 UX-10 / iter-314: a Templater/Jekyll-style `{{date}}`
+        // value breaks the parser (a bare `{` opens a YAML flow mapping that
+        // never closes) and used to surface only "line 6 column 11:
+        // unexpected end of input" with no hint of which key or why.
+        let yaml = "title: Daily\ntype: note\ntags: []\nstatus: open\ncreated: {{date}}\n";
+        let err = parse_yaml_map(yaml).unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, yaml);
+        assert!(msg.contains("property 'created'"), "{msg}");
+        assert!(msg.contains("{{date}}"), "{msg}");
+        assert!(msg.contains("is not YAML"), "{msg}");
+        assert!(msg.contains("line 5"), "{msg}");
+    }
+
+    #[test]
+    fn friendly_parse_error_template_placeholder_without_a_key_still_hints() {
+        // A placeholder on its own line (a list item, say) has no `key:` to
+        // name — the message degrades to naming just the placeholder.
+        let yaml = "title: Daily\nlist:\n  - {{date}}\n";
+        let err = parse_yaml_map(yaml).unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, yaml);
+        assert!(msg.contains("{{date}}"), "{msg}");
+        assert!(msg.contains("is not YAML"), "{msg}");
+        assert!(!msg.contains("property ''"), "{msg}");
+    }
+
+    #[test]
     fn friendly_parse_error_hides_duplicate_key_policy_internals() {
         let yaml = "x: 1\nx: 2\n";
         let err = parse_yaml_map(yaml).unwrap_err();
-        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, yaml);
         assert!(
             !msg.contains("DuplicateKeyPolicy"),
             "leaked internal type name: {msg}"
@@ -1616,7 +1643,7 @@ Body.
             "~60 KiB frontmatter must parse under the documented 64 KiB budget: {:?}",
             result
                 .err()
-                .map(|e| friendly_parse_error(&e, MAX_FRONTMATTER_BYTES))
+                .map(|e| friendly_parse_error(&e, MAX_FRONTMATTER_BYTES, &yaml))
         );
     }
 

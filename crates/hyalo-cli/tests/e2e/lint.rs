@@ -836,6 +836,12 @@ commit = "["
         "---\ntitle: A\ntype: memory\nsources: []\n---\nBody\n",
     );
 
+    // UX-2 (DEC-362, iter-314): an unloadable `[schema]` now refuses `lint`
+    // outright — the same gate refusal a TOML syntax error already got
+    // (DEC-279) — instead of reporting the diagnostic as a promoted-severity
+    // `SCHEMA` violation inside an otherwise-normal lint run. `lint --strict`
+    // gated before this fix too, but via a different mechanism (a findings
+    // exit, not a refusal); this pins the unified shape.
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["lint", "--strict", "--format", "json"])
@@ -844,31 +850,25 @@ commit = "["
     assert_eq!(
         output.status.code().unwrap(),
         1,
-        "an uncompilable key-pattern must fail the schema"
+        "an uncompilable key-pattern must refuse the gate"
     );
-    // `Violation::kind` is `#[serde(skip)]`, so the JSON carries the message
-    // rather than the `schema/malformed` identifier; `--strict` promoting it to
-    // error severity is what proves the kind was matched.
-    let results: ExtLintOutput = typed_results(&output.stdout);
-    let malformed: Vec<&str> = results
-        .files
-        .iter()
-        .flat_map(|f| f.rule_groups.iter())
-        .flat_map(|g| g.violations.iter())
-        .filter(|v| v.severity == "error")
-        .map(|v| v.message.as_str())
-        .collect();
-    assert_eq!(malformed.len(), 1, "{malformed:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The refusal envelope goes to stderr even under --format json (DEC-307):
+    // stdout stays empty so a script can tell "no result" from "a result".
+    // It is pretty-printed (multi-line) and may follow a `warning:`/`error:`
+    // preamble line on the same stream, so take from the first `{` to the
+    // end rather than a single line.
+    let json_start = stderr.find('{').unwrap_or(0);
+    let envelope: serde_json::Value = serde_json::from_str(&stderr[json_start..])
+        .unwrap_or_else(|e| panic!("refusal must still be a JSON envelope: {e}\n{stderr}"));
+    let message = envelope["error"].as_str().unwrap_or_default();
     assert!(
-        malformed[0].contains("invalid [schema] in .hyalo.toml"),
-        "{malformed:?}"
+        message.contains("invalid [schema] in .hyalo.toml"),
+        "{message}"
     );
-    assert!(malformed[0].contains("property 'sources'"), "{malformed:?}");
-    assert!(
-        malformed[0].contains("key-patterns.commit"),
-        "{malformed:?}"
-    );
-    assert!(malformed[0].contains("invalid regex"), "{malformed:?}");
+    assert!(message.contains("property 'sources'"), "{message}");
+    assert!(message.contains("key-patterns.commit"), "{message}");
+    assert!(message.contains("invalid regex"), "{message}");
 
     // iter-276 (BUG-20): a `[schema]` that does not load is reported as
     // `malformed: true` too — the schema is gone and validates nothing, which
@@ -2754,6 +2754,36 @@ fn lint_corrupt_frontmatter_surfaces_hyalo005_all_formats() {
     );
 }
 
+/// HYALO005 on a Templater/Jekyll-style `{{date}}` placeholder names the
+/// offending key and says plainly it is not YAML, instead of the parser's
+/// bare "unexpected end of input" (dogfood-v0250 UX-10, iter-314).
+#[test]
+fn lint_template_placeholder_hyalo005_names_the_key() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "daily.md",
+        "---\ntitle: Daily\ncreated: {{date}}\n---\n# Body\n",
+    );
+
+    let json = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "daily.md"])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code().unwrap(), 1);
+    let results: ExtLintOutput = typed_results(&json.stdout);
+    let violation = &results.files[0].rule_groups[0].violations[0];
+    assert!(
+        violation.message.contains("property 'created'")
+            && violation.message.contains("{{date}}")
+            && violation.message.contains("is not YAML"),
+        "must name the key and the placeholder, not just the parser's own \
+         complaint; got:\n{}",
+        violation.message
+    );
+}
+
 /// A full-vault run includes the corrupt file in its counts and exits 1.
 #[test]
 fn lint_full_vault_counts_corrupt_file() {
@@ -4395,14 +4425,18 @@ patterns = ".*"
 }
 
 // ---------------------------------------------------------------------------
-// Review round finding 2: a malformed [schema] block must be a visible
-// lint-result violation, not just a `-q`-suppressible stderr warning --
-// `lint --strict` must exit non-zero, and non-strict must never print
-// "no issues" while validation is secretly disabled (DEC-096 follow-up).
+// Review round finding 2 (DEC-096 follow-up), superseded by UX-2 (DEC-362,
+// iter-314): a malformed [schema] block used to be a visible lint-result
+// violation under --strict and a `-q`-suppressible stderr warning under
+// plain `lint` -- so plain `lint` exited 0 with validation silently
+// disabled. `lint`'s exit code is a gate regardless of `--strict` (DEC-279),
+// so both forms now refuse outright with the DEC-290 envelope, exactly like
+// a `.hyalo.toml` that does not parse at all -- never a "no issues" exit 0,
+// and never a per-violation report either.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn lint_malformed_schema_strict_exits_nonzero_naming_the_bad_key() {
+fn lint_malformed_schema_strict_refuses_naming_the_bad_key() {
     let tmp = TempDir::new().unwrap();
     write_schema_toml(
         tmp.path(),
@@ -4427,31 +4461,35 @@ patterns = ".*"
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["lint", "--strict", "bad.md"])
+        .args(["lint", "--strict", "--format", "json", "bad.md"])
         .output()
         .unwrap();
 
     assert_eq!(
         output.status.code(),
         Some(1),
-        "malformed [schema] under --strict must exit non-zero; stdout: {} stderr: {}",
+        "malformed [schema] under --strict must refuse; stdout: {} stderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let results: ExtLintOutput = typed_results(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The refusal envelope goes to stderr even under --format json (DEC-307):
+    // stdout stays empty so a script can tell "no result" from "a result".
+    // It is pretty-printed (multi-line) and may follow a `warning:`/`error:`
+    // preamble line on the same stream, so take from the first `{` to the
+    // end rather than a single line.
+    let json_start = stderr.find('{').unwrap_or(0);
+    let envelope: serde_json::Value = serde_json::from_str(&stderr[json_start..])
+        .unwrap_or_else(|e| panic!("refusal must still be a JSON envelope: {e}\n{stderr}"));
+    let message = envelope["error"].as_str().unwrap_or_default();
     assert!(
-        results.errors > 0,
-        "results.errors must be nonzero: {results:?}"
-    );
-    let rendered = format!("{results:?}");
-    assert!(
-        rendered.contains("patterns"),
-        "the violation must name the bad key: {rendered}"
+        message.contains("patterns"),
+        "the refusal must name the bad key: {message}"
     );
 }
 
 #[test]
-fn lint_malformed_schema_non_strict_never_reports_no_issues() {
+fn lint_malformed_schema_non_strict_also_refuses() {
     let tmp = TempDir::new().unwrap();
     write_schema_toml(
         tmp.path(),
@@ -4474,34 +4512,38 @@ patterns = ".*"
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["lint", "bad.md"])
+        .args(["lint", "--format", "json", "bad.md"])
         .output()
         .unwrap();
 
-    // Non-strict: exit 0 (a warning doesn't fail the plain command)...
-    assert_eq!(output.status.code(), Some(0));
-    let results: ExtLintOutput = typed_results(&output.stdout);
-    // ...but results must never claim a clean run while schema validation is
-    // silently disabled: total violations and files_with_violations must be
-    // nonzero, and the malformed-schema key must be visible in the JSON.
-    assert!(
-        results.violations > 0,
-        "results.violations must be nonzero -- 'no issues' must never be reported \
-         while schema validation is silently disabled: {results:?}"
+    // `lint`'s exit code is a gate whether or not `--strict` was passed
+    // (DEC-279/DEC-362) -- a plain run must refuse too, never silently
+    // answer 0 with validation disabled.
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "plain lint must also refuse an unloadable [schema]; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The refusal envelope goes to stderr even under --format json (DEC-307):
+    // stdout stays empty so a script can tell "no result" from "a result".
+    // It is pretty-printed (multi-line) and may follow a `warning:`/`error:`
+    // preamble line on the same stream, so take from the first `{` to the
+    // end rather than a single line.
+    let json_start = stderr.find('{').unwrap_or(0);
+    let envelope: serde_json::Value = serde_json::from_str(&stderr[json_start..])
+        .unwrap_or_else(|e| panic!("refusal must still be a JSON envelope: {e}\n{stderr}"));
+    let message = envelope["error"].as_str().unwrap_or_default();
     assert!(
-        results.files_with_violations > 0,
-        "results.files_with_violations must be nonzero: {results:?}"
-    );
-    let rendered = format!("{results:?}");
-    assert!(
-        rendered.contains("patterns"),
-        "the malformed-schema diagnostic must name the bad key in results: {rendered}"
+        message.contains("patterns"),
+        "the malformed-schema diagnostic must name the bad key: {message}"
     );
 }
 
 #[test]
-fn lint_malformed_schema_text_format_shows_violation_not_no_issues() {
+fn lint_malformed_schema_text_format_shows_the_refusal_not_no_issues() {
     let tmp = TempDir::new().unwrap();
     write_schema_toml(
         tmp.path(),
@@ -4519,14 +4561,17 @@ patterns = ".*"
         .output()
         .unwrap();
 
+    assert_eq!(output.status.code(), Some(1));
+    // The refusal (text mode too) renders to stderr; stdout stays empty.
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.to_lowercase().contains("no issues"),
         "text output must not claim a clean run while schema is malformed: {stdout}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains(".hyalo.toml") || stdout.contains("patterns"),
-        "text output must surface the malformed-schema violation: {stdout}"
+        stderr.contains(".hyalo.toml") || stderr.contains("patterns"),
+        "stderr must surface the malformed-schema refusal: {stderr}"
     );
 }
 

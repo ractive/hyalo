@@ -7703,3 +7703,283 @@ brand new word joined by implicit AND) materially changes which documents
 match — a warning a script does not read still leaves it searching for the
 word "abc" it never typed as a search term, which is a correctness problem,
 not merely a confusing-but-harmless one.
+
+## DEC-362: an unloadable `[schema]` joins the gate refusal, scoped to gates only (2026-10-05)
+
+**Decision.** `lint` (with or without `--strict`) and `views run <view>` now
+refuse — exit 1 with the DEC-290 "unusable .hyalo.toml" envelope naming the
+schema diagnostic — when `.hyalo.toml` parsed fine but its `[schema]`
+section did not (`schema_invalid`/`schema_error`: an `enum` without
+`values`, an uncompilable `key-patterns` regex, and the rest of DEC-290's
+list). `find --strict` already did. A plain, non-gate write (`set` without
+`--validate`, `mv`, `task toggle`, …) is untouched and keeps writing on the
+empty fallback schema with the existing `-q`-proof warning.
+
+**Why.** `hyalo config` already reported this state as `malformed: true`
+alongside `schema_error` (iter-276, BUG-20), but `run::run`'s gate check
+(DEC-279) only ever looked at `config.malformed` — the field set exclusively
+for a TOML *syntax* error — never at the separate `schema_invalid` field a
+valid-TOML-but-invalid-`[schema]` file leaves behind. So `malformed: true`
+meant three different things depending on which command read it: a hard
+refusal for `find --strict`'s own schema-aware check, a promoted-but-still-
+reported violation for `lint --strict`, and nothing at all for plain `lint`
+or `views run` — which ran the view to completion, or (worse) answered
+"unknown view" with the real diagnostic buried on stderr, making the wrong
+error look like the actual problem (dogfood-v0250 UX-2). A caller that acts
+on `lint`'s or `views run`'s exit code has no way to tell "the schema I
+configured ran clean" from "there is no schema running at all" without
+separately parsing stderr for a warning `-q` can hide.
+
+**Where this had to be scoped, and why not wider.** `run::run`'s refusal
+check used to read:
+
+```rust
+if let Some(diagnostic) = config.malformed.as_deref()
+    && (cli.command.writes() || cli.command.gates())
+```
+
+one diagnostic, shared by both the *write* branch (DEC-279/DEC-307: a
+mutating command must not touch a vault + rule set it was never configured
+for) and the *gate* branch (DEC-279: a caller's exit code must reflect the
+real config). Folding `schema_invalid` into that same shared diagnostic
+would have widened *every* plain write's refusal too — exactly the outcome
+DEC-290 rejected by name ("Rejected: gating every write on a broken
+`[schema]`") for the identical reason: `dir`, `[lint] ignore` and the views
+are all intact when only `[schema]` failed, so a vault mid-schema-edit must
+stay usable for `hyalo mv`/`task toggle`/plain `set` — the tools used to
+*fix* the schema. So the new diagnostic is computed as
+`config.malformed.as_deref().or_else(|| cli.command.gates().then(||
+config.schema_invalid.as_deref()).flatten())`: `schema_invalid` is consulted
+**only** when `gates()` is true, leaving the write-only branch exactly as
+narrow as DEC-290 left it. `lint --fix` is both a write and a gate
+(`Commands::gates` returns `true` unconditionally for every `Lint` variant);
+under a bad `[schema]` it now refuses via the gate path, which is the
+correct side of DEC-290's line — `lint --fix`'s fixes are schema-aware, so
+"the schema fell back to empty" is exactly the vacuous-pass state DEC-279
+exists to catch, same as plain `lint`.
+
+**Consequences.** `views run` previously computed its own `has no `[schema]`
+problem` answer implicitly by never consulting it — `views run open` ran to
+completion and `views run <unknown>` printed "unknown view" with the real
+cause only on stderr. Both now refuse before the view name is even looked
+up, naming the schema diagnostic directly. `hyalo find` (no `--strict`)
+keeps answering on the fallback, per DEC-290's existing carve-out.
+
+**Rejected alternatives.** Making `hyalo config` stop reporting an invalid
+`[schema]` under `malformed: true` (the plan's other option): rejected
+because `malformed: true` is exactly the state a `[schema]` validating
+nothing *is* (DEC-290's own words: "'my schema validates nothing' is
+exactly the state `malformed` exists to make visible") — the bug was never
+the report, only the gate commands' failure to act on it. Reusing
+`config.malformed` unconditionally for both branches: rejected per DEC-290
+precedent above.
+
+**Where:** `crates/hyalo-cli/src/run.rs` (the `gate_diagnostic` computation
+right above the existing refusal `if`).
+[[iterations/iteration-314-config-files-and-yaml-leftovers]].
+
+## DEC-363: a literal backslash in a filename is a filename, not a path separator, off Windows (2026-10-05)
+
+**Decision.** Every place that turns a real, filesystem-derived path into a
+vault-relative display/lookup string — `discovery::normalize_path`,
+`strip_absolute_vault_prefix`, `strip_dir_prefix`, `relative_path`, `find`'s
+internal backlinks, `hyalo backlinks`, and batch `mv`'s glob-to-source
+resolution — now runs the replacement `\` → `/` only on Windows
+(`discovery::native_separator_to_forward_slash`). Everywhere else a `\` in a
+path that came from the filesystem is left exactly as the OS reported it.
+`notes/back\slash.md` (legal on macOS and Linux) is now reported, looked up
+by `--file`, matched by `--glob`, linted, and moved/set in a batch, under
+its real name; none of these commands rewrites it into the nonexistent
+`notes/back/slash.md` and then fails trying to open that path (exit 2).
+
+**Why.** `\` is the path separator on Windows and nowhere else — POSIX
+treats it as an ordinary filename byte, so a vault can legally contain
+`back\slash.md` on macOS or Linux. A blind, unconditional
+`path.replace('\\', "/")` — present at every one of the sites above —
+silently invented an extra path segment out of a literal character, so the
+string every subsequent lookup, glob match, or batch mutation used no
+longer named the file that was actually on disk. The bug surfaced as four
+different symptoms depending on which command hit it first (dogfood-v0250
+BUG-11): display showed the wrong name, `--file`/`--glob` could not find the
+real file, `lint` printed a confusing "skipping X (checking Y)" note while
+still counting the file as checked, and batch `mv`/`set --glob` crashed with
+a raw `io::Error` surfaced as an *internal* error (exit 2) — DEC-307
+reserves 2 for clap/internal failures, never a well-formed user input the
+filesystem itself accepted.
+
+**What stayed unconditional.** A markdown link target, a `--glob` pattern,
+a `--to`/`--dir` CLI argument, and `[scan] exclude`/`.ignore`-style config
+values are user-typed *text*, not an OS path: a vault author may deliberately
+write a Windows-style `sub\note.md` link target on any host platform, and
+hyalo's existing cross-platform link resolution already depends on that.
+`native_separator_to_forward_slash` is therefore only ever called on a
+string that came from `Path::to_string_lossy()` on a path the OS already
+resolved — never on raw CLI/link/glob text, which keeps its own unconditional
+normalization (documented at each call site).
+
+**Consequences.** `discovery::native_separator_to_forward_slash` is `pub`
+(previously it would have been crate-private) because `hyalo-cli`'s
+`prepared::selection`, `commands::find`, `commands::backlinks` and
+`commands::mv` all need it for the same reason `hyalo-core`'s own callers
+do. `mv --glob`'s `resolve_batch_sources` and `hyalo backlinks`'s
+`BacklinkItem::source` are the two `hyalo-cli`-side production call sites
+fixed under this iteration; a handful of lower-traffic sites that build a
+*destination* directory path from `--to` text during batch `mv` (reported
+only on a creation failure or rollback) were left on the unconditional
+replacement — they operate on lexically-constructed intermediate directory
+names rather than a source file's real OS path, which is exactly the "typed
+text" category this decision leaves alone, and dogfood-v0250 did not
+reproduce a failure through them.
+
+**Rejected alternatives.** Escaping or otherwise encoding a literal `\` in
+hyalo's own JSON/text output: rejected — the filesystem accepted the byte as
+written, and a JSON string value already represents it without ambiguity;
+inventing an escape convention would be a new surface for a problem that
+does not exist once the normalization itself stops firing on non-Windows.
+
+**Where:** `crates/hyalo-core/src/discovery.rs`
+(`native_separator_to_forward_slash`, `normalize_path`,
+`strip_absolute_vault_prefix`, `strip_dir_prefix`, `relative_path`),
+`crates/hyalo-cli/src/commands/find/mod.rs`,
+`crates/hyalo-cli/src/prepared/selection.rs`,
+`crates/hyalo-cli/src/commands/backlinks.rs`,
+`crates/hyalo-cli/src/commands/mv.rs` (`resolve_batch_sources`).
+[[iterations/iteration-314-config-files-and-yaml-leftovers]].
+
+## DEC-364: YAML 1.1 integer literal forms read as strings, closing the second half of DEC-350's core-schema contract (2026-10-05)
+
+**Decision.** `1_000` (digit-group underscores), `0X1F`/`0x1f` (hex) and
+`0b101` (binary) now parse as the **strings** they are written as, not the
+integers 1000/31/5. YAML 1.2's core schema has exactly one integer literal
+grammar, `[-+]?[0-9]+` (DEC-350), and none of these three match it; `set`
+already quoted all three on write before this fix (DEC-350's "digit run with
+underscores" and `0X1F` cases), so the write side and read side now agree.
+
+**Why, and why DEC-350's own mechanism didn't already catch this.**
+DEC-350's `resolve_core_int` slow path exists to re-check a scalar's source
+text against the core grammar, but it only ever ran when the **fast**
+`serde_json::Value` parse produced an **integral float** — the one shape a
+leading-zero decimal (`01234`) takes once serde-saphyr 1.x refuses to read
+it as an integer. `1_000`, `0X1F` and `0b101` are different: serde-saphyr
+resolves all three straight to a plain integer (`visit_i64`/`visit_u64`),
+with no float detour at all, so `has_integral_float`'s trigger never fired
+and `node_to_value`'s `Node::Number(n) => Value::Number(n)` arm passed the
+wrongly-resolved integer straight through unchecked.
+
+**The fix is two independent, complementary pieces.** (1) A cheap textual
+pre-check, `might_have_yaml11_int_form`, scans the raw frontmatter text for
+an underscore adjacent to a digit or a `0` immediately followed by
+`x`/`X`/`b`/`B`, and joins `has_integral_float` as a second trigger for the
+slow, span-based re-parse — deliberately over-eager (a false positive just
+costs a redundant re-parse; a snake_case key like `created_at`, where every
+underscore sits between two letters, never matches and stays on the fast
+path). (2) `node_to_value`'s `Node::Number` arm, not just its `Node::Float`
+arm, now reads the scalar's own source text through its byte span
+(`untagged_span_text`, factored out of the `Float` arm's existing logic) and
+runs it through `resolve_core_int`: a core match keeps the integer, anything
+else — including every YAML 1.1 form above — becomes the string as written.
+An explicit tag (`!!int 0x10`) is still never re-resolved, exactly as
+DEC-350 left the `Float` arm.
+
+**Consequences.** `find --fields properties-typed` reports `d: 1_000`,
+`p: 0X1F` and `q: 0b101` as `type: "text"`; `find --property p=31` no
+longer matches a file holding `p: 0X1F`. A value nested in a list or map
+is re-checked the same way (`node_to_value` recurses). Performance:
+`might_have_yaml11_int_form` is a single linear byte scan with no
+allocation, run once per frontmatter block only when the fast parse alone
+would otherwise have skipped the slow path — DEC-350's own measurements
+(the slow path costs roughly 2× on a block that needs it, and essentially
+nothing end-to-end) are unaffected by a textual pre-check this cheap, and no
+block in the repo vault, MDN, the Obsidian Hub or kepano-obsidian contains
+any of these three forms.
+
+**Rejected alternatives.** Triggering the slow path whenever the fast parse
+produced *any* `Number` (int or float), dropping the textual pre-check
+entirely: rejected — this would run the 2× slow path for every ordinary
+integer property (`priority: 3`, `rating: 5`) in every vault, exactly the
+cost DEC-350 measured and rejected for the leading-zero case, for no gain
+over the cheap textual scan. Disabling serde-saphyr's YAML 1.1 integer
+resolution via an `Options` flag: no such flag exists (checked against the
+1.3 API, same as DEC-350's own search for a leading-zero opt-out).
+
+**Where:** `crates/hyalo-core/src/frontmatter/parse.rs`
+(`might_have_yaml11_int_form`, `untagged_span_text`, `node_to_value`,
+`parse_yaml_map`, `parse_yaml_value`); pinned by
+`frontmatter::parse::yaml_tests::yaml11_integer_forms_resolve_as_strings`,
+`::yaml11_integer_forms_inside_quotes_are_untouched`,
+`::explicitly_tagged_yaml11_int_is_not_re_resolved`, and the e2e pins in
+`iteration310_yaml_parser.rs`.
+[[iterations/iteration-314-config-files-and-yaml-leftovers]]. Amends
+[[decision-log#DEC-350: serde-saphyr 1.x, with integer resolution and quoting hyalo owns (2026-10-04)]].
+
+## DEC-365: `find`, `summary` and `lint` agree a non-UTF-8 note is a problem (2026-10-05)
+
+**Decision.** A note whose body contains invalid UTF-8 bytes is now
+reported, every time, as a skip: `find` and `summary` (disk scan and
+`--index` alike) emit the same `-q`-proof "skipped N unreadable file(s)"
+warning `lint` already printed, and `summary`'s `results.files.skipped`
+counts it. The file still **appears** in `find`'s listing (it stays a note:
+frontmatter, tags and links are readable even when a later line in the body
+is not) and still answers `--file`/positional access (DEC-301's named-path
+promise) — only the *reporting* changed, from silence to the same warning
+every other unreadable-file case already gets.
+
+**Why.** `lint` refused the file outright (a `could not read file` error
+row); `find`'s plain listing and `summary` treated it as perfectly ordinary
+— `skipped: 0` — because the invalid-UTF-8 warning was wired to fire only
+when a BM25-tokenizing scan produced no tokens for the file (iter-265,
+DEC-350's BUG-14: "a BM25 build that produced no tokens... means the file
+was not valid UTF-8"). A plain `find`/`summary` run, and even a `find`
+restricted to `--fields file`, builds its scan with `bm25_tokenize: false`,
+so that signal never existed for them (dogfood-v0250 BUG-19) — three
+commands disagreeing about whether the same file is "readable."
+
+**The chosen resolution, and the one not taken.** The dogfood report's task
+framed two options: make every command agree the file is unreadable
+(`lint`'s side), or make `lint` read it lossily like `find` does (`find`'s
+side). The lossy option was rejected: it would make `lint` silently
+validate frontmatter and markdown structure recovered from a *lossy*
+re-encoding of the file's real bytes — exactly the kind of result computed
+from data that is not what is on disk that DEC-279's gate philosophy exists
+to prevent elsewhere. Unifying on "skip and count," already `lint`'s
+behavior, extends a convention every other unreadable-file case in hyalo
+already uses (unparsable frontmatter, a missing file under `--files-from`)
+rather than inventing a second one.
+
+**Mechanism.** `scanner::scan_one_file` already computed
+`ScanStats::valid_utf8` internally (previously used only to decide whether
+to emit BM25 tokens); it now also returns that bool, and `ScannedIndex`'s
+caller-facing scan loop uses it directly instead of inferring UTF-8 validity
+from "no BM25 tokens were produced" — so the warning fires regardless of
+`options.bm25_tokenize`. A **reused** entry (incremental `create-index`,
+where no fresh `ScanStats` exists because the file was not re-scanned)
+falls back to the old BM25-tokens-absent signal, which remains correct for
+that path since a reused entry was always scanned at some point with
+tokenizing on. `commands::build_scanned_index_with` — the shared
+`hyalo-cli` entry point behind `find`'s full listing *and* every
+`--fields`-narrowed projection including `--fields file` — picks up the
+same unconditional signal, which is what makes the warning appear even on
+the minimal `--fields file` listing that previously bypassed it entirely.
+
+**Consequences.** `summary`'s `files.skipped` and `files.total` now agree
+with `lint`'s notion of which files are "a problem" for every scan shape.
+No change to what is actually indexed or returned: a non-UTF-8 note was
+never excluded from `find`'s results and still is not — DEC-301's promise
+that a named path always answers is unaffected.
+
+**Rejected alternatives.** Making `lint` lossy instead (above). Excluding
+the file from `find`'s results entirely to match `lint`'s harder refusal:
+rejected because `lint`'s "could not read file" is a per-rule-engine
+refusal to validate structure it cannot safely parse, not a claim that the
+file does not exist as a note — `find --file` on it must keep answering
+(DEC-301), and a full listing dropping a real file outright would be a
+worse regression than an inconsistent warning.
+
+**Where:** `crates/hyalo-core/src/scanner/mod.rs` (`scan_one_file` return
+shape), `crates/hyalo-core/src/index.rs` (`ScannedIndex`'s scan loop),
+`crates/hyalo-cli/src/commands/mod.rs` (`build_scanned_index_with`'s
+warning classification). Pinned by
+`iteration255_followups::plain_find_listing_reports_the_non_utf8_file_as_skipped`,
+`::summary_counts_the_non_utf8_file_as_skipped`,
+`::named_access_to_the_non_utf8_file_still_answers`.
+[[iterations/iteration-314-config-files-and-yaml-leftovers]].

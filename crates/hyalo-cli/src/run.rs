@@ -1306,7 +1306,22 @@ fn run_inner() -> Result<(), AppError> {
     // reads, but a caller acts on their verdict, and a verdict computed without
     // `[lint] ignore` or the schemas is not the verdict the vault asked for.
     // Warning and exiting 0 turned a broken config into a green CI build.
-    if let Some(diagnostic) = config.malformed.as_deref()
+    //
+    // UX-2 (iter-314, DEC-362): a `[schema]` section that failed to load
+    // (`schema_invalid`) is exactly that same kind of promise-breaking state
+    // for a gate — `lint`'s whole job is validating against the schema — even
+    // though the rest of `.hyalo.toml` parsed fine and an ordinary write may
+    // still proceed on the empty fallback (DEC-290 already carves out
+    // `--validate`-specific refusal for that case, in `commands::mod::
+    // reject_write_with_unloadable_schema`). So `schema_invalid` only joins
+    // the refusal when the command is a gate, never merely because it writes.
+    let gate_diagnostic = config.malformed.as_deref().or_else(|| {
+        cli.command
+            .gates()
+            .then_some(config.schema_invalid.as_deref())
+            .flatten()
+    });
+    if let Some(diagnostic) = gate_diagnostic
         && (cli.command.writes() || cli.command.gates())
     {
         let kind = if cli.command.writes() {

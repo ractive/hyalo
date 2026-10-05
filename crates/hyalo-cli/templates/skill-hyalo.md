@@ -913,14 +913,18 @@ same vault, and `--index` reads drop them too (no rebuild needed after changing 
 Naming an excluded file explicitly (`--file Templates/x.md`) is **refused** with the matching
 glob, never silently skipped. `hyalo config` reports the effective list under
 `results.scan.exclude`.
-Discovery also honours `.gitignore`, `.ignore`, `.git/info/exclude` and global excludes the way Git does (DEC-342): an ignored note is absent
+Discovery also honours `.gitignore`, `.ignore`, `.git/info/exclude` and global excludes the way
+Git does (DEC-342, amended iter-314) — `.gitignore` only inside a git repository (a `.git`
+directory at or above the vault), like ripgrep; `.ignore` applies either way: an ignored note is absent
 from unscoped reads and counted under `summary`'s `results.files.excluded`, but a path you
 name (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 
 **A broken `.hyalo.toml` fails a gate:** `lint`, `find --strict` and `views run` exit 1 when the
 config does not parse, because their exit code is a verdict and a verdict computed without the
-config's `[lint] ignore` and schemas is not the one the vault asked for. Other reads still
-answer, with a warning `-q` cannot suppress.
+config's `[lint] ignore` and schemas is not the one the vault asked for. An unloadable `[schema]`
+alone (the rest of the config parses fine) refuses the same three gates — plain `lint` included
+(DEC-362, iter-314). Other reads, and a plain write without `--validate`, still answer/proceed,
+with a warning `-q` cannot suppress.
 
 `hyalo lint --count` returns just the number of files with violations.
 

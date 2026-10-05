@@ -61,18 +61,35 @@ pub fn hyalo_options() -> Options {
     options
 }
 
-/// Parse a YAML frontmatter block into an ordered mapping (DEC-350).
+/// Parse a YAML frontmatter block into an ordered mapping (DEC-350, DEC-364).
 ///
-/// serde-saphyr 1.x refuses a decimal with a leading zero as an integer
-/// and resolves it as a float (`zip: 01234` → `1234.0`). YAML 1.2's core
-/// schema, which Obsidian follows, reads `[-+]?[0-9]+` as an integer. Such
-/// a value always arrives as an integral float, so the fast parse is kept
-/// unless one appears. Only then is the block parsed again with source
-/// spans, and each integral float is re-resolved from its own text by
-/// [`resolve_core_int`]. A written `12.0` stays a float.
+/// Two gaps between serde-saphyr 1.x's scalar resolution and YAML 1.2's core
+/// schema (which Obsidian follows) are closed here, both by re-parsing the
+/// block with source spans and consulting [`resolve_core_int`] — the fast
+/// `serde_json::Value` parse carries no span, so this is the only way to see
+/// a scalar's original text:
+///
+/// 1. serde-saphyr refuses a decimal with a leading zero as an integer and
+///    resolves it as a float (`zip: 01234` → `1234.0`). Core reads
+///    `[-+]?[0-9]+` as an integer, so such a value always arrives as an
+///    integral float ([`has_integral_float`]).
+/// 2. serde-saphyr also resolves YAML 1.1's underscore-grouped (`1_000`),
+///    hex (`0X1F`) and binary (`0b101`) integer forms, none of which core
+///    accepts — these arrive as ordinary (non-float) integers, not floats,
+///    so they need their own cheap textual trigger
+///    ([`might_have_yaml11_int_form`]) rather than riding on
+///    `has_integral_float`.
+///
+/// The fast parse is kept unless one of the two triggers fires. Only then is
+/// the block parsed again with source spans: each integral float is
+/// re-resolved from its own text by `resolve_core_int` (becoming the integer
+/// on a core match, otherwise staying the float), and each plain integer
+/// whose own text is *not* a core match (`0X1F`, `1_000`, `0b101`) becomes
+/// the string as written. A written `12.0` stays a float; an explicitly
+/// tagged scalar (`!!int 0x10`) is never re-resolved either way.
 pub fn parse_yaml_map(yaml: &str) -> Result<IndexMap<String, Value>, serde_saphyr::Error> {
     let fast: IndexMap<String, Value> = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
-    if !fast.values().any(has_integral_float) {
+    if !fast.values().any(has_integral_float) && !might_have_yaml11_int_form(yaml) {
         return Ok(fast);
     }
     let spanned: IndexMap<String, Spanned<Node>> =
@@ -87,11 +104,38 @@ pub fn parse_yaml_map(yaml: &str) -> Result<IndexMap<String, Value>, serde_saphy
 /// a schema, for instance).
 pub fn parse_yaml_value(yaml: &str) -> Result<Value, serde_saphyr::Error> {
     let fast: Value = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
-    if !has_integral_float(&fast) {
+    if !has_integral_float(&fast) && !might_have_yaml11_int_form(yaml) {
         return Ok(fast);
     }
     let spanned: Spanned<Node> = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
     Ok(node_to_value(spanned, yaml))
+}
+
+/// Cheap textual pre-check: could `yaml`'s source contain a YAML 1.1 integer
+/// form (`1_000`, `0X1F`, `0b101`) that serde-saphyr would resolve to a
+/// plain integer with no float detour to catch it via
+/// [`has_integral_float`]?
+///
+/// Deliberately approximate and over-eager rather than a real scan of each
+/// scalar: an underscore adjacent to a digit, or a `0` immediately followed
+/// by `x`/`X`/`b`/`B`, triggers the slow span-based re-check even when the
+/// actual match turns out to sit inside a quoted string or a key (both
+/// handled correctly, just redundantly, by `node_to_value`). This keeps the
+/// common case — a snake_case key or tag, where every underscore sits
+/// between two letters — on the fast path, since `created_at` and
+/// `api_design` never match either pattern.
+fn might_have_yaml11_int_form(yaml: &str) -> bool {
+    let bytes = yaml.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| match b {
+        b'_' => {
+            bytes.get(i.wrapping_sub(1)).is_some_and(u8::is_ascii_digit)
+                || bytes.get(i + 1).is_some_and(u8::is_ascii_digit)
+        }
+        b'0' => bytes
+            .get(i + 1)
+            .is_some_and(|n| matches!(n, b'x' | b'X' | b'b' | b'B')),
+        _ => false,
+    })
 }
 
 /// Resolve a plain scalar's text as a YAML 1.2 core integer
@@ -217,26 +261,40 @@ fn follows_tag(before: &str) -> bool {
         .is_some_and(|token| token.starts_with('!'))
 }
 
+/// The scalar's own source text, read through its byte span, unless it
+/// follows an explicit YAML tag (`!!int 1_000`, `!!float 1`) — a tagged
+/// scalar means what its tag says, so it is never re-resolved against the
+/// core schema.
+fn untagged_span_text<'a>(node_span: &serde_saphyr::Span, source: &'a str) -> Option<&'a str> {
+    let start = usize::try_from(node_span.byte_offset()?).ok()?;
+    let end = start.checked_add(usize::try_from(node_span.byte_len()?).ok()?)?;
+    (!follows_tag(source.get(..start)?)).then_some(())?;
+    source.get(start..end)
+}
+
 /// Convert a spanned node to the `serde_json::Value` the fast path would
-/// have produced, except that an integral float whose source text is a core
-/// integer becomes that integer.
+/// have produced, except that a scalar serde-saphyr already resolved as a
+/// number is re-checked against the YAML 1.2 core schema (`[-+]?[0-9]+`):
+/// an integral float whose source text is a core integer becomes that
+/// integer (DEC-350), and conversely a plain integer whose source text used
+/// a YAML 1.1-only form — digit-group underscores (`1_000`), or a `0x`/`0b`
+/// prefix (`0X1F`, `0b101`) — becomes the string it was written as
+/// (BUG-14, amends DEC-350): YAML 1.2 core has no such literal, and `set`
+/// already quotes all three on write.
 fn node_to_value(node: Spanned<Node>, source: &str) -> Value {
     match node.value {
         Node::Null => Value::Null,
         Node::Bool(b) => Value::Bool(b),
-        Node::Number(n) => Value::Number(n),
+        Node::Number(n) => {
+            let span = node.defined.span();
+            match untagged_span_text(&span, source) {
+                Some(text) if resolve_core_int(text).is_none() => Value::String(text.to_owned()),
+                _ => Value::Number(n),
+            }
+        }
         Node::Float(f) => {
             let span = node.defined.span();
-            span.byte_offset()
-                .zip(span.byte_len())
-                .and_then(|(start, len)| {
-                    let start = usize::try_from(start).ok()?;
-                    let end = start.checked_add(usize::try_from(len).ok()?)?;
-                    // An explicitly tagged scalar (`!!float 1`) means what
-                    // its tag says; only an untagged one is re-resolved.
-                    (!follows_tag(source.get(..start)?)).then_some(())?;
-                    source.get(start..end)
-                })
+            untagged_span_text(&span, source)
                 .and_then(resolve_core_int)
                 .or_else(|| serde_json::Number::from_f64(f))
                 .map_or(Value::Null, Value::Number)
@@ -275,8 +333,24 @@ fn node_to_value(node: Spanned<Node>, source: &str) -> Value {
 /// verification pass parses with a *different* (2x) budget; a caller
 /// wiring that error path through here in the future must not get a
 /// message naming the wrong limit.
-pub(crate) fn friendly_parse_error(err: &serde_saphyr::Error, scalar_byte_limit: usize) -> String {
-    match unwrap_snippet(err) {
+///
+/// `source` is the raw frontmatter YAML text the error came from — needed
+/// only to recognize a template placeholder (`{{date}}`) at the error's own
+/// location (DEC, iter-314: HYALO005 on a Templater template used to say
+/// "line 6 column 11: unexpected end of input" with no hint that a bare `{`
+/// opens a YAML flow mapping, which is why `{{date}}` never closes).
+pub(crate) fn friendly_parse_error(
+    err: &serde_saphyr::Error,
+    scalar_byte_limit: usize,
+    source: &str,
+) -> String {
+    let inner = unwrap_snippet(err);
+    if let Some(location) = inner.location()
+        && let Some(hint) = template_placeholder_message(source, location)
+    {
+        return hint;
+    }
+    match inner {
         serde_saphyr::Error::Budget { breach, location } => with_location(
             &describe_budget_breach(breach, scalar_byte_limit),
             *location,
@@ -298,6 +372,41 @@ pub(crate) fn friendly_parse_error(err: &serde_saphyr::Error, scalar_byte_limit:
         // to reach their `location`/`breach`/`key` fields for matching.
         _ => err.to_string(),
     }
+}
+
+/// When a parse error's own location sits on a line holding a `{{...}}`
+/// template placeholder (Obsidian Templater, Jekyll/Liquid, Hugo), names the
+/// offending key and says plainly that the placeholder is not YAML, instead
+/// of the parser's generic complaint about the unclosed flow mapping a bare
+/// `{` opens. Scoped to the error's own line so an unrelated syntax error
+/// elsewhere in a file that merely *contains* a template tag is unaffected.
+fn template_placeholder_message(source: &str, location: serde_saphyr::Location) -> Option<String> {
+    if location == serde_saphyr::Location::UNKNOWN {
+        return None;
+    }
+    let line_index = usize::try_from(location.line()).ok()?.checked_sub(1)?;
+    let line = source.lines().nth(line_index)?;
+    let open = line.find("{{")?;
+    let close = line[open..].find("}}")? + open + 2;
+    let placeholder = &line[open..close];
+    let key = line[..open]
+        .trim()
+        .trim_start_matches('-')
+        .trim()
+        .trim_end_matches(':')
+        .trim();
+    let key_part = if key.is_empty() {
+        String::new()
+    } else {
+        format!("property '{key}': ")
+    };
+    Some(format!(
+        "{key_part}'{placeholder}' is not YAML — a template placeholder is not valid YAML \
+         syntax (the `{{`/`}}` braces are read as an unclosed YAML flow mapping) at line {}, \
+         column {}",
+        location.line(),
+        location.column()
+    ))
 }
 
 /// Append `" at line X, column Y"` — the same phrasing `serde_saphyr`'s own
@@ -901,7 +1010,7 @@ impl Document {
                 let props: IndexMap<String, Value> = parse_yaml_map(yaml).map_err(|e| {
                     anyhow::Error::new(FrontmatterError(format!(
                         "failed to parse YAML frontmatter: {}",
-                        friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
+                        friendly_parse_error(&e, MAX_FRONTMATTER_BYTES, yaml)
                     )))
                 })?;
                 (props, compact)
@@ -1622,7 +1731,7 @@ pub fn read_frontmatter_from_reader<R: BufRead>(mut reader: R) -> Result<IndexMa
     parse_yaml_map(yaml).map_err(|e| {
         anyhow::Error::new(FrontmatterError(format!(
             "failed to parse YAML frontmatter: {}",
-            friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
+            friendly_parse_error(&e, MAX_FRONTMATTER_BYTES, yaml)
         )))
     })
 }
@@ -1837,6 +1946,46 @@ mod yaml_tests {
             Value::Object(props.into_iter().collect()),
             json!({"m": {"zip": 1234, "list": [7, "08", 1.0], "flow": [1, -2, 3, 4.5]}, "n": 12.0})
         );
+    }
+
+    #[test]
+    fn yaml11_integer_forms_resolve_as_strings() {
+        // BUG-14 / DEC-364: digit-group underscores, hex and binary
+        // integer forms are YAML 1.1, not YAML 1.2 core, and serde-saphyr
+        // resolves them straight to a plain integer (no float detour), so
+        // this exercises `might_have_yaml11_int_form`'s trigger as well as
+        // `node_to_value`'s re-check.
+        let props = parse_yaml_map(
+            "d: 1_000\np: 0X1F\nq: 0b101\nlist: [1_000, 5]\nkey_1: ok\ncreated_at: 2026-01-01\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Value::Object(props.into_iter().collect()),
+            json!({
+                "d": "1_000",
+                "p": "0X1F",
+                "q": "0b101",
+                "list": ["1_000", 5],
+                "key_1": "ok",
+                "created_at": "2026-01-01",
+            })
+        );
+    }
+
+    #[test]
+    fn yaml11_integer_forms_inside_quotes_are_untouched() {
+        // A quoted scalar is a `Node::String` long before `node_to_value`
+        // ever sees it, so the trigger firing on its text (for the slow
+        // path) must not change the outcome.
+        let props = parse_yaml_map("d: \"1_000\"\np: '0X1F'\n").unwrap();
+        assert_eq!(props["d"], json!("1_000"));
+        assert_eq!(props["p"], json!("0X1F"));
+    }
+
+    #[test]
+    fn explicitly_tagged_yaml11_int_is_not_re_resolved() {
+        let props = parse_yaml_map("d: !!int 0x10\n").unwrap();
+        assert_eq!(props["d"], json!(16));
     }
 
     #[test]

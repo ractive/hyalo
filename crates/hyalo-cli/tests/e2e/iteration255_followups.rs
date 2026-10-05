@@ -382,6 +382,81 @@ fn non_utf8_wording_does_not_leak_onto_other_read_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// BUG-19 (dogfood-v0250, iter-314, DEC-365): `find`, `summary` and `lint`
+// agree a non-UTF-8 note is a problem worth reporting, instead of `find`'s
+// plain listing and `summary` treating it as an ordinary file with nothing
+// to say while `lint` refused it outright.
+//
+// The entry itself still stays in `find`'s listing and answers `--file`
+// (DEC-301: a named path is a promise; iter-265/DEC-350's disk/index BM25
+// parity also depends on it) — only the *reporting* is unified: every scan
+// now records the same skip warning and count that only a BM25-tokenizing
+// scan recorded before, so `summary`'s `files.skipped` stops under-counting
+// and the collapsed skip line prints on a plain listing too.
+// ---------------------------------------------------------------------------
+
+/// `bad.md`'s *frontmatter* parses fine (`title: Bad`); only the body has
+/// invalid bytes, so it still appears in a plain listing — but the skip is
+/// now reported there too, not just on a search that happens to tokenize.
+///
+/// Uses the default fields (which need an exact line count, so the whole
+/// body is read) rather than `--fields file` — a pure filename listing never
+/// touches the body at all, and deliberately never flags UTF-8 validity from
+/// a prefix read that could end mid-character (see `ScanStats::valid_utf8`).
+#[test]
+fn plain_find_listing_reports_the_non_utf8_file_as_skipped() {
+    let tmp = utf8_vault();
+    let found = run_json(&tmp, &["find"]);
+    let files: Vec<&str> = found["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"bad.md") && files.contains(&"good.md"),
+        "both files are still listed as notes: {files:?}"
+    );
+
+    let quiet = run(&tmp, &["find"]);
+    let err = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        err.contains("skipped 1 unreadable file"),
+        "a plain listing must now report the skip too: {err}"
+    );
+}
+
+#[test]
+fn summary_counts_the_non_utf8_file_as_skipped() {
+    let tmp = utf8_vault();
+    let summary = run_json(&tmp, &["summary"]);
+    assert_eq!(
+        summary["results"]["files"]["skipped"].as_u64(),
+        Some(1),
+        "summary must agree with lint that bad.md is a problem: {summary}"
+    );
+    assert_eq!(
+        summary["results"]["files"]["total"].as_u64(),
+        Some(2),
+        "both files are still counted as notes: {summary}"
+    );
+}
+
+/// A file named explicitly is still a promise (DEC-301): `--file bad.md`
+/// keeps answering with whatever metadata could be read.
+#[test]
+fn named_access_to_the_non_utf8_file_still_answers() {
+    let tmp = utf8_vault();
+    let found = run_json(
+        &tmp,
+        &["find", "--file", "bad.md", "--fields", "file,title"],
+    );
+    let results = found["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{found}");
+    assert_eq!(results[0]["file"], "bad.md");
+}
+
+// ---------------------------------------------------------------------------
 // UX-5: `new` has no --property, and now says where properties are set
 // ---------------------------------------------------------------------------
 

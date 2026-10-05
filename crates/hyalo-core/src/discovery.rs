@@ -1482,7 +1482,7 @@ pub fn strip_absolute_vault_prefix(dir: &Path, path_arg: &str) -> Option<String>
     {
         return None;
     }
-    let s = stripped.to_string_lossy().replace('\\', "/");
+    let s = native_separator_to_forward_slash(&stripped.to_string_lossy()).into_owned();
     if s.is_empty() { None } else { Some(s) }
 }
 
@@ -1507,17 +1507,21 @@ pub fn strip_dir_prefix(dir: &Path, normalized: &str) -> Option<String> {
         norm_path.strip_prefix(last).ok()
     })?;
 
-    let s = stripped.to_string_lossy().replace('\\', "/");
+    let s = native_separator_to_forward_slash(&stripped.to_string_lossy()).into_owned();
     if s.is_empty() { None } else { Some(s) }
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
+///
+/// The separator normalization only fires on Windows (BUG-11, iter-314): a
+/// `\` typed on macOS/Linux is a literal filename byte, not a path
+/// separator, so `--file 'notes/back\slash.md'` must reach `resolve_file`
+/// unchanged there.
 pub fn normalize_path(path: &str) -> String {
-    let normalized = path.replace('\\', "/");
+    let normalized = native_separator_to_forward_slash(path);
     normalized
         .strip_prefix("./")
-        .unwrap_or(&normalized)
-        .to_owned()
+        .map_or_else(|| normalized.clone().into_owned(), str::to_owned)
 }
 
 /// Check if a path argument is a glob or negation pattern.
@@ -1701,6 +1705,31 @@ pub fn match_globs(
     Ok(matched)
 }
 
+/// Normalize the native path separator of an already-OS-derived path string
+/// to `/`.
+///
+/// On Windows, `\` *is* the native separator, so this collapses it to `/` for
+/// consistent, platform-independent output and glob matching. Everywhere
+/// else a `\` is an ordinary filename byte with no separator meaning — the
+/// OS never splits a path on it — so a blind `replace('\\', "/")` would
+/// corrupt a literal backslash in a real file name into a bogus extra path
+/// segment (BUG-11, iter-314: `notes/back\slash.md` was reported, looked up
+/// and globbed as `notes/back/slash.md`, a path that does not exist).
+///
+/// Only call this on a string that already came from a real OS path (e.g.
+/// via [`Path::to_string_lossy`]). A markdown link target or a user-typed
+/// glob is free-form text that may deliberately use `\` as a Windows-style
+/// separator regardless of host platform, and normalizes unconditionally
+/// elsewhere (see [`crate::link_graph::normalize_target`]).
+#[must_use]
+pub fn native_separator_to_forward_slash(s: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) && s.contains('\\') {
+        std::borrow::Cow::Owned(s.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// Get the relative path of a file from a directory, using forward slashes on all platforms.
 #[must_use]
 pub fn relative_path(dir: &Path, file: &Path) -> String {
@@ -1708,8 +1737,9 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
         |_| file.to_string_lossy().to_string(),
         |p| p.to_string_lossy().to_string(),
     );
-    // Normalize to forward slashes for consistent output and glob matching on Windows.
-    raw.replace('\\', "/")
+    // Normalize to forward slashes for consistent output and glob matching on
+    // Windows; a literal backslash elsewhere is left alone (BUG-11).
+    native_separator_to_forward_slash(&raw).into_owned()
 }
 
 /// Errors specific to file resolution.
@@ -3891,11 +3921,34 @@ mod tests {
 
     #[test]
     fn resolve_file_strips_leading_dot_backslash() {
+        // BUG-11 (iter-314): `\` is the native separator only on Windows, so
+        // `.\note.md` strips to `note.md` there but is a literal one-segment
+        // filename (containing a backslash byte) everywhere else — exactly
+        // the BUG-11 fix, pinned the other way by
+        // `resolve_file_treats_a_literal_backslash_as_a_filename_byte` below.
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "").unwrap();
 
-        let (_, rel) = resolve_file(tmp.path(), r".\note.md").unwrap();
-        assert_eq!(rel, "note.md");
+        if cfg!(windows) {
+            let (_, rel) = resolve_file(tmp.path(), r".\note.md").unwrap();
+            assert_eq!(rel, "note.md");
+        } else {
+            assert!(resolve_file(tmp.path(), r".\note.md").is_err());
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_file_treats_a_literal_backslash_as_a_filename_byte() {
+        // On macOS/Linux a backslash is a legal filename byte, not a path
+        // separator (BUG-11, iter-314): `notes/back\slash.md` must resolve
+        // to the file that is actually named that, not `notes/back/slash.md`.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("notes")).unwrap();
+        fs::write(tmp.path().join("notes").join("back\\slash.md"), "").unwrap();
+
+        let (_, rel) = resolve_file(tmp.path(), "notes/back\\slash.md").unwrap();
+        assert_eq!(rel, "notes/back\\slash.md");
     }
 
     #[test]

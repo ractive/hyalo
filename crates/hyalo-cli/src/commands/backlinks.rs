@@ -113,7 +113,12 @@ pub fn backlinks(
         .iter()
         .take(take_n)
         .map(|e| BacklinkItem {
-            source: e.source.to_string_lossy().replace('\\', "/"),
+            // BUG-11 (iter-314): `e.source` is a real vault-relative OS path,
+            // not user-typed text — a literal backslash in it must survive.
+            source: hyalo_core::discovery::native_separator_to_forward_slash(
+                &e.source.to_string_lossy(),
+            )
+            .into_owned(),
             line: e.line,
             target: rel.clone(),
             written_target: e.link.target.clone(),

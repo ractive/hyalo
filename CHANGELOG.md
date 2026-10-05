@@ -242,6 +242,36 @@ and this project adheres to
 - `find` marks a file it did not read because it exceeds the size limit with
   `skipped: "oversized"`, and a named oversized file is announced on stderr
   even under `-q` (DEC-301); `lint` reports such a file once instead of twice.
+- A filename containing a literal backslash (`notes/back\slash.md`, legal on
+  macOS and Linux) is reported, looked up by `--file`, matched by `--glob`,
+  and moved/set in a batch under its real name, instead of being silently
+  rewritten into a nonexistent `back/slash.md` and failing to open it — batch
+  `mv`/`set --glob` no longer crash with an internal `io::Error` (exit 2) on
+  one (DEC-363, dogfood-v0250 BUG-11).
+- `init --codex` keeps a CRLF `AGENTS.md` pure CRLF through install, re-init
+  and `deinit`, matching the CRLF detection `init --claude` already applied
+  to `.claude/CLAUDE.md` (dogfood-v0250 BUG-12).
+- `1_000`, `0X1F` and `0b101` now read as the strings they are written as,
+  not the integers 1000/31/5 — YAML 1.2 core has no such integer literal
+  (DEC-364, amends DEC-350, dogfood-v0250 BUG-14). `set` already wrote all
+  three quoted.
+- `find`, `summary` and `lint` agree a note with invalid UTF-8 bytes in its
+  body is a problem: every scan now reports and counts the same skip `lint`
+  already refused the file over, instead of `find`'s plain listing and
+  `summary` treating it as perfectly readable (DEC-365, dogfood-v0250
+  BUG-19). The file still appears in listings and still answers `--file`.
+- `HYALO005` names the offending property and says plainly that a
+  `{{date}}`-style template placeholder is not YAML, instead of the parser's
+  bare "unexpected end of input" (dogfood-v0250 UX-10).
+- The claims paragraph in `.claude/CLAUDE.md` and the bundled
+  `rule-knowledgebase.md`/`skill-hyalo.md` templates now say `.gitignore` is
+  honoured only inside a git repository (ripgrep's own rule), where `.ignore`
+  applies either way — the code already worked this way; only the wording
+  claimed otherwise (dogfood-v0250 UX-10).
+- `set --help`'s coercion table no longer claims a date needs a schema to be
+  typed: `set --property x=2026-01-01` already writes it unquoted and it
+  reads back as `date` from the value's own shape, with or without one
+  (dogfood-v0250 UX-10).
 
 ### Removed
 
@@ -266,6 +296,15 @@ and this project adheres to
   to load and then fail every value at lint time; it is now refused as
   malformed (`hyalo config` reports `schema_error`), and `types set` refuses
   to write one. Add the allowed values or drop the constraint.
+- **Breaking: `lint` and `views run` refuse an unloadable `[schema]`.**
+  `hyalo config` already reported this as `malformed: true`, but only
+  `lint --strict` and `find --strict` refused the gate; plain `lint` exited
+  0 with a warn-level `SCHEMA` row and `views run <view>` ran the view
+  anyway. All four gate commands now behave identically to a `.hyalo.toml`
+  that does not parse at all: exit 1 with the "unusable .hyalo.toml"
+  envelope naming the schema diagnostic (DEC-362, dogfood-v0250 UX-2). A
+  plain write (`set` without `--validate`, `mv`, `task toggle`, …) is
+  unaffected and keeps writing on the empty fallback schema.
 - **Breaking: snapshot format 4.** Indexes written by earlier versions are
   refused (the run falls back to a disk scan with a warning); rebuild them with
   `hyalo create-index`. Ranked scores and result order change: title, heading
@@ -312,7 +351,8 @@ and this project adheres to
   duplicate key. The emitter now quotes `---`, `...`, `0X1F` and a `<<` key
   (which YAML reads as a merge key), all of which it used to write plain. So
   `set k=0X1F` stores the string `"0X1F"`, where it used to write `k: 0X1F`,
-  which read back as 31.
+  which read back as 31. `1_000`, `0X1F` and `0b101` read as strings too now
+  (DEC-364) — see Fixed, below.
 - The internal `xtask` tooling moved to syn 3. Other Rust dependencies, the npm package's dev
   dependencies, and the CI actions (`actions/checkout` v7,
   `actions/setup-node` v7, `actions/upload-artifact` v7,

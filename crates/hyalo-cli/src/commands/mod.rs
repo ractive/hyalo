@@ -819,12 +819,13 @@ pub(crate) fn build_scanned_index_with(
         ));
     }
 
-    // Same distinction `create_index` makes: a warning is the BUG-14
+    // Same distinction `create_index` makes: a warning is the BUG-14/BUG-19
     // invalid-UTF-8 notice (`Other`) or an unparsable-frontmatter skip
-    // (`Frontmatter`) depending on which one produced it. `options.bm25_tokenize`
-    // is `false` at every current call site of this function, so the UTF-8
-    // message never actually appears here today — but tagging it correctly
-    // costs nothing and keeps this in sync if that changes.
+    // (`Frontmatter`) depending on which one produced it. Since BUG-19
+    // (iter-314) `ScannedIndex::build*` reports the invalid-UTF-8 case
+    // regardless of `options.bm25_tokenize`, so this now fires at every
+    // call site of this function — not just a BM25-tokenizing one — keeping
+    // `find`'s plain listing and `summary` in step with `lint`.
     for w in &build.warnings {
         let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
             hyalo_core::warn::SkipKind::Other

@@ -64,6 +64,53 @@ fn codex_install_update_remove_preserves_config_and_user_content() {
 }
 
 #[test]
+fn codex_preserves_crlf_line_endings_in_agents_md() {
+    // BUG-12 (dogfood-v0250): `init --codex` used to splice its managed block
+    // into AGENTS.md with plain LF even when the host file was pure CRLF,
+    // leaving a mixed-terminator file. `init --claude` already got this right
+    // for `.claude/CLAUDE.md`; this pins the same contract for AGENTS.md
+    // across install, re-init and deinit.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::write(root.join("AGENTS.md"), "# Agents\r\n\r\nline.\r\n").unwrap();
+    ok(root, &["init", "--dir", ".", "--codex"]);
+    let agents = fs::read(root.join("AGENTS.md")).unwrap();
+    let agents_text = String::from_utf8(agents.clone()).unwrap();
+    assert!(
+        !agents_text.contains("\r\r"),
+        "no doubled carriage returns: {agents_text:?}"
+    );
+    let lone_lf = agents_text
+        .match_indices('\n')
+        .filter(|(i, _)| *i == 0 || agents_text.as_bytes()[*i - 1] != b'\r')
+        .count();
+    assert_eq!(
+        lone_lf, 0,
+        "every line ending must be CRLF, found a bare LF: {agents_text:?}"
+    );
+    assert!(agents_text.starts_with("# Agents\r\n\r\nline.\r\n"));
+
+    // Re-init (update path) must also stay pure CRLF.
+    ok(root, &["init", "--codex"]);
+    let agents_text_2 = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    let lone_lf_2 = agents_text_2
+        .match_indices('\n')
+        .filter(|(i, _)| *i == 0 || agents_text_2.as_bytes()[*i - 1] != b'\r')
+        .count();
+    assert_eq!(
+        lone_lf_2, 0,
+        "re-init must stay pure CRLF: {agents_text_2:?}"
+    );
+
+    // deinit restores the host file byte for byte.
+    ok(root, &["deinit"]);
+    assert_eq!(
+        fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "# Agents\r\n\r\nline.\r\n"
+    );
+}
+
+#[test]
 fn codex_profiles_are_recovered_and_scanned_in_their_real_location() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();

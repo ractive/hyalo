@@ -484,7 +484,12 @@ fn resolve_batch_sources(
 
     for abs_path in glob_filtered {
         let rel = match abs_path.strip_prefix(dir) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+            // BUG-11 (iter-314): `r` is a real OS path from the filesystem
+            // walk, not user-typed glob text — a literal backslash in it
+            // (legal on macOS/Linux) must survive, not be corrupted into a
+            // bogus extra path segment that then fails to open.
+            Ok(r) => hyalo_core::discovery::native_separator_to_forward_slash(&r.to_string_lossy())
+                .into_owned(),
             Err(_) => continue,
         };
 
