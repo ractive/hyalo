@@ -2253,7 +2253,10 @@ fn write_snapshot(
         site_prefix,
         bm25_index,
         attachments,
-        crate::rooted::WriteSession::new(crate::rooted::Durability::PerFile),
+        // `PerDirectory` defers the parent-directory fsync to `finish()`, the
+        // same fence `PerFile` pays inside the commit, so `stamp_published`
+        // can run between the rename and that fsync (DEC-368).
+        crate::rooted::WriteSession::new(crate::rooted::Durability::PerDirectory),
     )
 }
 
@@ -2366,12 +2369,40 @@ fn write_snapshot_with_session(
         }
         Err(error) => return Err(error.into()),
     };
+    // Immediately after the rename, before the directory fsync in
+    // `finish()`: a slow fsync must not push the stamp past the tolerance
+    // from the rename's directory bump (DEC-368).
+    stamp_published(&publication_path);
+    #[cfg(test)]
+    test_hooks::before_finish();
     let finalization_error = effect
         .finalization_error()
         .map(str::to_owned)
         .or_else(|| session.finish().err().map(|error| error.to_string()));
-    stamp_published(&publication_path);
     Ok(SnapshotWriteOutcome { finalization_error })
+}
+
+/// Test-only seam: an injected delay between the publishing rename and the
+/// session's directory fsync, standing in for a slow `fsync`.
+#[cfg(test)]
+mod test_hooks {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    thread_local! {
+        static FINISH_DELAY: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    pub(super) fn set_finish_delay(delay: Duration) {
+        FINISH_DELAY.with(|d| d.set(delay));
+    }
+
+    pub(super) fn before_finish() {
+        let delay = FINISH_DELAY.with(Cell::get);
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+    }
 }
 
 /// Set the freshly published snapshot file's mtime to now (DEC-368).
@@ -3093,6 +3124,40 @@ mod iso_tests {
             snapshot_drift(&index, dir.path()),
             vec!["sub/d.md".to_owned()]
         );
+    }
+
+    /// The stamp is taken right after the rename, before the directory
+    /// fsync: with a 2.5 s delay injected in front of `finish()` (a slow
+    /// fsync), the file's mtime still coincides with the directory bump.
+    #[test]
+    fn stamp_precedes_a_slow_directory_fsync() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "# A\n").unwrap();
+        let build = ScannedIndex::build(
+            &[(dir.path().join("a.md"), "a.md".to_owned())],
+            None,
+            &ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        test_hooks::set_finish_delay(std::time::Duration::from_millis(2500));
+        let saved = SnapshotIndex::save(&build.index, &snap, &vault, None, None);
+        test_hooks::set_finish_delay(std::time::Duration::ZERO);
+        saved.unwrap();
+        let file = dir_mtime_secs(&snap);
+        let root = dir_mtime_secs(dir.path());
+        assert!(
+            file.abs_diff(root) <= STALENESS_TOLERANCE_SECS,
+            "stamp must be taken before the slow fsync: file {file}, dir {root}"
+        );
+        let index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        assert!(!tree_moved(&index, dir.path()));
     }
 
     /// With the index file outside the vault nothing is exempt.

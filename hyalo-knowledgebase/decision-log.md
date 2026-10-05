@@ -8496,9 +8496,11 @@ the vault, forever. The second backlog item of iteration 317 asked whether
 **Decision** (iteration 317,
 [[iterations/iteration-317-backlog-leftovers-before-0250]]).
 
-- *Stamp.* After the publishing rename (and the session's directory fsync),
-  the snapshot file's mtime is set to now (`stamp_published`, metadata
-  only). The temp file's own mtime is fixed at its last `write()`, before
+- *Stamp.* Immediately after the publishing rename, the snapshot file's
+  mtime is set to now (`stamp_published`, metadata only). The snapshot write
+  defers its directory fsync to the session's `finish()` (`PerDirectory`,
+  the same fence), and the stamp runs before it, so a slow directory fsync
+  cannot push the stamp past the tolerance either. The temp file's own mtime is fixed at its last `write()`, before
   `sync_all` and the rename, so without the stamp a slow fsync still left
   the directory bump seconds after the file's mtime. Best-effort: if the
   stamp fails, the probe is merely conservative (it reports a moved tree
