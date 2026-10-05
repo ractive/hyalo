@@ -58,7 +58,7 @@ recent_files: Array<RecentFile>,
 schema?: LintSummary,
 /**
  * Format version of the snapshot this summary was computed from
- * (G4 / BUG-12, iter-276), or `None` for a disk scan.
+ * (G4 / BUG-12, iter-276), omitted for a disk scan.
  *
  * An agent comparing it against `hyalo config`'s
  * `snapshot_format_version` can tell an index this binary would refuse
@@ -70,7 +70,7 @@ index_format_version?: number,
  * (`"index"` or `"skip"`) — present whenever a snapshot was consulted,
  * including one this run refused (BUG-8, iter-313), so a mismatch
  * against `hyalo config`'s reported setting is visible without
- * re-running under `-q` stripped off. `None` when no snapshot was
+ * re-running under `-q` stripped off. Omitted when no snapshot was
  * requested, or a refused one's code_blocks could not be determined
  * (an old-format refusal, BUG-7).
  */
@@ -79,7 +79,7 @@ code_blocks?: string,
  * Where this summary's data actually came from: `"index"` when a
  * snapshot was loaded and used, `"disk"` when a scan answered —
  * including every case where `--index`/`--index-file` was given but the
- * snapshot was refused (iter-313). `None` when no snapshot was requested
- * at all.
+ * snapshot was refused (iter-313). Omitted when no snapshot was
+ * requested at all.
  */
 source?: string, };

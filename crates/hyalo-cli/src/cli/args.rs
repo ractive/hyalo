@@ -1074,8 +1074,9 @@ pub(crate) enum Commands {
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
             `truncated: true` appears whenever --limit (or the default 50-item cap) cut \
             `results` short of `total`; the key is omitted (never `false`) when nothing was \
-            cut, or for a non-list result. Pass --limit 0 for the full set — every shipped \
-            --jq recipe that walks `.results[]` does.\n\
+            cut. --jq and --count already lift the default cap on their own (only an \
+            explicit --limit still caps under them), so `truncated` matters mainly under \
+            plain --format json; pass --limit 0 for the full set either way.\n\
             Each item carries the default field set — file, modified, size, lines, title, \
             properties, tags — where `title` is promoted out of `properties`. \
             --fields adds sections, tasks, links, backlinks and properties-typed, and an \

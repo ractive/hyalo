@@ -374,16 +374,24 @@ Prefer `hyalo` CLI for operations on files in this directory:
   files (size + mtime) are reused, the rest re-scanned (`reused`/`refreshed`/`removed`/`rebuilt`);
   `--force` rebuilds from scratch and never loads the old snapshot first. An `--index` read
   re-scans drifted files in memory with a `-q`-proof note and never writes the snapshot.
-  A rerun that changed nothing at all leaves the snapshot file untouched and reports
-  `written: false` (iter-313). Current-format snapshots only — an older one, or one built
-  under a different `[search] code_blocks` than the config, is refused with a `-q`-proof
-  warning naming both values (DEC-360); `summary --index` reports `index_format_version`,
-  `code_blocks` and `source` ("index" or "disk") even on a refused snapshot, rather than
-  `index_format_version: null`.
-- **Result caps are visible in JSON, not just text** (UX-5, iter-313): `find`'s envelope
-  carries `truncated: true` whenever `--limit` (or the default 50-item cap) cut `results`
-  short of `total`, omitted — never `false` — otherwise. Pass `--limit 0` for the full set;
-  every `--jq` recipe above that walks `.results[]` does.
+  A rerun that changed nothing at all — same entry count, frontmatter-skip list,
+  `scan_excluded`/`scan_exclude`/`gitignore_dropped` and attachments, *and* a clean
+  directory-mtime probe (a dirty one, even `mkdir x; rmdir x`, forces a real write so
+  `created_at` cannot fall permanently behind the vault) — leaves the snapshot file
+  untouched and reports `written: false` (iter-313, amended in review). Current-format
+  (v7) snapshots only — an older one, or one built under a different `[search] code_blocks`
+  than the config (read from the header, never forcing BM25's lazy decode), is refused with
+  a `-q`-proof warning naming both values (DEC-360); `summary --index` reports
+  `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused
+  snapshot, rather than `index_format_version: null`.
+- **Result caps are visible in JSON, not just text** (UX-5, iter-313): any command whose
+  `results` is a bare array (`find`, `properties`, `tags`, `terms`, `task toggle`/`task
+  set`) carries `truncated: true` whenever `--limit` (or the default 50-item cap) cut it
+  short of `total`, omitted — never `false` — otherwise; a command whose `results` is an
+  object instead (`backlinks`, `lint`, `summary`) never carries it. `--jq`/`--count` already
+  lift the default cap on their own (an explicit `--limit` still caps even under them), so
+  `truncated` mainly matters under plain `--format json` — pass `--limit 0` there for the
+  full set.
 
 - **Suppression comments are scope-correct and typo-loud** (iter-276):
   `markdownlint-disable-next-line` protects the line *after* the comment and never its own — a

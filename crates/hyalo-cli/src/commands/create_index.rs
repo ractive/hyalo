@@ -4,9 +4,9 @@ use hyalo_core::bm25::{Bm25InvertedIndex, PreTokenizedInput, TOKENIZER_VERSION, 
 use hyalo_core::discovery;
 use hyalo_core::index::{
     IndexEntry, STALENESS_TOLERANCE_SECS, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex,
-    find_stale_indexes, format_mtime,
+    find_stale_indexes, format_mtime, newest_dir_mtime,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -207,14 +207,55 @@ pub fn create_index(
     // entries and BM25 postings were actually reused (see the `old_bm25`
     // fallback to `None` above), so this cannot fire on a first build or a
     // forced rebuild.
+    //
+    // Review round (PR #379): `reused == file_count` alone is not enough —
+    // it is also true when a file silently dropped out of `entries` (broken
+    // frontmatter: still "discovered" on disk, so not counted in `removed`,
+    // but no longer scannable), which would keep a stale entry under a
+    // skipped write. `prev.entries().len() == file_count` catches that: a
+    // dropped entry always shrinks `file_count` below what the previous
+    // snapshot held. The current run's own frontmatter-skip list, and the
+    // `[scan] exclude`/gitignore counters this walk just computed, must also
+    // match the previous header's — each is replayed verbatim by `summary
+    // --index` and friends instead of being recomputed, so a header a
+    // skipped write left behind must still describe the vault exactly, not
+    // just its entry count. And the cheap directory-mtime probe (DEC-280)
+    // must itself be clean: if a directory moved (a file added/removed/
+    // renamed anywhere, even one that nets back to the same entry set, e.g.
+    // `mkdir x; rmdir x`) since this snapshot's `created_at`, skip the
+    // no-op and fall through to a real write instead — otherwise `created_at`
+    // would never advance, `snapshot_drift`'s tree-moved check would stay
+    // permanently tripped (an extra missing-files walk on every future
+    // `--index` read, forever), and the on-disk file's own mtime would stay
+    // behind the vault's, making the stale-index hint fire forever even
+    // though every rerun keeps correctly finding nothing to do.
+    let current_skipped: BTreeSet<&str> = build
+        .warnings
+        .iter()
+        .filter(|w| w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE)
+        .map(|w| w.rel_path.as_str())
+        .collect();
+    let current_scan_excluded = discovery::scan_excluded_count() as u64;
+    let current_scan_exclude = discovery::scan_exclude_patterns();
+    let current_gitignore_dropped = discovery::gitignore_dropped_count() as u64;
     let no_op = !force
         && replacing_existing
         && !rebuilt
         && removed == 0
         && reused == file_count
-        && previous
-            .as_ref()
-            .is_some_and(|prev| prev.attachments() == attachments.as_slice());
+        && previous.as_ref().is_some_and(|prev| {
+            let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
+            let (_, _, created_at, _) = prev.header_info();
+            prev.entries().len() == file_count
+                && prev.attachments() == attachments.as_slice()
+                && prev_skipped == current_skipped
+                && prev.scan_excluded() == current_scan_excluded
+                && prev.scan_exclude() == current_scan_exclude
+                && prev.gitignore_dropped() == current_gitignore_dropped
+                && newest_dir_mtime(dir).is_none_or(|newest| {
+                    newest <= created_at.saturating_add(STALENESS_TOLERANCE_SECS)
+                })
+        });
 
     if no_op {
         let report = crate::commands::apply::ApplyReport {

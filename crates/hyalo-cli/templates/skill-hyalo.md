@@ -1046,9 +1046,13 @@ structure.
 
 Capped commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at
 most **50 results** by default to avoid flooding the context window. When results are truncated,
-output shows "showing N of M matches" and a hint to get all results; `find`'s JSON envelope also
-carries `truncated: true` in that case (omitted — never `false` — when nothing was cut), so a
-script can detect a sampled answer without comparing `results | length` to `total` itself.
+output shows "showing N of M matches" and a hint to get all results. Any command whose JSON
+`results` is a bare array — `find`, `properties`, `tags`, `terms`, `task toggle`/`task set` —
+also carries `truncated: true` in that case (omitted — never `false` — when nothing was cut), so
+a script can detect a sampled answer without comparing `results | length` to `total` itself; a
+command whose `results` is an object instead (`backlinks`, `lint`) never carries it. `--jq` and
+`--count` already lift the default cap on their own (an explicit `--limit` still caps even under
+them), so `truncated` matters mainly under plain `--format json`.
 
 `types list`, `views list` and `lint-rules list` emit a `total` (so `--count` works) but are
 *not* capped and reject `--limit` — they enumerate small fixed catalogs and always return
@@ -1107,10 +1111,14 @@ the index stays consistent across interleaved reads and writes.
 Re-running `hyalo create-index` is incremental: unchanged files (same size and mtime) are
 reused, only changed/new/removed ones are re-scanned (`reused`, `refreshed`, `removed`,
 `rebuilt` in the result); `--force` rebuilds from scratch and never loads the old snapshot
-first. A rerun that changed nothing at all leaves the snapshot file untouched and reports
-`written: false`. An `--index` read of a drifted snapshot re-scans just the drifted files in
-memory and says so on stderr — it never writes the snapshot, so run `create-index` to
-persist. An older-format snapshot, or one built under a different `[search] code_blocks`
-than the current config, is refused with a warning naming both values (survives `-q`) and
-the run falls back to a disk scan; `hyalo summary --index` reports `index_format_version`,
-`code_blocks` and `source` ("index" or "disk") even on a refused snapshot.
+first. A rerun that changed nothing at all — same entry count, frontmatter-skip list,
+`[scan] exclude`/gitignore counts, attachments, and a clean directory-mtime probe (a dirty
+one, even a directory that moved and moved back, forces a real write) — leaves the
+snapshot file untouched and reports `written: false`. An `--index` read of a drifted
+snapshot re-scans just the drifted files in memory and says so on stderr — it never writes
+the snapshot, so run `create-index` to persist. An older-format snapshot, or one built
+under a different `[search] code_blocks` than the current config (read straight from the
+snapshot header, never forcing a lazy BM25 decode), is refused with a warning naming both
+values (survives `-q`) and the run falls back to a disk scan; `hyalo summary --index`
+reports `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a
+refused snapshot.

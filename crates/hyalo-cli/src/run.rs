@@ -2201,31 +2201,35 @@ fn run_inner() -> Result<(), AppError> {
                     // `summary --index` had no way to show the mismatch.
                     // Refuse it exactly like the format-version case above,
                     // naming both settings.
-                    let index_skip_code_blocks = idx
-                        .bm25_index()
-                        .map(hyalo_core::bm25::Bm25InvertedIndex::skip_code_blocks);
+                    //
+                    // Read from the header (DEC-360 amended, PR #379 review),
+                    // never `bm25_index()`: that forces the lazy BM25
+                    // section's full decode on every `--index` load just to
+                    // read this one bool, roughly doubling the cost of every
+                    // command accepting `--index` on MDN — most of which
+                    // (summary, tags, properties, a plain `find --property`)
+                    // never otherwise touch BM25 at all.
+                    let index_skip_code_blocks = idx.skip_code_blocks();
                     let config_skip_code_blocks =
                         hyalo_core::bm25::search_settings().skip_code_blocks;
-                    if let Some(index_skip) = index_skip_code_blocks
-                        && index_skip != config_skip_code_blocks
-                    {
+                    if index_skip_code_blocks == config_skip_code_blocks {
+                        // Content refresh belongs to the prepared invocation,
+                        // after cardinality validation and rooted target checks.
+                        Some(idx)
+                    } else {
                         let label = |skip: bool| if skip { "skip" } else { "index" };
                         refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
                             format_version: idx.format_version(),
-                            code_blocks: Some(label(index_skip).to_owned()),
+                            code_blocks: Some(label(index_skip_code_blocks).to_owned()),
                         });
                         crate::warn::warn_always(format!(
                             "index was built with [search] code_blocks = \"{}\", this run's \
                              config says \"{}\"; falling back to disk scan — re-run \
                              create-index",
-                            label(index_skip),
+                            label(index_skip_code_blocks),
                             label(config_skip_code_blocks),
                         ));
                         None
-                    } else {
-                        // Content refresh belongs to the prepared invocation,
-                        // after cardinality validation and rooted target checks.
-                        Some(idx)
                     }
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();

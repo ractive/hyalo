@@ -1425,14 +1425,18 @@ pub(crate) fn run(
             let index_report = if let Some(snap) = snapshot_index.as_ref() {
                 IndexReport {
                     format_version: Some(snap.format_version()),
-                    code_blocks: snap.bm25_index().map(|b| {
-                        if b.skip_code_blocks() {
+                    // Read from the header (DEC-360 amended, PR #379
+                    // review), never `bm25_index()`: that forces the lazy
+                    // BM25 section's full decode just to read this one bool,
+                    // which `summary --index` otherwise never touches.
+                    code_blocks: Some(
+                        if snap.skip_code_blocks() {
                             "skip"
                         } else {
                             "index"
                         }
-                        .to_owned()
-                    }),
+                        .to_owned(),
+                    ),
                     source: Some("index".to_owned()),
                 }
             } else if let Some(refused) = ctx.refused_index.clone() {

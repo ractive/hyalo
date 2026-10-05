@@ -464,7 +464,14 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | default to `true` (assumed valid) forever, so
 /// |   |          | `summary --index`/`find --index` would permanently miss
 /// |   |          | a non-UTF-8 file a disk scan already reports |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
+/// | 7 | iter-313 | `SnapshotHeader.skip_code_blocks` (DEC-360 amended, PR
+/// |   | review   | #379 review) — checking a `[search] code_blocks`
+/// |   |          | mismatch used to call `bm25_index()`, forcing the lazy
+/// |   |          | BM25 section's full decode on every `--index` load just
+/// |   |          | to read one bool (`summary`/`tags`/`properties`/`find
+/// |   |          | --property` on MDN: ~2x slower). The setting now lives
+/// |   |          | on the header, read without touching the BM25 section |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -540,6 +547,19 @@ struct SnapshotHeader {
     /// unconditionally on load, same as `skipped`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     gitignore_dropped: u64,
+    /// The effective `[search] code_blocks` setting (`true` = `"skip"`) this
+    /// snapshot's BM25 postings were built under (DEC-360 amended, iter-313
+    /// PR #379 review).
+    ///
+    /// Read directly by the format-acceptance check instead of forcing the
+    /// lazy BM25 section's full decode (iter-313's original fix called
+    /// `bm25_index()` just to read this one bool, roughly doubling the cost
+    /// of every `--index` read on MDN: `summary` 0.46 s to 0.85 s, `tags`
+    /// 0.35 s to 0.72 s). `#[serde(default)]` only for forward decode safety
+    /// (a hypothetically newer binary's extra field) — every snapshot at or
+    /// above this format version always writes it.
+    #[serde(default)]
+    skip_code_blocks: bool,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -1654,6 +1674,57 @@ impl SnapshotIndex {
         &self.header.attachments
     }
 
+    /// How many files `[scan] exclude` dropped while this snapshot was built.
+    ///
+    /// iter-313 (BUG review): `create-index`'s no-op short-circuit needs this
+    /// to tell "the exclusion count this header carries is still accurate"
+    /// from "a file that matters to it changed since the build" — see
+    /// [`Self::scan_exclude`] and [`Self::gitignore_dropped`].
+    #[must_use]
+    pub fn scan_excluded(&self) -> u64 {
+        self.header.scan_excluded
+    }
+
+    /// The `[scan] exclude` patterns in effect when this snapshot was built.
+    ///
+    /// See [`Self::scan_excluded`].
+    #[must_use]
+    pub fn scan_exclude(&self) -> &[String] {
+        &self.header.scan_exclude
+    }
+
+    /// Vault-relative paths this build skipped for unparsable frontmatter.
+    ///
+    /// See [`Self::scan_excluded`]: `create-index`'s no-op short-circuit
+    /// compares this against the current run's own skip list, so a newly
+    /// broken (or newly fixed) file's frontmatter cannot leave this list
+    /// stale under a skipped write.
+    #[must_use]
+    pub fn skipped(&self) -> &[String] {
+        &self.header.skipped
+    }
+
+    /// How many `.md` files a VCS ignore source dropped while this snapshot
+    /// was built. See [`Self::scan_excluded`].
+    #[must_use]
+    pub fn gitignore_dropped(&self) -> u64 {
+        self.header.gitignore_dropped
+    }
+
+    /// The effective `[search] code_blocks` setting (`true` = `"skip"`) this
+    /// snapshot's BM25 postings were built under.
+    ///
+    /// Read directly from the header — never triggers the lazy BM25
+    /// section's decode, unlike `bm25_index().map(Bm25InvertedIndex::
+    /// skip_code_blocks)` (iter-313 PR #379 review: that call alone roughly
+    /// doubled every `--index` read's wall time on MDN, since checking for a
+    /// `code_blocks` mismatch is on the hot path of every command that
+    /// accepts `--index`, most of which never otherwise touch BM25 at all).
+    #[must_use]
+    pub fn skip_code_blocks(&self) -> bool {
+        self.header.skip_code_blocks
+    }
+
     // ------------------------------------------------------------------
     // Deserialization
     // ------------------------------------------------------------------
@@ -2190,6 +2261,7 @@ fn write_snapshot_with_session(
             .collect(),
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
         gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
+        skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -4021,6 +4093,7 @@ Content.
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
+                skip_code_blocks: false,
             },
             entries,
             graph: &graph,
@@ -4387,6 +4460,7 @@ Content.
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
+                skip_code_blocks: false,
             },
             bm25_index: Some(&original),
             entries: &entries,

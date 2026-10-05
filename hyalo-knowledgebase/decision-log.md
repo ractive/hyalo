@@ -7813,7 +7813,25 @@ sooner than this one.
 visible only to a caller who happens to run `summary --index` afterward
 and compare two fields by hand.
 
-## DEC-361: a no-op `create-index` rerun leaves the snapshot file untouched (2026-10-05)
+**Amendment (PR #379 review).** The mismatch check as first shipped read
+`idx.bm25_index().map(Bm25InvertedIndex::skip_code_blocks)` — calling
+`bm25_index()` at all forces the BM25 section's lazy decode, and this
+check runs on every `--index` load regardless of whether the command ever
+touches BM25 otherwise. Measured on MDN: `summary --index` 0.46 s → 0.85 s,
+`tags --index` 0.35 s → 0.72 s, `properties --index` 0.36 s → 0.73 s,
+`find --property status=draft --index` 0.35 s → 0.73 s — roughly doubling
+every one of them, none of which score anything. Fixed by moving the
+setting itself onto the header: `SnapshotHeader.skip_code_blocks: bool`,
+written from `crate::bm25::search_settings().skip_code_blocks` at save
+time (cheap — an in-memory bool, no decode involved on the *write* side)
+and read back through a plain `SnapshotIndex::skip_code_blocks()` header
+accessor. This is a wire-format addition, so the snapshot format bumps
+again, v6 → **v7** (third bump this calendar week, after iteration 311's
+v4→v5 and iteration 314's v5→v6 — each for an unrelated, independently
+necessary reason; DEC-339's incremental reuse is exactly why none of them
+can be skipped: a v6 entry reused verbatim by `create-index` would never
+pick up this field any other way). Re-measured after the fix: all four
+back to 0.32-0.45 s, within noise of the pre-regression baseline.
 
 **Context.** [[dogfood-results/dogfood-v0250-pre-search-roadmap-2026-10-04]]
 (UX-10) measured `create-index --force` (4.07 s) as slower than
@@ -7856,13 +7874,52 @@ attachment list even with zero file-entry changes). The attachment-list
 check exists because attachments are discovered independently of the
 `reused`/`removed` entry bookkeeping — a new or deleted attachment with no
 markdown file touched would otherwise be silently left stale by a "nothing
-changed" skip. `scan_exclude`/`gitignore_dropped` header bookkeeping is
-*not* compared (no public accessor exists on `SnapshotIndex` for either,
-and adding one for this alone was judged not worth it this iteration): a
-rerun whose `[scan] exclude` patterns or gitignore state changed without
-touching any file's reused/removed count is a corner case rare enough, and
-cheap enough when it does happen (the write only becomes "late" by one
-`create-index` cycle), to accept rather than add surface for.
+changed" skip.
+
+**Amendment (PR #379 review): three more cases closed, and a fourth guard
+added.** The original check (`reused == file_count && removed == 0`) was
+not enough:
+
+- **A file dropped by its own broken frontmatter.** `n2.md`'s frontmatter
+  breaks between runs: it is still "discovered" on disk (not `removed`),
+  but no longer scannable, so it drops out of `entries` entirely —
+  `reused == file_count` stays true because *both* sides shrink together
+  (3 notes → 2 reused == 2 `file_count`). Closed by also requiring
+  `prev.entries().len() == file_count`: a dropped entry always shrinks
+  `file_count` below what the previous snapshot held, which the equality
+  above cannot see on its own.
+- **A newly unparsable note.** A brand new file with broken frontmatter is
+  never `removed` (it was never in the previous snapshot) and does not
+  move `reused`/`file_count` at all — reuse only ever covers *old* files.
+  The previous header's own `skipped` list has to be compared against this
+  run's own skip list, or the new skip is invisible and `summary --index`
+  keeps replaying a stale, smaller figure forever. `SnapshotIndex::
+  skipped()` is a new public accessor for exactly this comparison.
+- **A newly `.ignore`d file.** Adding `ign/x.md` under a fresh `.ignore`
+  pattern changes `gitignore_dropped` without moving `reused`, `removed` or
+  `file_count` at all — the previous header's own `gitignore_dropped` (and,
+  for the `[scan] exclude` analogue, `scan_excluded`/`scan_exclude`) must
+  be compared against this run's freshly-computed counts. The original
+  entry explicitly declined this ("no public accessor exists... judged not
+  worth it"); `scan_excluded()`, `scan_exclude()` and `gitignore_dropped()`
+  joined `skipped()` as new `SnapshotIndex` accessors to close it after
+  all — the corner case was not as rare as judged, and the accessors cost
+  nothing once `skipped()` already existed for the second bullet.
+- **A directory that moved and moved back** (`mkdir x; rmdir x`): none of
+  the above conditions react to this at all, since no file's own entry
+  changed — but it *does* move `newest_dir_mtime(dir)` past the snapshot's
+  `created_at`. Left unguarded, the no-op would never advance `created_at`,
+  so DEC-339's cheap tree-moved probe (`snapshot_drift`) would stay
+  permanently tripped (an extra missing-files walk on every future
+  `--index` read, forever) and the snapshot file's own on-disk mtime would
+  stay behind the vault's, making DEC-360's stale-index hint fire forever
+  even though every rerun keeps correctly finding nothing to do. Closed by
+  gating the whole no-op on the same cheap directory-mtime probe DEC-280
+  already trusts: `newest_dir_mtime(dir) <= created_at + tolerance`. A
+  dirty probe falls through to a real write, which both resolves whatever
+  actually changed *and* advances `created_at`/the file's mtime, so the
+  very next rerun is a clean no-op again — one extra write, not a
+  permanent regression.
 
 ## DEC-362: an unloadable `[schema]` joins the gate refusal, scoped to gates only (2026-10-05)
 

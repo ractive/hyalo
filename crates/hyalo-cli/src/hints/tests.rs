@@ -1688,6 +1688,45 @@ fn slow_query_hint_surfaces_through_generate_hints() {
     );
 }
 
+/// iter-313 (PR #379 review): a stale on-disk snapshot gets "refresh",
+/// pointed at `create-index`, never the misleading "re-run with --index"
+/// (which would just serve the same stale answer).
+#[test]
+fn slow_query_hint_names_refresh_when_snapshot_stale() {
+    let mut c = ctx(HintSource::Summary);
+    c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+    c.snapshot_on_disk = true;
+    c.snapshot_stale = true;
+    let h = slow_query_hint(&c).expect("expected a hint");
+    assert!(
+        h.description.contains("looks stale"),
+        "desc: {}",
+        h.description
+    );
+    assert_eq!(h.cmd, "hyalo create-index", "cmd: {}", h.cmd);
+}
+
+/// A fresh on-disk snapshot gets "use it", never "create an index" (which
+/// would rebuild something that already exists and is current).
+#[test]
+fn slow_query_hint_names_use_index_when_snapshot_fresh() {
+    let mut c = ctx(HintSource::Summary);
+    c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+    c.snapshot_on_disk = true;
+    c.snapshot_stale = false;
+    let h = slow_query_hint(&c).expect("expected a hint");
+    assert!(
+        h.description.contains("exists in the vault"),
+        "desc: {}",
+        h.description
+    );
+    assert!(
+        h.cmd.contains("--index"),
+        "expected the hint to point at --index, not rebuild: {}",
+        h.cmd
+    );
+}
+
 // --- large-vault summary hint ---
 
 fn summary_data(files_total: u64) -> serde_json::Value {
@@ -1727,6 +1766,53 @@ fn large_vault_summary_hint_does_not_fire_at_threshold() {
             .iter()
             .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
         "unexpected large-vault hint at threshold: {hints:?}"
+    );
+}
+
+/// iter-313 (PR #379 review): a stale on-disk snapshot on a large vault
+/// gets "refresh the stale index", pointed at `create-index` — the pre-
+/// iter-313 wording ("create an index") read as if none existed at all.
+#[test]
+fn large_vault_summary_hint_says_refresh_when_stale() {
+    let mut c = ctx(HintSource::Summary);
+    c.snapshot_on_disk = true;
+    c.snapshot_stale = true;
+    let data = summary_data(LARGE_VAULT_FILE_COUNT + 1);
+    let hints = generate_hints(&c, &data, None);
+    let h = hints
+        .iter()
+        .find(|h| h.cmd == "hyalo create-index")
+        .expect("expected a create-index hint");
+    assert!(
+        h.description.contains("looks stale"),
+        "desc: {}",
+        h.description
+    );
+}
+
+/// A fresh on-disk snapshot on a large vault gets "re-run with --index",
+/// never a hint to rebuild what already exists and is current (UX-8,
+/// dogfood v0.25.0-pre — the pre-iter-313 hint never checked at all).
+#[test]
+fn large_vault_summary_hint_says_use_index_when_fresh() {
+    let mut c = ctx(HintSource::Summary);
+    c.snapshot_on_disk = true;
+    c.snapshot_stale = false;
+    let data = summary_data(LARGE_VAULT_FILE_COUNT + 1);
+    let hints = generate_hints(&c, &data, None);
+    let h = hints
+        .iter()
+        .find(|h| h.cmd.contains("--index"))
+        .expect("expected a hint pointing at --index");
+    assert!(
+        h.description.contains("snapshot exists"),
+        "desc: {}",
+        h.description
+    );
+    assert!(
+        !h.cmd.starts_with("hyalo create-index"),
+        "must not suggest rebuilding a current snapshot: {}",
+        h.cmd
     );
 }
 
