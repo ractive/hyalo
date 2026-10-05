@@ -391,11 +391,24 @@ pub(super) fn hints_for_find(
                 // because no single file holds them all -- say so. (A
                 // `"a b"~N` phrase is never offered here: it is narrower
                 // than the AND that already matched nothing.)
-                let every_word_has_docs = words.iter().all(|w| {
-                    !ctx.zero_posting_terms
-                        .iter()
-                        .any(|t| t.eq_ignore_ascii_case(w))
-                });
+                // Only claimed for an unfiltered query: with a filter the
+                // empty answer may be the filter's doing.
+                let unfiltered = ctx.property_filters.is_empty()
+                    && ctx.tag_filters.is_empty()
+                    && ctx.task_filter.is_none()
+                    && ctx.file_targets.is_empty()
+                    && ctx.glob.is_empty()
+                    && ctx.section_filters.is_empty()
+                    && ctx.title_filter.is_none()
+                    && !ctx.broken_links_filter
+                    && !ctx.orphan_filter
+                    && !ctx.dead_end_filter;
+                let every_word_has_docs = unfiltered
+                    && words.iter().all(|w| {
+                        !ctx.zero_posting_terms
+                            .iter()
+                            .any(|t| t.eq_ignore_ascii_case(w))
+                    });
                 let description = if every_word_has_docs {
                     "Try OR instead of AND (match any word) -- every word occurs, but no \
                      file holds them all"

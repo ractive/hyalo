@@ -26,19 +26,35 @@ reserved: **DEC-367**.
 ## Tasks
 
 - [x] Baseline experiment: a fresh agent with only `hyalo --help` and subcommand help solves three tasks on the own knowledgebase ("find the paragraph about the proximity bonus", "how many planned iterations mention snapshots, by directory", "which stems does `config*` expand to"); the commands it tried and where it got stuck are recorded in `research/search-discoverability-baseline-2026-10-05.md`
-- [ ] Teaching hints, all runnable in the existing `->` format: a ranked query of 3+ bare words with 100+ file hits hints `--granularity section` ("the paragraph, not the file"); a zero-result AND query whose every word exists in the dictionary hints the `OR` form and a `"phrase"~N` form; a `--section` filter that matched headings in many files hints `--granularity section` with the words as PATTERN; the did-you-mean and migration hints from 312/315 stay as they are
-- [ ] Runnable help pointers: every envelope that says "see X in `hyalo <cmd> --help`" also carries a `-> hyalo <cmd> --help` entry in `hints` (text and JSON), so the next command is one copy away; the 315 help-drift gate keeps the section names honest
-- [ ] A ten-line "find 101" block at the top of `find --help` (grammar in five lines, section mode and facets in two, `terms` in one, flags for structure in one) and the identical block in `skill-hyalo.md` and `rule-knowledgebase.md`; a help-drift check that the three copies are byte-identical
-- [ ] The top-level `hyalo --help` PATTERN line names the grammar (implicit AND, `OR`, `"phrase"~N`, `prefix*`, `-term`, groups) — the baseline showed flags are already discoverable there, operators are not; add a cookbook line `hyalo terms config`
-- [ ] Re-run the experiment on the new binary with a fresh agent, adding a fourth task that needs the grammar ("files that mention snapshot and either incremental or refresh, but not MDN"); record the comparison in [[research/search-discoverability-baseline-2026-10-05]]; decide from it whether the optional trim applies
-- [ ] Optional, expected NOT to apply (the baseline subject never opened `find --help`): only if the re-run shows agents reading the long help and losing their way, move OPERATOR TABLE and COMMON MISTAKES from `find --help` into the skill, keeping `--help` under ~15 KB (DEC-367 records the decision either way)
-- [ ] Docs in sync: `find --help`, `hyalo --help`, claims paragraph, templates and their bundled copies, CHANGELOG `[Unreleased]`, DEC-367 (why hints and a header rather than a help subcommand, tutorial or man page)
+- [x] Teaching hints, all runnable in the existing `->` format: a ranked query of 3+ bare words with 100+ file hits hints `--granularity section` ("the paragraph, not the file"); a zero-result AND query whose every word exists in the dictionary hints the `OR` form and a `"phrase"~N` form; a `--section` filter that matched headings in many files hints `--granularity section` with the words as PATTERN; the did-you-mean and migration hints from 312/315 stay as they are
+- [x] Runnable help pointers: every envelope that says "see X in `hyalo <cmd> --help`" also carries a `-> hyalo <cmd> --help` entry in `hints` (text and JSON), so the next command is one copy away; the 315 help-drift gate keeps the section names honest
+- [x] A ten-line "find 101" block at the top of `find --help` (grammar in five lines, section mode and facets in two, `terms` in one, flags for structure in one) and the identical block in `skill-hyalo.md` and `rule-knowledgebase.md`; a help-drift check that the three copies are byte-identical
+- [x] The top-level `hyalo --help` PATTERN line names the grammar (implicit AND, `OR`, `"phrase"~N`, `prefix*`, `-term`, groups) — the baseline showed flags are already discoverable there, operators are not; add a cookbook line `hyalo terms config`
+- [x] Re-run the experiment on the new binary with a fresh agent, adding a fourth task that needs the grammar ("files that mention snapshot and either incremental or refresh, but not MDN"); record the comparison in [[research/search-discoverability-baseline-2026-10-05]]; decide from it whether the optional trim applies
+- [x] Optional, expected NOT to apply (the baseline subject never opened `find --help`): only if the re-run shows agents reading the long help and losing their way, move OPERATOR TABLE and COMMON MISTAKES from `find --help` into the skill, keeping `--help` under ~15 KB (DEC-367 records the decision either way)
+- [x] Docs in sync: `find --help`, `hyalo --help`, claims paragraph, templates and their bundled copies, CHANGELOG `[Unreleased]`, DEC-367 (why hints and a header rather than a help subcommand, tutorial or man page)
 
 ## Acceptance criteria
 
-- [ ] No new CLI flag or subcommand
-- [ ] `hyalo --help | grep -c 'OR'` finds the one-line grammar summary; `hyalo find --help | head -12` is the find-101 block and `diff` against the skill's block is empty
-- [ ] `hyalo find 'snapshot index stale'` (100+ hits) prints a runnable `--granularity section` hint; `hyalo find 'snapshot zzqq'`-style zero results with existing words hint `OR`; `hyalo find --section Tasks` with many matches hints section mode; every hinted command exits 0 when run
-- [ ] Every "see X in `hyalo <cmd> --help`" envelope carries the matching `-> hyalo <cmd> --help` hint
-- [ ] Both experiment transcripts are in the research note with the commands tried and the outcome per task
+- [x] No new CLI flag or subcommand
+- [x] `hyalo --help | grep -c 'OR'` finds the one-line grammar summary; `hyalo find --help | head -12` is the find-101 block and `diff` against the skill's block is empty
+- [x] `hyalo find 'snapshot index stale'` (100+ hits) prints a runnable `--granularity section` hint; `hyalo find 'snapshot zzqq'`-style zero results with existing words hint `OR`; `hyalo find --section Tasks` with many matches hints section mode; every hinted command exits 0 when run
+- [x] Every "see X in `hyalo <cmd> --help`" envelope carries the matching `-> hyalo <cmd> --help` hint
+- [x] Both experiment transcripts are in the research note with the commands tried and the outcome per task
 - [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, jq-recipes, ts-types, pi-package-sync, pi-runtime, bundled-skills and `hyalo lint --strict` green; CI green on three platforms
+
+## Implementation notes
+
+- No zero-result `"phrase"~N` hint: a slop phrase is a subset of the AND that
+  already returned nothing, so it could never find anything. The zero-result
+  OR hint instead says that every word occurs but no file holds them all (only
+  for an unfiltered query). The phrase form is taught on the many-results path
+  as `"a b"~5`. See DEC-367.
+- The AC's example `snapshot index stale` matches 79 files in today's vault, so
+  it stays below the 100-file threshold. `snapshot index file` (156 files)
+  shows the section-mode hint, and the e2e test builds a 105-file vault.
+- The section-filter hint starts at 10 files, does not depend on the
+  "matched more than one heading" warning, and emits
+  `hyalo find --granularity section -- <heading words>`.
+- Error-envelope help pointers appear in a new `hints` array, including under
+  `--no-hints`, like the singular `hint`.

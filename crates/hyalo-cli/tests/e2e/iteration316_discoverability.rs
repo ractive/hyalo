@@ -147,6 +147,14 @@ fn zero_result_and_of_existing_words_hints_or_and_says_why() {
         .find(|(d, _)| d.starts_with("Try OR instead of AND"))
         .unwrap_or_else(|| panic!("no OR hint: {partial:?}"));
     assert!(!description.contains("every word occurs"), "{description}");
+    // A filter may be why nothing matched: no claim either.
+    let filtered = self::hints(&tmp, &["find", "solo lonely", "--tag", "zzq"]);
+    assert!(
+        !filtered
+            .iter()
+            .any(|(d, _)| d.contains("every word occurs")),
+        "{filtered:?}"
+    );
 }
 
 #[test]

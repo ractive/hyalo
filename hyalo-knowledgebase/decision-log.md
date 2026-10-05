@@ -8380,3 +8380,78 @@ would still carry the colon-lexing exceptions, the field-only scoring special
 case and the per-file section constants for the same unproven composition
 benefit; a partial grammar would also invite "why not `tag:`?" and re-grow
 the removed surface.
+
+## DEC-367: Search is taught by hints and one shared FIND 101 block, not by a new help surface (2026-10-05)
+
+**Context.** The ranked-search features of iterations 302–304 (the grammar,
+`--granularity section`, `--facet`, `terms`) were documented in a 42 KB
+`find --help` and in the shipped skill. `hyalo --help` did not say PATTERN is
+a query language, and `find -h` has no room for the grammar under its 3072-byte
+Windows ceiling. A help-only baseline agent
+([[research/search-discoverability-baseline-2026-10-05]]) found section mode,
+facets and `terms` from the top-level help, but none of its tasks needed an
+operator and it never opened `find --help`. The owner asked for help and hints
+that teach the features when they are needed, with no new subcommand or flag.
+
+**Decision** (iteration 316,
+[[iterations/iteration-316-search-discoverability-for-agents]]).
+
+- *Teaching hints.* A ranked query of 3+ positive bare words with 100+ file
+  hits leads its hints with the same scope at `--granularity section` ("the
+  paragraph, not the file"). A PATTERN-less `--section` filter matching
+  headings in 10+ files gets the same, with the heading's words as PATTERN
+  (`hyalo find --granularity section -- Tasks`). Both are withheld when the
+  query carries a flag that section mode refuses (`-e`, `--sort`, `--reverse`,
+  `--fields`), so they never exit 1. A zero-result AND query whose words all
+  occur in the vault keeps the existing OR rewrite, and its description now
+  says why: every word occurs, but no file holds all of them. The many-results
+  phrase hint now offers `"a b"~5` and says that dropping `~5` gives the exact
+  phrase. Did-you-mean and the DEC-366 migration hint are unchanged.
+- *Runnable help pointers.* An error envelope whose `hint` says "see SECTION
+  in" a command's `--help` also carries `hyalo <cmd> --help` (description:
+  SECTION) in a new `hints` array: `-> hyalo find --help  # FACETS` in text, a
+  `Hint` object in JSON (`ErrorEnvelope.hints` in the TS types). The twin is
+  attached with `UserDiagnostic::with_help_pointer`. Gate 3g of
+  `check-help-drift` now fails a prose pointer when its source file has no
+  matching `with_help_pointer("<cmd>", "SECTION")` call.
+- *FIND 101.* A 10-line block (`crates/hyalo-cli/src/cli/find_101.txt`) opens
+  `find --help`. Five lines cover the grammar (implicit AND, `OR` binding
+  tighter, `"a b"~N`, `prefix*`, `-term` with `( )`), two cover section mode
+  and facets, one covers `terms`, and one says "structure is selected with
+  flags". The same lines appear byte for byte in a ```text fence in
+  `skill-hyalo.md` and `rule-knowledgebase.md`, and the new gate 3h fails when
+  any of the three copies differs. `hyalo --help`'s find reference gains one
+  sentence naming the operators, and its cookbook gains `hyalo terms config`.
+
+**Why hints and a shared header rather than a help subcommand, tutorial or
+man page.** The baseline agent found features where it already looked: the
+top-level help and the hints after each command. A `hyalo help search` topic,
+a tutorial or a man page would be another place nobody opens. It would also
+need its own drift gate and, for a subcommand, break the plan's "no new CLI
+surface" rule. A hint appears when the reader's last command showed the need
+(too many files, zero results, a section filter across a whole vault). The
+FIND 101 block is the first screen of the page the error hints point to, and
+it is the same text the agent's skill already loaded.
+
+**Not offered: `"a b"~N` after a zero-result AND.** The plan asked for one.
+A slop phrase matches only files that hold every word, in order, close
+together, so it is a subset of the AND that already returned nothing. That
+hint would run and exit 0, but it could never find anything. The phrase form
+is taught on the many-results path instead, where it narrows the answer.
+
+**Why the long help was not trimmed.** The plan's optional step would move
+OPERATOR TABLE and COMMON MISTAKES out of `find --help`, if agents read the
+42 KB page and got lost in it. Neither experiment showed that: the baseline
+subject never opened the page. The re-run subject (recorded in the research note)
+read its head and ran `grep` on it once, solved all four tasks in 12 commands, and
+named FIND 101 as the most useful text. Long help is reference text, and an agent that reaches it
+now meets FIND 101 first. Revisit when an experiment or dogfood transcript
+shows an agent reading past FIND 101 and choosing a wrong operator or flag
+because of what it read further down. Moving those sections then would bring
+`find --help` under ~15 KB.
+
+**Consequences.** No flag, subcommand, config key or snapshot change. The new
+`hints` key on error envelopes is additive (omitted when empty) and appears
+under `--no-hints` too, like the singular `hint` it complements. A grammar change
+now has to update `find_101.txt`, and gate 3h forces the skill and rule copies
+to follow.
