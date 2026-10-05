@@ -1735,7 +1735,10 @@ element matches. Repeatable (AND).\n\
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             COERCION (K=V): the value's YAML type is inferred from the text, in this order — \
-integer (`3`), float (`3.5`; scientific notation counts, so `1e3` is written as `1000.0`), \
+integer (`3`; **decimal only** — `0x1F`, `0o17`, `0b101` and `1_000` are not recognized as \
+integer input and are coerced to the string as typed, quoted on write so they round-trip as \
+that string rather than misreading as a number on the next parse), float (`3.5`; scientific \
+notation counts, so `1e3` is written as `1000.0`), \
 boolean (exactly `true` / `false`), `[[wikilink]]`, bracket list (`[a, b]`, `[]`), else string. \
 Everything else stays a string, including `null` and `~` (the four-character and one-character \
 *strings*, not a YAML null) and `K=` (the empty string). A date is a string too — \

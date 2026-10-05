@@ -6564,3 +6564,66 @@ Relocation: [x](/wrong/place/target.md)
         "the report must name the floor that suppressed a proposal: {text}"
     );
 }
+
+/// BUG-11 follow-up (PR #378 review): `links fix --apply --apply-fuzzy` used
+/// to crash with an internal `io::Error` ("failed to stat
+/// ./notes/back/slash.md") on a source file containing a literal backslash
+/// (legal on macOS/Linux) — `apply_fixes`/`dry_run_fixes` rebuilt the path
+/// from `source_rel.replace('\\', "/")` unconditionally, corrupting it into a
+/// path that does not exist. Gated to non-Windows, where the byte is a plain
+/// filename character rather than the path separator.
+#[cfg(unix)]
+#[test]
+fn links_fix_apply_fuzzy_handles_a_backslash_in_the_source_filename() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "missing.md",
+        md!(r"
+---
+title: Missing
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes/back\\slash.md",
+        md!(r"
+---
+title: Back
+---
+[[missng]]
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--apply",
+            "--apply-fuzzy",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    assert!(
+        output.status.success(),
+        "a literal backslash in the source filename must not crash links fix: \
+         stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let written = fs::read_to_string(tmp.path().join("notes").join("back\\slash.md"))
+        .expect("the real file must have been written under its real name");
+    assert!(
+        written.contains("[[missing]]"),
+        "the fuzzy fix must actually have been applied: {written:?}"
+    );
+}

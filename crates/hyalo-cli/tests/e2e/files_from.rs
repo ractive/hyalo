@@ -1084,3 +1084,50 @@ title: Root
         "vault-at-root: expected files_missing=0; envelope: {envelope}"
     );
 }
+
+/// BUG-11 follow-up (PR #378 review): a `--files-from` line and a `--file`
+/// argument carrying the same text must agree (DEC-301) — both are
+/// user-typed selection text. A literal backslash (legal on macOS/Linux) in
+/// a `--files-from` line used to be unconditionally rewritten to a forward
+/// slash, so `notes/back\slash.md` resolved to a path that does not exist
+/// and the whole list came back "all entries were missing". Gated to
+/// non-Windows, where the byte is a plain filename character.
+#[cfg(unix)]
+#[test]
+fn files_from_agrees_with_file_flag_on_a_backslash_in_the_name() {
+    let vault_dir = tempfile::tempdir().unwrap();
+    write_md(
+        vault_dir.path(),
+        "notes/back\\slash.md",
+        md!(r"
+---
+title: Back
+---
+# Back
+"),
+    );
+
+    let list = write_list_file(&["notes/back\\slash.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", vault_dir.path().to_str().unwrap()]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["files_missing"].as_u64().unwrap_or(99),
+        0,
+        "the backslash-named file must resolve, not come back missing: {envelope}"
+    );
+    assert_eq!(
+        envelope["results"][0]["file"].as_str(),
+        Some("notes/back\\slash.md"),
+        "the real filename must be reported, not a corrupted `/`-joined one: {envelope}"
+    );
+}

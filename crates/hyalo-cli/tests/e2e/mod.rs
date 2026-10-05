@@ -4,6 +4,7 @@ mod common;
 mod anchors;
 mod append;
 mod backlinks;
+mod backslash_filename;
 mod bm25;
 mod broken_pipe;
 mod bundled_recipes;

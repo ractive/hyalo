@@ -456,6 +456,79 @@ fn named_access_to_the_non_utf8_file_still_answers() {
     assert_eq!(results[0]["file"], "bad.md");
 }
 
+/// PR #378 review (MUST-2): the non-UTF-8 skip warning follows the same
+/// convention HYALO005's unparsable-frontmatter skip already does (DEC-316) —
+/// `-q` silences it. DEC-365 is worded to say "silenced by `-q`", not
+/// "`-q`-proof"; this pins the actual behaviour.
+#[test]
+fn non_utf8_skip_warning_is_silenced_by_quiet() {
+    let tmp = utf8_vault();
+    let output = hyalo(&tmp)
+        .args(["find", "-q", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "-q must silence the non-UTF-8 skip warning: {stderr:?}"
+    );
+
+    // The loud (non -q) form still names it, for contrast.
+    let loud = hyalo(&tmp)
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+    let loud_stderr = String::from_utf8_lossy(&loud.stderr);
+    assert!(
+        loud_stderr.contains("skipped 1 unreadable file"),
+        "without -q the warning must still print: {loud_stderr}"
+    );
+}
+
+/// PR #378 review (MUST-2): `summary --index` and `find --index` must agree
+/// with a disk scan on a non-UTF-8 file — `IndexEntry.valid_utf8` (DEC-365,
+/// snapshot format v6) is replayed from the snapshot on load, the same way
+/// the unparsable-frontmatter skip already was (BUG-24).
+#[test]
+fn index_mode_agrees_with_disk_on_the_non_utf8_file() {
+    let tmp = utf8_vault();
+    run(&tmp, &["create-index"]);
+
+    let disk_summary = run_json(&tmp, &["summary"]);
+    let index_summary = run_json(&tmp, &["summary", "--index"]);
+    assert_eq!(
+        index_summary["results"]["files"]["skipped"], disk_summary["results"]["files"]["skipped"],
+        "summary --index must report the same `skipped` as disk: \
+         disk={disk_summary}\nindex={index_summary}"
+    );
+    assert_eq!(
+        index_summary["results"]["files"]["skipped"].as_u64(),
+        Some(1),
+        "{index_summary}"
+    );
+
+    // `find --index` warns, same as disk, and `-q` silences it the same way.
+    let loud = hyalo(&tmp)
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&loud.stderr).contains("skipped 1 unreadable file"),
+        "find --index must warn like disk does: {}",
+        String::from_utf8_lossy(&loud.stderr)
+    );
+    let quiet = hyalo(&tmp)
+        .args(["find", "--index", "-q", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&quiet.stderr).is_empty(),
+        "-q must silence it under --index too: {}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // UX-5: `new` has no --property, and now says where properties are set
 // ---------------------------------------------------------------------------

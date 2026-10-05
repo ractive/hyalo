@@ -7778,18 +7778,19 @@ precedent above.
 right above the existing refusal `if`).
 [[iterations/iteration-314-config-files-and-yaml-leftovers]].
 
-## DEC-363: a literal backslash in a filename is a filename, not a path separator, off Windows (2026-10-05)
+## DEC-363: a literal backslash in a filename is a filename, not a path separator, off Windows (2026-10-05, amended same day — review round)
 
-**Decision.** Every place that turns a real, filesystem-derived path into a
-vault-relative display/lookup string — `discovery::normalize_path`,
-`strip_absolute_vault_prefix`, `strip_dir_prefix`, `relative_path`, `find`'s
-internal backlinks, `hyalo backlinks`, and batch `mv`'s glob-to-source
-resolution — now runs the replacement `\` → `/` only on Windows
-(`discovery::native_separator_to_forward_slash`). Everywhere else a `\` in a
-path that came from the filesystem is left exactly as the OS reported it.
+**Decision.** Every place that converts a real, filesystem-derived path, or
+user-typed path *selection* text (a `--file`/`--files-from` entry, a `--to`
+destination, an internal `mv`/`links fix` source lookup), into a
+vault-relative display/lookup string now runs the replacement `\` → `/`
+only on Windows (`discovery::native_separator_to_forward_slash`).
+Everywhere else a `\` in such a string is left exactly as written/reported.
 `notes/back\slash.md` (legal on macOS and Linux) is now reported, looked up
-by `--file`, matched by `--glob`, linted, and moved/set in a batch, under
-its real name; none of these commands rewrites it into the nonexistent
+by `--file`/`--files-from`/`--glob`, linted, moved (single and batch, as
+source and as `--to` destination), set in a batch, and repaired by
+`links fix --apply --apply-fuzzy`, under its real name on every one of
+those paths — none of them rewrites it into the nonexistent
 `notes/back/slash.md` and then fails trying to open that path (exit 2).
 
 **Why.** `\` is the path separator on Windows and nowhere else — POSIX
@@ -7798,38 +7799,56 @@ treats it as an ordinary filename byte, so a vault can legally contain
 `path.replace('\\', "/")` — present at every one of the sites above —
 silently invented an extra path segment out of a literal character, so the
 string every subsequent lookup, glob match, or batch mutation used no
-longer named the file that was actually on disk. The bug surfaced as four
-different symptoms depending on which command hit it first (dogfood-v0250
+longer named the file that was actually on disk. The bug surfaced as
+several symptoms depending on which command hit it first (dogfood-v0250
 BUG-11): display showed the wrong name, `--file`/`--glob` could not find the
 real file, `lint` printed a confusing "skipping X (checking Y)" note while
-still counting the file as checked, and batch `mv`/`set --glob` crashed with
-a raw `io::Error` surfaced as an *internal* error (exit 2) — DEC-307
-reserves 2 for clap/internal failures, never a well-formed user input the
-filesystem itself accepted.
+still counting the file as checked, and batch `mv`/`set --glob`/
+`links fix --apply` crashed with a raw `io::Error` surfaced as an
+*internal* error (exit 2) — DEC-307 reserves 2 for clap/internal failures,
+never a well-formed user input the filesystem itself accepted.
 
-**What stayed unconditional.** A markdown link target, a `--glob` pattern,
-a `--to`/`--dir` CLI argument, and `[scan] exclude`/`.ignore`-style config
-values are user-typed *text*, not an OS path: a vault author may deliberately
-write a Windows-style `sub\note.md` link target on any host platform, and
-hyalo's existing cross-platform link resolution already depends on that.
-`native_separator_to_forward_slash` is therefore only ever called on a
-string that came from `Path::to_string_lossy()` on a path the OS already
-resolved — never on raw CLI/link/glob text, which keeps its own unconditional
-normalization (documented at each call site).
+**What stays unconditional, and why that is narrower than it first looks.**
+A markdown link target and a `--glob` pattern are the two categories left
+alone: a vault author may deliberately write a Windows-style `sub\note.md`
+link target on any host platform, and hyalo's existing cross-platform link
+resolution already depends on that; a glob pattern's `\` has its own
+escaping meaning to the glob engine, unrelated to path separators. Every
+other "user-typed text" category this decision's first version lumped in
+with those two — a `--to` destination, a `--files-from` line — turned out
+to be a case of the *same* bug, not an exemption: DEC-301 requires every
+selection form (`--file`, positional, `--files-from`, and a destination's
+own `--to`) to agree on what a path *names*, and `--file`/`normalize_path`
+already answered that conditionally while `--files-from`'s line parser and
+every `--to` validator still replaced unconditionally — so a `--files-from`
+list naming `notes/back\slash.md` came back "all entries missing" while
+`--file` with the identical text worked, and a file once renamed to contain
+a backslash could never be moved back to a plain name
+(`mv notes/back\slash.md --to notes/plain.md` planned a destination fine,
+but `mv notes/fwd.md --to 'notes/x\y.md'` planned the nonexistent
+`notes/x/y.md`). Both are now gated the same way as `--file`.
+
+**The review-round bug, and why it reached a reviewer rather than a test.**
+The first version of this fix covered the sites dogfood-v0250's own repro
+commands exercised (`find`, `--glob`, `backlinks`, batch `mv`'s glob-to-source
+resolution, `set --glob`) but missed three categories of call site that no
+single repro command reaches on its own: `links fix`'s own per-file path
+rebuild (`link_fix.rs` — the backslash byte sits in a link graph entry two
+steps removed from any CLI argument), `--files-from`'s line-by-line parser
+(a sibling of `--file` that happens to live in a different file,
+`files_from.rs`), and every `mv` **destination** validator (`--to` text,
+which the first version's own doc wrongly folded into "typed text that
+stays unconditional" without checking the DEC-301 agreement requirement
+against it). New tests close all three:
+`links_fix_apply_fuzzy_handles_a_backslash_in_the_source_filename`,
+`files_from_agrees_with_file_flag_on_a_backslash_in_the_name`, and
+`mv_to_preserves_a_literal_backslash_in_the_destination`.
 
 **Consequences.** `discovery::native_separator_to_forward_slash` is `pub`
 (previously it would have been crate-private) because `hyalo-cli`'s
-`prepared::selection`, `commands::find`, `commands::backlinks` and
-`commands::mv` all need it for the same reason `hyalo-core`'s own callers
-do. `mv --glob`'s `resolve_batch_sources` and `hyalo backlinks`'s
-`BacklinkItem::source` are the two `hyalo-cli`-side production call sites
-fixed under this iteration; a handful of lower-traffic sites that build a
-*destination* directory path from `--to` text during batch `mv` (reported
-only on a creation failure or rollback) were left on the unconditional
-replacement — they operate on lexically-constructed intermediate directory
-names rather than a source file's real OS path, which is exactly the "typed
-text" category this decision leaves alone, and dogfood-v0250 did not
-reproduce a failure through them.
+`prepared::selection`, `commands::find`, `commands::backlinks`,
+`commands::mv` and `commands::files_from` all need it for the same reason
+`hyalo-core`'s own callers (now including `link_fix.rs`) do.
 
 **Rejected alternatives.** Escaping or otherwise encoding a literal `\` in
 hyalo's own JSON/text output: rejected — the filesystem accepted the byte as
@@ -7840,10 +7859,14 @@ does not exist once the normalization itself stops firing on non-Windows.
 **Where:** `crates/hyalo-core/src/discovery.rs`
 (`native_separator_to_forward_slash`, `normalize_path`,
 `strip_absolute_vault_prefix`, `strip_dir_prefix`, `relative_path`),
+`crates/hyalo-core/src/link_fix.rs` (`apply_fixes`, `dry_run_fixes`),
 `crates/hyalo-cli/src/commands/find/mod.rs`,
 `crates/hyalo-cli/src/prepared/selection.rs`,
 `crates/hyalo-cli/src/commands/backlinks.rs`,
-`crates/hyalo-cli/src/commands/mv.rs` (`resolve_batch_sources`).
+`crates/hyalo-cli/src/commands/files_from.rs` (`load`),
+`crates/hyalo-cli/src/commands/mv.rs` (`resolve_batch_sources`,
+`strip_vault_prefix_from_destination`, `destination_names_vault_root`,
+`validate_target_single`, `validate_batch_target`).
 [[iterations/iteration-314-config-files-and-yaml-leftovers]].
 
 ## DEC-364: exactly three YAML 1.1 integer forms read as strings — core's own hex/octal stay integers (2026-10-05, amended same day — review round)
@@ -7951,27 +7974,49 @@ correct and round-trip-safe without it.
 [[iterations/iteration-314-config-files-and-yaml-leftovers]]. Amends
 [[decision-log#DEC-350: serde-saphyr 1.x, with integer resolution and quoting hyalo owns (2026-10-04)]].
 
-## DEC-365: `find`, `summary` and `lint` agree a non-UTF-8 note is a problem (2026-10-05)
+## DEC-365: `find`, `summary` and `lint` agree a non-UTF-8 note is a problem, on disk and under `--index` alike (2026-10-05, amended same day — review round)
 
 **Decision.** A note whose body contains invalid UTF-8 bytes is now
-reported, every time, as a skip: `find` and `summary` (disk scan and
-`--index` alike) emit the same `-q`-proof "skipped N unreadable file(s)"
-warning `lint` already printed, and `summary`'s `results.files.skipped`
-counts it. The file still **appears** in `find`'s listing (it stays a note:
-frontmatter, tags and links are readable even when a later line in the body
-is not) and still answers `--file`/positional access (DEC-301's named-path
-promise) — only the *reporting* changed, from silence to the same warning
-every other unreadable-file case already gets.
+reported, every time a scan actually reads its body, as a skip: `find`
+(default fields) and `summary` emit the same "skipped N unreadable
+file(s)" warning `lint` already printed, counted under `summary`'s
+`results.files.skipped`. This holds on disk *and* under `--index`
+(`IndexEntry.valid_utf8`, persisted in snapshot format v6, is replayed on
+load exactly the way the unparsable-frontmatter skip already was). The
+warning is **silenced by `-q`**, same as every other collapsed skip
+(HYALO005's "unparsable frontmatter" line, DEC-316) — not immune to it, the
+first version of this entry said the opposite. The file still **appears**
+in `find`'s listing (it stays a note: frontmatter, tags and links are
+readable even when a later line in the body is not) and still answers
+`--file`/positional access (DEC-301's named-path promise) — only the
+*reporting* changed, from silence to the same warning every other
+unreadable-file case already gets.
+
+**The one deliberate exception: a no-body field projection.**
+`find --fields file` (or any `--fields` selection whose members need
+nothing from the body — not even a line count) never detects invalid
+UTF-8, on disk or under `--index`, and this is not a gap to close: a
+"just the paths" listing does not read the body at all, and the cheapest
+way to check UTF-8 validity without reading the whole file is a prefix
+read, which can end mid-multi-byte-character and produce a false
+positive. `find`'s **default** fields need an exact line count (so the
+whole body is read anyway) and get the warning; `--fields file` trades
+that detection for staying bodyless. The e2e test that pins the default-
+fields case (`plain_find_listing_reports_the_non_utf8_file_as_skipped`)
+says so explicitly in its own doc comment, deliberately using `&["find"]`
+rather than `&["find", "--fields", "file"]`.
 
 **Why.** `lint` refused the file outright (a `could not read file` error
 row); `find`'s plain listing and `summary` treated it as perfectly ordinary
 — `skipped: 0` — because the invalid-UTF-8 warning was wired to fire only
 when a BM25-tokenizing scan produced no tokens for the file (iter-265,
 DEC-350's BUG-14: "a BM25 build that produced no tokens... means the file
-was not valid UTF-8"). A plain `find`/`summary` run, and even a `find`
-restricted to `--fields file`, builds its scan with `bm25_tokenize: false`,
-so that signal never existed for them (dogfood-v0250 BUG-19) — three
-commands disagreeing about whether the same file is "readable."
+was not valid UTF-8"). A plain `find`/`summary` disk scan builds with
+`bm25_tokenize: false`, so that signal never existed for them (dogfood-v0250
+BUG-19) — three commands disagreeing about whether the same file is
+"readable," and (found in PR #378 review) `--index` reads disagreeing with
+disk reads of the very same vault, because nothing about UTF-8 validity was
+ever persisted in the snapshot for a reader to replay.
 
 **The chosen resolution, and the one not taken.** The dogfood report's task
 framed two options: make every command agree the file is unreadable
@@ -7985,26 +8030,51 @@ behavior, extends a convention every other unreadable-file case in hyalo
 already uses (unparsable frontmatter, a missing file under `--files-from`)
 rather than inventing a second one.
 
-**Mechanism.** `scanner::scan_one_file` already computed
+**Mechanism, disk.** `scanner::scan_one_file` already computed
 `ScanStats::valid_utf8` internally (previously used only to decide whether
 to emit BM25 tokens); it now also returns that bool, and `ScannedIndex`'s
 caller-facing scan loop uses it directly instead of inferring UTF-8 validity
 from "no BM25 tokens were produced" — so the warning fires regardless of
-`options.bm25_tokenize`. A **reused** entry (incremental `create-index`,
-where no fresh `ScanStats` exists because the file was not re-scanned)
-falls back to the old BM25-tokens-absent signal, which remains correct for
-that path since a reused entry was always scanned at some point with
-tokenizing on. `commands::build_scanned_index_with` — the shared
-`hyalo-cli` entry point behind `find`'s full listing *and* every
-`--fields`-narrowed projection including `--fields file` — picks up the
-same unconditional signal, which is what makes the warning appear even on
-the minimal `--fields file` listing that previously bypassed it entirely.
+`options.bm25_tokenize`, for any scan that read the body at all. A
+**reused** entry (incremental `create-index`, where no fresh `ScanStats`
+exists because the file was not re-scanned) falls back to the old
+BM25-tokens-absent signal, which remains correct for that path since a
+reused entry was always scanned at some point with tokenizing on.
+
+**Mechanism, `--index` (the review-round fix).** The disk-side fix alone
+left `--index` reads silently wrong: a snapshot carried no record of which
+files were invalid UTF-8, so `summary --index` answered `skipped: 0` and
+`find --index` printed no warning at all for a file the disk scan flags.
+`IndexEntry` gained a `valid_utf8: bool` field (`#[serde(default =
+"default_true", skip_serializing_if = "is_true")]`, so an old snapshot
+loads and defaults to "assumed valid" rather than refusing outright) and
+`scan_one_file`'s `IndexEntry` construction now sets it from the same
+`ScanStats::valid_utf8` the disk path reads. `SnapshotIndex::load` replays
+it on load exactly where it already replays `header.skipped` (BUG-24): for
+every loaded entry with `valid_utf8 == false`, it calls the same
+`warn::record_skip(..., SkipKind::Other)` a disk scan would have called,
+which is what makes `summary --index`'s `files.skipped` and `find
+--index`'s warning line agree with disk without any extra file read.
+
+**The `default_true` fallback is why the snapshot format had to bump**
+(v5 → v6, `SNAPSHOT_FORMAT_VERSION`), the same reasoning DEC-353 used for
+`explicit_anchor_ids`: an incremental `create-index` *reuses* an entry
+whose size and mtime are unchanged, without re-scanning it, so a v5 entry
+that was actually invalid UTF-8 would silently default to `valid_utf8:
+true` forever under incremental rebuilds, never producing the warning
+again until the file itself changed or `--force` rebuilt it from scratch.
+Refusing a v5 snapshot outright (falling back to disk, with the usual
+warning) is the same guarantee DEC-353 chose over an optimistic default
+with a known-wrong corner.
 
 **Consequences.** `summary`'s `files.skipped` and `files.total` now agree
-with `lint`'s notion of which files are "a problem" for every scan shape.
-No change to what is actually indexed or returned: a non-UTF-8 note was
-never excluded from `find`'s results and still is not — DEC-301's promise
-that a named path always answers is unaffected.
+with `lint`'s notion of which files are "a problem" for every scan shape
+that reads bodies — on disk and under `--index` alike — and the warning
+itself is `-q`-silenceable like every other collapsed skip note. No change
+to what is actually indexed or returned: a non-UTF-8 note was never
+excluded from `find`'s results and still is not — DEC-301's promise that a
+named path always answers is unaffected. `--fields file` (and any other
+bodyless projection) stays a documented, deliberate blind spot, not a bug.
 
 **Rejected alternatives.** Making `lint` lossy instead (above). Excluding
 the file from `find`'s results entirely to match `lint`'s harder refusal:
@@ -8012,13 +8082,19 @@ rejected because `lint`'s "could not read file" is a per-rule-engine
 refusal to validate structure it cannot safely parse, not a claim that the
 file does not exist as a note — `find --file` on it must keep answering
 (DEC-301), and a full listing dropping a real file outright would be a
-worse regression than an inconsistent warning.
+worse regression than an inconsistent warning. Detecting invalid UTF-8 from
+a `--fields file` projection via a prefix read: rejected — a prefix can end
+mid-character, trading one inconsistency (silence) for another (a false
+positive on a perfectly valid file).
 
 **Where:** `crates/hyalo-core/src/scanner/mod.rs` (`scan_one_file` return
-shape), `crates/hyalo-core/src/index.rs` (`ScannedIndex`'s scan loop),
-`crates/hyalo-cli/src/commands/mod.rs` (`build_scanned_index_with`'s
-warning classification). Pinned by
+shape), `crates/hyalo-core/src/index.rs` (`IndexEntry.valid_utf8`,
+`SNAPSHOT_FORMAT_VERSION` 5 → 6, `ScannedIndex`'s scan loop,
+`SnapshotIndex::load`'s replay), `crates/hyalo-cli/src/commands/mod.rs`
+(`build_scanned_index_with`'s warning classification). Pinned by
 `iteration255_followups::plain_find_listing_reports_the_non_utf8_file_as_skipped`,
 `::summary_counts_the_non_utf8_file_as_skipped`,
-`::named_access_to_the_non_utf8_file_still_answers`.
+`::named_access_to_the_non_utf8_file_still_answers`,
+`::non_utf8_skip_warning_is_silenced_by_quiet`,
+`::index_mode_agrees_with_disk_on_the_non_utf8_file`.
 [[iterations/iteration-314-config-files-and-yaml-leftovers]].

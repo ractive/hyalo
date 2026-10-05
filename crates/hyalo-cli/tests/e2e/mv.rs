@@ -2096,3 +2096,61 @@ fn mv_batch_still_accepts_apply() {
     );
     assert!(tmp.path().join("done/old.md").exists());
 }
+
+/// BUG-11 follow-up (PR #378 review): `--to` is user-typed destination text,
+/// exactly like `--file` — a literal backslash (legal on macOS/Linux) must
+/// survive. `strip_vault_prefix_from_destination` and
+/// `validate_target_single` used to rewrite it unconditionally, so
+/// `mv notes/fwd.md --to 'notes/x\y.md'` planned the nonexistent
+/// `notes/x/y.md` and a file once renamed to contain a backslash could never
+/// be moved back to its own name. Gated to non-Windows.
+#[cfg(unix)]
+#[test]
+fn mv_to_preserves_a_literal_backslash_in_the_destination() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "notes/fwd.md", "---\ntitle: Fwd\n---\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "notes/fwd.md",
+            "--to",
+            "notes/x\\y.md",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["to"].as_str(),
+        Some("notes/x\\y.md"),
+        "the destination's real name must survive, not `notes/x/y.md`: {envelope}"
+    );
+
+    // And a file already named with a backslash can be moved back to a
+    // plain name — the round trip BUG-11 broke.
+    write_md(
+        tmp.path(),
+        "notes/back\\slash.md",
+        "---\ntitle: Back\n---\nBody.\n",
+    );
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "notes/back\\slash.md", "--to", "notes/plain.md"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tmp.path().join("notes/plain.md").exists());
+}

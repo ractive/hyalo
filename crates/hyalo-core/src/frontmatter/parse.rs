@@ -146,8 +146,19 @@ fn might_have_yaml11_int_form(yaml: &str) -> bool {
 /// requires the lowercase `x`/`o` prefix literally (`0X1F`/`0O17` are a
 /// YAML 1.1 extension and are not resolved here; see BUG-14 below).
 ///
-/// Returns `None` for anything else, and for a value outside `i64`/`u64`,
-/// which then stays the float the parser produced.
+/// Returns `None` for anything else, and for a value outside `i64`/`u64`.
+/// What a `None` becomes depends on which caller is asking (PR #378
+/// review): [`node_to_value`]'s `Float` arm falls back to the float the
+/// fast parse already produced (`09223372036854775808` reads as a float,
+/// same as before this scalar had any core re-check at all); its `Number`
+/// arm has no float to fall back to — the scalar was already a plain
+/// integer — so an out-of-range hex/octal/decimal literal there becomes
+/// the **string** as written (`0x10000000000000000`, 17 hex digits, has no
+/// `u64` representation and reads as the string `"0x10000000000000000"`;
+/// `-0x8000000000000001` — one past `i64::MIN`'s magnitude — the same way).
+/// Both are acceptable: core only promises an integer *when the literal is
+/// one a 64-bit value can hold*; outside that range there is no silent
+/// truncation either way.
 fn resolve_core_int(raw: &str) -> Option<serde_json::Number> {
     let text = raw.trim();
     let (negative, unsigned) = match text.strip_prefix('-') {
@@ -424,11 +435,19 @@ fn template_placeholder_message(source: &str, location: serde_saphyr::Location) 
     let open = line.find("{{")?;
     let close = line[open..].find("}}")? + open + 2;
     let placeholder = &line[open..close];
+    // PR #378 review: the key is whatever precedes the line's *own* mapping
+    // colon, not whatever precedes the placeholder — `msg: "a {{x}}" : [`
+    // has `{{` sitting inside an already-quoted value, so taking
+    // `line[..open]` grabbed `msg: "a` (colon, quote and all) instead of
+    // `msg`. The real key is the text before the first `:` that appears
+    // *before* the placeholder opens; a bare list item (`- {{date}}`, no
+    // colon before `{{`) correctly yields no key.
     let key = line[..open]
+        .find(':')
+        .map(|colon| &line[..colon])
+        .unwrap_or_default()
         .trim()
         .trim_start_matches('-')
-        .trim()
-        .trim_end_matches(':')
         .trim();
     let key_part = if key.is_empty() {
         String::new()
@@ -436,8 +455,12 @@ fn template_placeholder_message(source: &str, location: serde_saphyr::Location) 
         format!("property '{key}': ")
     };
     Some(format!(
+        // `{{{{`/`}}}}` escape to a literal `{{`/`}}` in `format!`'s own
+        // syntax (PR #378 review) — `{{`/`}}` here would have rendered as a
+        // single brace each, understating exactly the YAML flow-mapping
+        // ambiguity this message explains.
         "{key_part}'{placeholder}' is not YAML — a template placeholder is not valid YAML \
-         syntax (the `{{`/`}}` braces are read as an unclosed YAML flow mapping) at line {}, \
+         syntax (the `{{{{`/`}}}}` braces are read as an unclosed YAML flow mapping) at line {}, \
          column {}",
         location.line(),
         location.column()
@@ -2048,6 +2071,19 @@ mod yaml_tests {
                 "bad_us": "1_000",
             })
         );
+    }
+
+    #[test]
+    fn out_of_range_hex_resolves_as_a_string_not_a_truncated_int() {
+        // PR #378 review: an out-of-range literal `node_to_value`'s `Number`
+        // arm sees has no float to fall back to (unlike the `Float` arm's
+        // leading-zero case), so it becomes the string as written — one
+        // past `u64::MAX`'s hex width, and one past `i64::MIN`'s magnitude.
+        let props =
+            parse_yaml_map("too_big: 0x10000000000000000\ntoo_small: -0x8000000000000001\n")
+                .unwrap();
+        assert_eq!(props["too_big"], json!("0x10000000000000000"));
+        assert_eq!(props["too_small"], json!("-0x8000000000000001"));
     }
 
     #[test]

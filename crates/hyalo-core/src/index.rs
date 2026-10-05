@@ -94,6 +94,26 @@ pub struct IndexEntry {
     /// stale tokens that can never match a since-fixed query shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bm25_tokenizer_version: Option<u32>,
+    /// Whether this file's body is valid UTF-8 (BUG-19, DEC-365, PR #378
+    /// review). Populated from [`crate::scanner::ScanStats::valid_utf8`] at
+    /// scan time; defaults to `true` for an entry written before this field
+    /// existed — exactly why a pre-v6 snapshot is refused and rebuilt
+    /// (`SNAPSHOT_FORMAT_VERSION`), rather than trusted to carry a correct
+    /// default for a file that was actually invalid. `summary --index` and
+    /// `find --index` read this directly instead of re-deriving it from
+    /// "no BM25 tokens", so they agree with a disk scan without re-reading
+    /// the file.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub valid_utf8: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires the by-ref shape
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +459,12 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | reused by an incremental `create-index` (unchanged
 /// |   |          | size/mtime) never gets anchor ids scanned, so a v4
 /// |   |          | snapshot must be rebuilt rather than silently trusted |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
+/// | 6 | iter-314 | `IndexEntry.valid_utf8` (DEC-365, PR #378 review) — a v5
+/// |   |          | entry reused by an incremental `create-index` would
+/// |   |          | default to `true` (assumed valid) forever, so
+/// |   |          | `summary --index`/`find --index` would permanently miss
+/// |   |          | a non-UTF-8 file a disk scan already reports |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -1851,6 +1876,24 @@ impl SnapshotIndex {
                 crate::warn::SkipKind::Frontmatter,
             );
         }
+        // BUG-19 follow-up (DEC-365, PR #378 review): replay each entry's own
+        // `valid_utf8` the same way, so `summary --index` and `find --index`
+        // agree with a disk scan on a non-UTF-8 file instead of reporting
+        // `skipped: 0` for one the disk `warning:` line already counts. No
+        // header-level list is needed — `valid_utf8` already lives on the
+        // entry itself (unlike the frontmatter diagnostic, which would
+        // bloat every index for a message `lint` already prints better).
+        if replay {
+            for entry in &entries {
+                if !entry.valid_utf8 {
+                    crate::warn::record_skip(
+                        entry.rel_path.clone(),
+                        "invalid UTF-8 (recorded when the index was built)",
+                        crate::warn::SkipKind::Other,
+                    );
+                }
+            }
+        }
         // DEC-342 (iteration 306 review): replay the build-time gitignore-drop
         // count so `summary --index` reports the same `excluded` figure as a
         // disk scan without an extra `.gitignore`-disabled walk on every read.
@@ -3026,6 +3069,7 @@ pub(crate) fn scan_one_file(
         bm25_tokens,
         bm25_language,
         bm25_tokenizer_version,
+        valid_utf8: stats.valid_utf8,
     };
 
     Ok((entry, file_links, stats.valid_utf8))
@@ -3957,6 +4001,7 @@ Content.
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
+            valid_utf8: true,
         }
     }
 

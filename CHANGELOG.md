@@ -256,10 +256,17 @@ and this project adheres to
   (DEC-364, amends DEC-350, dogfood-v0250 BUG-14). `set` already wrote all
   three quoted.
 - `find`, `summary` and `lint` agree a note with invalid UTF-8 bytes in its
-  body is a problem: every scan now reports and counts the same skip `lint`
-  already refused the file over, instead of `find`'s plain listing and
-  `summary` treating it as perfectly readable (DEC-365, dogfood-v0250
-  BUG-19). The file still appears in listings and still answers `--file`.
+  body is a problem, on disk and under `--index` alike: every scan that
+  reads the body now reports and counts the same skip `lint` already
+  refused the file over (silenced by `-q`, like every other collapsed skip
+  note), instead of `find`'s plain listing and `summary` disagreeing with
+  `lint`, and `--index` reads disagreeing with disk reads of the same vault
+  (DEC-365, dogfood-v0250 BUG-19 and PR #378 review). Snapshot format
+  bumps to v6 for `IndexEntry.valid_utf8`; a pre-v6 index is refused and
+  rebuilt, like the v4/v5 bumps before it. The file still appears in
+  listings and still answers `--file`; a `--fields file` (or other
+  bodyless) projection deliberately never detects it, to avoid a false
+  positive from a partial read.
 - `HYALO005` names the offending property and says plainly that a
   `{{date}}`-style template placeholder is not YAML, instead of the parser's
   bare "unexpected end of input" (dogfood-v0250 UX-10).
@@ -322,6 +329,12 @@ and this project adheres to
   otherwise never gain the new `explicit_anchor_ids` field, so an upgraded
   binary serving an un-rebuilt v4 index would silently under-report broken
   heading anchors (DEC-353).
+- **Breaking: snapshot format 6.** Indexes written by earlier versions
+  (including this release's own 5) are refused and rebuilt, for the same
+  reason as the v5 bump above: a v5 entry reused as-is by incremental
+  `create-index` would never gain the new `IndexEntry.valid_utf8` field, so
+  `summary --index`/`find --index` would permanently miss a non-UTF-8 file
+  a disk scan already reports (DEC-365).
 - The Codex plugin manifest now carries the hyalo version (0.24.1, was 0.1.0)
   and is checked against the workspace version like the other manifests
   (DEC-340).

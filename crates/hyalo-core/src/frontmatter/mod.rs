@@ -1602,6 +1602,38 @@ Body.
     }
 
     #[test]
+    fn friendly_parse_error_template_placeholder_key_extraction_stops_at_the_real_colon() {
+        // PR #378 review: the key is whatever precedes the line's own
+        // mapping colon, not whatever precedes the placeholder. `{{x}}`
+        // sits inside an already-quoted value here, so a naive
+        // `line[..open]` extraction grabbed `msg: "a` (colon, quote and
+        // all) instead of `msg`.
+        let yaml = "msg: \"a {{x}}\" : [\n";
+        let err = parse_yaml_map(yaml).unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, yaml);
+        assert!(msg.contains("property 'msg'"), "{msg}");
+        assert!(
+            !msg.contains("\"a"),
+            "the key must not swallow the quoted value: {msg}"
+        );
+    }
+
+    #[test]
+    fn friendly_parse_error_template_placeholder_explanation_shows_literal_double_braces() {
+        // PR #378 review: the explanatory clause's own `{{`/`}}` sat inside
+        // a `format!` call without doubling the escape, so it rendered as a
+        // single `{`/`}` each — understating exactly the YAML flow-mapping
+        // ambiguity the sentence exists to explain.
+        let yaml = "created: {{date}}\n";
+        let err = parse_yaml_map(yaml).unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES, yaml);
+        assert!(
+            msg.contains("the `{{`/`}}` braces"),
+            "the explanation must show literal double braces: {msg}"
+        );
+    }
+
+    #[test]
     fn friendly_parse_error_hides_duplicate_key_policy_internals() {
         let yaml = "x: 1\nx: 2\n";
         let err = parse_yaml_map(yaml).unwrap_err();
