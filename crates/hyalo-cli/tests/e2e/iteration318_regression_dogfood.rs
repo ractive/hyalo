@@ -414,3 +414,41 @@ fn index_files_from_counts_a_deleted_file_as_missing() {
     assert_eq!(json["files_missing"], 1, "{json}");
     assert_eq!(json["total"], 1, "{json}");
 }
+
+// ---------------------------------------------------------------------------
+// `links fix --apply`: a target repair and an anchor repair in one file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_applies_a_target_and_an_anchor_repair_in_one_file_in_one_run() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "sub/note.md", "# note\n");
+    write_md(tmp.path(), "note2.md", "## 1. Intro\n");
+    write_md(
+        tmp.path(),
+        "c.md",
+        "[[sub/NOTE]]\n\n[[note2#Intro]]\n\n[m](sub/NOTE.md) and [n](note2.md#intro)\n",
+    );
+    write_md(
+        tmp.path(),
+        "d.md",
+        "[[NOTE2#Intro]] and [x](NOTE2.md#intro)\n",
+    );
+    let (json, out) = run_json(tmp.path(), &["links", "fix", "--apply", "--format", "json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(json["results"]["anchors_applied"], 4, "{json}");
+    assert_eq!(json["results"]["anchors_deferred"], 0, "{json}");
+    let c = std::fs::read_to_string(tmp.path().join("c.md")).unwrap();
+    assert_eq!(
+        c,
+        "[[sub/note]]\n\n[[note2#1. Intro]]\n\n[m](sub/note.md) and [n](note2.md#1-intro)\n"
+    );
+    let d = std::fs::read_to_string(tmp.path().join("d.md")).unwrap();
+    assert_eq!(d, "[[note2#1. Intro]] and [x](note2.md#1-intro)\n");
+
+    let (second, out) = run_json(tmp.path(), &["links", "fix", "--apply", "--format", "json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(second["results"]["anchors_applied"], 0, "{second}");
+    assert_eq!(second["results"]["anchor_fixable"], 0, "{second}");
+    assert_eq!(std::fs::read_to_string(tmp.path().join("c.md")).unwrap(), c);
+}

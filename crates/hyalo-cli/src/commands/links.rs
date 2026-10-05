@@ -135,6 +135,26 @@ fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<us
 /// whose real fix is one line of `.hyalo.toml`.
 const SITE_ABSOLUTE_SCORING_SKIP_MIN: usize = 500;
 
+/// A [`VaultIndex`] whose `entries()` are a few freshly rescanned sources and
+/// whose `get()` falls back to the run's full index, so a re-plan sees the
+/// rewritten sources and every target's headings (DEC-371).
+struct RescannedOverlay<'a> {
+    fresh: &'a hyalo_core::index::ScannedIndex,
+    base: &'a dyn VaultIndex,
+}
+
+impl VaultIndex for RescannedOverlay<'_> {
+    fn entries(&self) -> &[hyalo_core::index::IndexEntry] {
+        self.fresh.entries()
+    }
+    fn get(&self, rel_path: &str) -> Option<&hyalo_core::index::IndexEntry> {
+        self.fresh.get(rel_path).or_else(|| self.base.get(rel_path))
+    }
+    fn link_graph(&self) -> &hyalo_core::link_graph::LinkGraph {
+        self.base.link_graph()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -427,12 +447,14 @@ pub fn links_fix(
     all_fixes.extend(relocations.iter().cloned());
     all_fixes.extend(alias_fixes.iter().cloned());
 
-    let anchor_apply = if dry_run {
+    let mut anchor_apply = if dry_run {
         hyalo_core::anchor_fix::AnchorApplyReport::default()
     } else {
         hyalo_core::anchor_fix::apply_anchor_fixes(dir, &anchor_report.fixes, &all_fixes)?
     };
-    anchor_report.deferred.extend(anchor_apply.deferred);
+    anchor_report
+        .deferred
+        .extend(std::mem::take(&mut anchor_apply.deferred));
 
     if dry_run {
         if !all_fixes.is_empty() {
@@ -472,6 +494,67 @@ pub fn links_fix(
         // do not patch the index for files whose fixes were all unapplied or
         // whose write failed.
         modified_files = plans.into_iter().map(|p| p.rel_path).collect();
+
+        // DEC-371: an anchor in a file that also took a target repair was
+        // deferred above (its captured bytes are now stale). Re-plan exactly
+        // those against the rewritten sources and apply them now, so one run
+        // writes both repairs instead of silently leaving the anchor for a
+        // second run.
+        let conflicted: std::collections::HashSet<String> = anchor_report
+            .deferred
+            .iter()
+            .filter(|d| d.reason == hyalo_core::anchor_fix::TARGET_REPAIR_CONFLICT)
+            .map(|d| d.source.clone())
+            .collect();
+        if !conflicted.is_empty() {
+            // The snapshot/scan entries of those sources describe the text
+            // before the target repairs; rescan just them so the planner
+            // finds the links as they are now on disk (`[[NOTE2#Intro]]` is
+            // `[[note2#Intro]]` after its case fix).
+            let files: Vec<(std::path::PathBuf, String)> = conflicted
+                .iter()
+                .map(|rel| (dir.join(rel), rel.clone()))
+                .collect();
+            let rescanned = hyalo_core::index::ScannedIndex::build_with_case_policy(
+                &files,
+                site_prefix,
+                &hyalo_core::index::ScanOptions {
+                    scan_body: true,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: None,
+                },
+                case_insensitive_resolve,
+            )?;
+            let overlay = RescannedOverlay {
+                fresh: &rescanned.index,
+                base: index,
+            };
+            let replanned = hyalo_core::anchor_fix::plan_anchor_fixes_filtered(
+                dir,
+                &overlay,
+                site_prefix,
+                case_index,
+                |source, target| {
+                    conflicted.contains(source)
+                        && !ignore_target.iter().any(|pattern| target.contains(pattern))
+                },
+            )?;
+            let second = hyalo_core::anchor_fix::apply_anchor_fixes(dir, &replanned.fixes, &[])?;
+            let applied_sources: std::collections::HashSet<(String, usize)> = second
+                .applied
+                .iter()
+                .map(|p| (p.source.clone(), p.line))
+                .collect();
+            anchor_report.deferred.retain(|d| {
+                d.reason != hyalo_core::anchor_fix::TARGET_REPAIR_CONFLICT
+                    || !applied_sources.contains(&(d.source.clone(), d.line))
+            });
+            anchor_report.deferred.extend(second.deferred);
+            anchor_apply.applied.extend(second.applied);
+            anchor_apply.modified_files.extend(second.modified_files);
+            anchor_apply.failed |= second.failed;
+        }
     }
     // BUG-17 (iter-277): only the *applicable* fuzzy fixes went through the
     // planner above, so a below-floor proposal — the whole point of the
