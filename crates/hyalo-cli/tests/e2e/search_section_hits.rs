@@ -363,16 +363,6 @@ fn rejects_fields() {
 }
 
 #[test]
-fn rejects_field_only_pattern() {
-    let tmp = nested_heading_vault();
-    expect_rejected(
-        &tmp,
-        &["find", "title:doc", "--granularity", "section"],
-        "needs a text term",
-    );
-}
-
-#[test]
 fn rejects_negation_only_pattern() {
     let tmp = nested_heading_vault();
     expect_rejected(
@@ -635,39 +625,6 @@ fn nested_negated_group_matches_either_term_per_section() {
     assert_eq!(
         headings,
         vec!["d.md#Keep".to_owned(), "d.md#Other".to_owned()]
-    );
-}
-
-#[test]
-fn field_term_inside_or_holds_for_every_section_of_its_file() {
-    let tmp = TempDir::new().unwrap();
-    write_md(
-        tmp.path(),
-        "split.md",
-        "---\ntitle: Split\n---\n# One\napple\n# Two\nbanana\n",
-    );
-    write_md(tmp.path(), "nohead.md", "kiwi words\n");
-    let (json, output) = run(
-        &tmp,
-        &[
-            "find",
-            "title:Split OR kiwi",
-            "--granularity",
-            "section",
-            "--format",
-            "json",
-        ],
-    );
-    assert!(output.status.success(), "{output:?}");
-    let mut headings = hit_headings(&json);
-    headings.sort();
-    assert_eq!(
-        headings,
-        vec![
-            "nohead.md#null".to_owned(),
-            "split.md#One".to_owned(),
-            "split.md#Two".to_owned()
-        ]
     );
 }
 

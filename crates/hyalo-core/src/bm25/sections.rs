@@ -8,9 +8,9 @@
 //! hit never disagree about what a query means — only about what text it is
 //! evaluated against.
 //!
-//! A query's `Not` and `Field` nodes are file-level predicates already
-//! applied by the caller (a section is only ever scored inside a file that
-//! already matched them), so [`SectionScorer::collect`] prunes them away
+//! A query's negated leaves are file-level predicates already applied by the
+//! caller (a section is only ever scored inside a file that already matched
+//! them), so [`SectionScorer::collect`] turns them into per-file constants
 //! before touching any file: see [`prune`].
 
 use std::collections::{HashMap, VecDeque};
@@ -18,9 +18,7 @@ use std::collections::{HashMap, VecDeque};
 use rust_stemmers::Stemmer;
 
 use super::query;
-use super::{
-    Bm25InvertedIndex, CompiledQuery, FieldSource, StemLanguage, create_stemmer, tokenize,
-};
+use super::{Bm25InvertedIndex, CompiledQuery, StemLanguage, create_stemmer, tokenize};
 use crate::heading::SectionRange;
 use crate::types::{ContentMatch, OutlineSection};
 
@@ -69,8 +67,8 @@ pub struct SectionHit {
 pub struct FileSections {
     sections: Vec<SectionStat>,
     body_offset: usize,
-    /// File-level verdict of every constant leaf (field terms and negated
-    /// leaves), indexed like [`SectionScorer::consts`].
+    /// File-level verdict of every constant (negated) leaf, indexed like
+    /// [`SectionScorer::consts`].
     consts: Vec<bool>,
 }
 
@@ -112,7 +110,7 @@ struct SectionStat {
 // Pruned query tree
 // ---------------------------------------------------------------------------
 
-/// The compiled query with `Not` and `Field` nodes dropped, `Prefix` nodes
+/// The compiled query with negated leaves made constant, `Prefix` nodes
 /// expanded against the corpus, and every term interned to a small integer.
 #[derive(Debug, Clone)]
 enum PrunedNode {
@@ -123,8 +121,8 @@ enum PrunedNode {
     /// Index into [`SectionScorer::phrase_alt_groups`].
     Phrase(usize),
     /// A file-level predicate: index into [`SectionScorer::consts`]. True for
-    /// every section of a file where it holds (a field term, or a negated
-    /// text leaf whose term the file lacks).
+    /// every section of a file where it holds (a negated text leaf whose
+    /// term the file lacks).
     Const(usize),
 }
 
@@ -148,14 +146,12 @@ fn collapse(nodes: Vec<PrunedNode>, make: fn(Vec<PrunedNode>) -> PrunedNode) -> 
 /// Mutable state threaded through [`prune`].
 struct Pruner<'a> {
     corpus: &'a Bm25InvertedIndex,
-    fields: &'a dyn FieldSource,
     term_index: HashMap<String, usize>,
     alt_specs: Vec<Vec<String>>,
     alt_slops: Vec<u32>,
     alt_term_ids: Vec<Vec<usize>>,
     phrase_alt_groups: Vec<Vec<usize>>,
     consts: Vec<ConstLeaf>,
-    has_text: bool,
 }
 
 /// A file-level leaf: the documents where the leaf holds, and whether the
@@ -167,7 +163,7 @@ struct ConstLeaf {
 
 impl Pruner<'_> {
     fn constant(&mut self, node: &query::Node, negate: bool) -> PrunedNode {
-        let docs = self.corpus.node_docs(node, self.fields);
+        let docs = self.corpus.node_docs(node);
         self.consts.push(ConstLeaf { docs, negate });
         PrunedNode::Const(self.consts.len() - 1)
     }
@@ -177,8 +173,8 @@ impl Pruner<'_> {
     /// Negation is pushed down with De Morgan (a negated AND becomes an OR of
     /// negated children), so a term under an even number of negations stays a
     /// positive text leaf (`-(-alpha)` scores `alpha`). A text leaf under odd
-    /// polarity and every field term become file-level constants: true for
-    /// every section of a file where the leaf holds, false otherwise.
+    /// polarity becomes a file-level constant: true for every section of a
+    /// file where the negated leaf holds, false otherwise.
     fn prune(&mut self, node: &query::Node, positive: bool) -> Option<PrunedNode> {
         match node {
             query::Node::And(children) | query::Node::Or(children) => {
@@ -194,10 +190,8 @@ impl Pruner<'_> {
                 }
             }
             query::Node::Not(child) => self.prune(child, !positive),
-            query::Node::Field(_) => Some(self.constant(node, !positive)),
             _ if !positive => Some(self.constant(node, true)),
             query::Node::Term(stems) => {
-                self.has_text = true;
                 let ids = stems
                     .iter()
                     .map(|s| intern(&mut self.term_index, s))
@@ -207,7 +201,6 @@ impl Pruner<'_> {
             query::Node::Prefix(candidates) => {
                 // A prefix that expands to no dictionary term stays an
                 // always-false `Terms([])` leaf rather than relaxing an AND.
-                self.has_text = true;
                 let expanded = self.corpus.expand_prefix(candidates);
                 let ids = expanded
                     .iter()
@@ -216,7 +209,6 @@ impl Pruner<'_> {
                 Some(PrunedNode::Terms(ids))
             }
             query::Node::Phrase(alternatives, slop) => {
-                self.has_text = true;
                 let leaf_idx = self.phrase_alt_groups.len();
                 let mut group = Vec::with_capacity(alternatives.len());
                 for seq in alternatives {
@@ -307,12 +299,10 @@ pub struct SectionScorer {
     phrase_alt_groups: Vec<Vec<usize>>,
     max_phrase_len: usize,
     matcher: query::SnippetMatcher,
-    /// File-level leaves (field terms, negated text leaves) and their docs.
+    /// File-level (negated) text leaves and their docs.
     consts: Vec<ConstLeaf>,
     /// Corpus doc id per path, to look a file up in `consts`.
     doc_ids: HashMap<String, u32>,
-    /// `true` when the section tree has a positive text leaf.
-    has_text: bool,
     /// Field weights from the compiled query (headings and body apply).
     weights: super::FieldWeights,
     /// `[search] code_blocks = "skip"` in effect.
@@ -324,17 +314,15 @@ impl Bm25InvertedIndex {
     /// `expand_prefix`) and IDF (`N` = this corpus's doc count, `n(t)` = this
     /// corpus's document frequency) come from this corpus.
     #[must_use]
-    pub fn section_scorer(&self, query: &CompiledQuery, fields: &dyn FieldSource) -> SectionScorer {
+    pub fn section_scorer(&self, query: &CompiledQuery) -> SectionScorer {
         let mut pruner = Pruner {
             corpus: self,
-            fields,
             term_index: HashMap::new(),
             alt_specs: Vec::new(),
             alt_slops: Vec::new(),
             alt_term_ids: Vec::new(),
             phrase_alt_groups: Vec::new(),
             consts: Vec::new(),
-            has_text: false,
         };
         let root = query.root.as_ref().and_then(|r| pruner.prune(r, true));
         let Pruner {
@@ -344,7 +332,6 @@ impl Bm25InvertedIndex {
             alt_term_ids,
             phrase_alt_groups,
             consts,
-            has_text,
             ..
         } = pruner;
         let doc_ids = if consts.is_empty() {
@@ -393,7 +380,6 @@ impl Bm25InvertedIndex {
             matcher,
             consts,
             doc_ids,
-            has_text,
             weights: query.params().weights,
             skip_code: super::search_settings().skip_code_blocks,
         }
@@ -417,12 +403,6 @@ impl SectionMeta {
 }
 
 impl SectionScorer {
-    /// `false` when the query has no positive text leaf left after pruning.
-    #[must_use]
-    pub fn has_text_terms(&self) -> bool {
-        self.has_text
-    }
-
     /// File-level verdict of every constant leaf for `rel_path`.
     fn file_consts(&self, rel_path: &str) -> Vec<bool> {
         let id = self.doc_ids.get(rel_path).copied();
@@ -878,7 +858,7 @@ Body of C.\n";
 
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("body");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -922,7 +902,7 @@ Body of C.\n";
         let outline = vec![sec(1, "A", 1), sec(1, "B", 3)];
         let idx = corpus(&[("doc.md", "alpha beta")]);
         let q = compiled("alpha OR beta");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -942,7 +922,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("alpha beta");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -952,7 +932,7 @@ Body of C.\n";
     }
 
     #[test]
-    fn or_group_and_negation_and_field_terms_are_section_scoped_correctly() {
+    fn or_group_and_negation_are_section_scoped_correctly() {
         let tmp = TempDir::new().unwrap();
         let body = "# One\nalpha here.\n# Two\nbeta here.\n# Three\ngamma only.\n";
         write(&tmp, "doc.md", body);
@@ -961,7 +941,7 @@ Body of C.\n";
 
         // OR: both One (alpha) and Two (beta) hit, Three does not.
         let q = compiled("alpha OR beta");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -976,7 +956,7 @@ Body of C.\n";
         // Negation is a file-level constant: a file lacking the negated term
         // keeps its sections eligible, a file containing it has none.
         let q = compiled("alpha -delta");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -985,41 +965,11 @@ Body of C.\n";
         assert_eq!(hits[0].1.span.heading.as_deref(), Some("One"));
 
         let q = compiled("alpha -gamma");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
         assert!(scorer.finish(vec![("doc.md".to_owned(), fs)]).is_empty());
-
-        // A field term ANDed with a word holds file-wide: "alpha title:split"
-        // hits One when the title matches and nothing when it does not.
-        let q = compiled("alpha title:split");
-        let scorer = idx.section_scorer(&q, &TitleSource("Split notes"));
-        let fs = scorer
-            .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
-            .unwrap();
-        let hits = scorer.finish(vec![("doc.md".to_owned(), fs)]);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].1.span.heading.as_deref(), Some("One"));
-        let scorer = idx.section_scorer(&q, &TitleSource("Other"));
-        let fs = scorer
-            .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
-            .unwrap();
-        assert!(scorer.finish(vec![("doc.md".to_owned(), fs)]).is_empty());
-    }
-
-    /// Every document carries the same title; nothing else.
-    struct TitleSource(&'static str);
-
-    impl FieldSource for TitleSource {
-        fn field_document(&self, _rel_path: &str) -> Option<super::super::FieldDocument<'_>> {
-            Some(super::super::FieldDocument {
-                title: std::borrow::Cow::Borrowed(self.0),
-                headings: Vec::new(),
-                tags: &[],
-                language: StemLanguage::English,
-            })
-        }
     }
 
     fn headings_hit(
@@ -1027,10 +977,9 @@ Body of C.\n";
         tmp: &TempDir,
         outline: &[OutlineSection],
         query: &str,
-        fields: &dyn FieldSource,
     ) -> Vec<(String, f64)> {
         let q = compiled(query);
-        let scorer = idx.section_scorer(&q, fields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, outline, None)
             .unwrap();
@@ -1049,11 +998,8 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("-(-alpha)");
-        assert!(
-            idx.section_scorer(&q, &super::super::NoFields)
-                .has_text_terms()
-        );
-        let hits = headings_hit(&idx, &tmp, &outline, "-(-alpha)", &super::super::NoFields);
+        assert!(q.has_positive_leaf());
+        let hits = headings_hit(&idx, &tmp, &outline, "-(-alpha)");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, "One");
         assert!(hits[0].1 > 0.0);
@@ -1067,58 +1013,17 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3), sec(1, "Three", 5)];
         let idx = corpus(&[("doc.md", body)]);
         // -(-alpha -beta) == alpha OR beta
-        let mut names: Vec<String> = headings_hit(
-            &idx,
-            &tmp,
-            &outline,
-            "-(-alpha -beta)",
-            &super::super::NoFields,
-        )
-        .into_iter()
-        .map(|(h, _)| h)
-        .collect();
+        let mut names: Vec<String> = headings_hit(&idx, &tmp, &outline, "-(-alpha -beta)")
+            .into_iter()
+            .map(|(h, _)| h)
+            .collect();
         names.sort();
         assert_eq!(names, vec!["One".to_owned(), "Two".to_owned()]);
         // gamma -(alpha zeta): the file lacks zeta, so the negated AND holds
         // file-wide and only Three (gamma) hits.
-        let hits = headings_hit(
-            &idx,
-            &tmp,
-            &outline,
-            "gamma -(alpha zeta)",
-            &super::super::NoFields,
-        );
+        let hits = headings_hit(&idx, &tmp, &outline, "gamma -(alpha zeta)");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, "Three");
-    }
-
-    #[test]
-    fn field_term_in_an_or_holds_for_every_section_of_its_file() {
-        let tmp = TempDir::new().unwrap();
-        let body = "# One\nkiwi here.\n# Two\nnothing.\n";
-        write(&tmp, "doc.md", body);
-        let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
-        let idx = corpus(&[("doc.md", body)]);
-        let hits = headings_hit(
-            &idx,
-            &tmp,
-            &outline,
-            "kiwi OR title:split",
-            &TitleSource("Split"),
-        );
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].0, "One");
-        assert!(hits[0].1 > 0.0);
-        assert!(hits[1].1.abs() < f64::EPSILON);
-        // Without the title only the kiwi section hits.
-        let hits = headings_hit(
-            &idx,
-            &tmp,
-            &outline,
-            "kiwi OR title:split",
-            &TitleSource("No"),
-        );
-        assert_eq!(hits.len(), 1);
     }
 
     #[test]
@@ -1130,7 +1035,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1)];
         let idx = corpus(&[("doc.md", "alpha here.")]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1149,7 +1054,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 4)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("\"quick fox\"");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1168,7 +1073,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("\"quick fox\"");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1184,7 +1089,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("conf*");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1201,7 +1106,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 2), sec(1, "Two", 4)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
 
         // Scope covering only section One's heading line.
         let scope = [SectionRange { start: 2, end: 3 }];
@@ -1227,7 +1132,7 @@ Body of C.\n";
         let outline = vec![sec(1, "Short", 1), sec(1, "Long", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1245,7 +1150,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1261,20 +1166,15 @@ Body of C.\n";
         }
     }
 
+    /// `find` rejects a section-mode query without a positive leaf before
+    /// scoring (DEC-334); negation alone never counts as one.
     #[test]
-    fn has_text_terms_false_for_field_only_and_negation_only_queries() {
-        let idx = corpus(&[("doc.md", "alpha beta")]);
-        for q in ["title:alpha", "-alpha"] {
-            let compiled = compiled(q);
-            let scorer = idx.section_scorer(&compiled, &super::super::NoFields);
-            assert!(
-                !scorer.has_text_terms(),
-                "{q:?} should have no positive text leaf left"
-            );
+    fn negation_only_queries_have_no_positive_leaf() {
+        for q in ["-gamma", "-(gamma delta)"] {
+            assert!(!compiled(q).has_positive_leaf(), "{q:?}");
         }
-        // Sanity: a normal term query does have text terms.
-        let scorer = idx.section_scorer(&compiled("alpha"), &super::super::NoFields);
-        assert!(scorer.has_text_terms());
+        assert!(compiled("alpha").has_positive_leaf());
+        assert!(compiled("-(-alpha)").has_positive_leaf());
     }
 
     #[test]
@@ -1287,7 +1187,7 @@ Body of C.\n";
         let outline = vec![sec(1, "---", 1), sec(1, "Real", 2)];
         let idx = corpus(&[("doc.md", "alpha content")]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1313,7 +1213,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1)];
         let idx = corpus(&[("doc.md", "alpha")]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();
@@ -1329,7 +1229,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 4)];
         let idx = corpus(&[("doc.md", "alpha")]);
         let q = compiled("alpha");
-        let scorer = idx.section_scorer(&q, &super::super::NoFields);
+        let scorer = idx.section_scorer(&q);
         let fs = scorer
             .collect(tmp.path(), "doc.md", StemLanguage::English, &outline, None)
             .unwrap();

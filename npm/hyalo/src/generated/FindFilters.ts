@@ -133,9 +133,8 @@ sort?: string,
  * {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
  * are flat (a heading runs to the next heading of any level; text before the first
  * heading is a section with heading null and level 0). A section is a hit only when it
- * satisfies the query's positive words and phrases on its own; negated terms and field
- * terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
- * sections. Files qualify against their whole body, so --section only restricts which
+ * satisfies the query's positive words and phrases on its own; negated terms are decided
+ * once per file and hold for all its sections. Files qualify against their whole body, so --section only restricts which
  * sections are eligible. Scores use the corpus IDF and section-length normalisation;
  * --limit counts sections and --filenames-only lists each file once. Requires PATTERN
  * with at least one text term; --regexp, --sort, --reverse and --fields are rejected in

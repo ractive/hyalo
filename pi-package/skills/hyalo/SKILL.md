@@ -117,12 +117,12 @@ hyalo find '\"error handling\"'          # Phrase: exact consecutive match (afte
 hyalo find '\"error handling\"~3'        # Slop: at most 3 extra words between (max 64)
 hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
 hyalo find -- '(bm25 OR stemming) -tantivy' # Groups; OR binds tighter than implicit AND
-hyalo find 'title:iteration conf*'       # Field term + prefix over stems
+hyalo find 'conf*' --title iteration    # Prefix over stems, scoped by title
 ```
 
 `a b OR c` means a AND (b OR c). `prefix*` matches dictionary stems (capped at 256).
-`title:`, `heading:`, `tag:` and `path:` field terms combine like words; a field-only query
-scores 0 without snippets, and an unknown `foo:bar` is a plain word. Zero results carry a
+There are no field terms: `title:x` or `foo:bar` is a plain word; select structure with
+`--title`, `--section`, `--tag`, `--glob`. Zero results carry a
 `suggestions` key; `hyalo terms [PREFIX]` lists the stemmed dictionary.
 Accents fold (`résumé` = `resume`) and identifiers index whole plus parts (`getUserName`
 is found by `user`). Title, headings and tags/aliases outweigh body; close terms rank higher.

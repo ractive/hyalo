@@ -684,9 +684,8 @@ pub(crate) struct FindFilters {
     /// {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
     /// are flat (a heading runs to the next heading of any level; text before the first
     /// heading is a section with heading null and level 0). A section is a hit only when it
-    /// satisfies the query's positive words and phrases on its own; negated terms and field
-    /// terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
-    /// sections. Files qualify against their whole body, so --section only restricts which
+    /// satisfies the query's positive words and phrases on its own; negated terms are decided
+    /// once per file and hold for all its sections. Files qualify against their whole body, so --section only restricts which
     /// sections are eligible. Scores use the corpus IDF and section-length normalisation;
     /// --limit counts sections and --filenames-only lists each file once. Requires PATTERN
     /// with at least one text term; --regexp, --sort, --reverse and --fields are rejected in
@@ -1100,9 +1099,9 @@ pub(crate) enum Commands {
             line before the next heading of any level, and text before the first heading is a section \
             with heading null and level 0. A section is a hit only when it satisfies the query's \
             positive words and phrases by itself (every AND term, and each OR group, inside that \
-            section). Negated terms and field terms are decided once per file against its whole body \
-            and hold for every section of it: '-(-a)' ranks sections holding a, 'kiwi OR title:x' hits \
-            every section of a file titled x. --section only restricts which sections are eligible. \
+            section). Negated terms are decided once per file against its whole body and hold for \
+            every section of it: 'kiwi -draft' hits the kiwi sections of files that never say draft, \
+            and '-(-a)' ranks sections holding a. --section only restricts which sections are eligible. \
             When the words occur in a file but never share a section, the empty answer says so and \
             hints the same query at file granularity. --filenames-only lists each file once. \
             Scores use the corpus IDF with section-length normalisation (average over the scored \
@@ -1147,11 +1146,10 @@ pub(crate) enum Commands {
             typo (e.g. 'configurationon') happens to share the raw prefix. Capped at the 256 \
             most frequent terms, with a warning -q cannot silence. 'hyalo terms PREFIX' lists the \
             dictionary.\n\
-            - Field terms: title:word, title:\"a phrase\", title:conf*, heading:install, tag:project \
-            (same prefix rule as --tag), path:iterations/ (case-insensitive substring of the \
-            vault-relative path). They combine with AND/OR/- like any term. A query of field terms \
-            only returns its files sorted by path with score 0 and no snippets. An unknown prefix \
-            ('foo:bar', URLs, 'std::fs') is a plain term.\n\
+            - Terms are words, phrases, prefixes and their boolean combinations; there are no field \
+            terms. A 'name:value' token ('title:x', 'foo:bar', URLs, 'std::fs') is plain text. Select \
+            structure with flags: --title, --section, --tag, --glob. A zero-result query holding a \
+            'title:x'-shaped word says so and hints the flag with the rest of the query.\n\
             - Every term is stemmed in each language present in the vault (frontmatter 'language' \
             plus --language/config), so a 'language: de' note matches its German inflections.\n\
             - Zero results: query words found in no document get up to 3 close dictionary stems \
@@ -1319,7 +1317,7 @@ pub(crate) enum Commands {
             EXAMPLES:\n\
             hyalo find 'error handling'\n\
             hyalo find -- '(bm25 OR stemming) -tantivy'\n\
-            hyalo find 'title:iteration tag:iteration link*'\n\
+            hyalo find 'link*' --title iteration --tag iteration\n\
             hyalo find 'snapshot index' --granularity section --limit 5   # the best sections, not files\n\
             hyalo find --tag iteration --facet property:status --facet dir   # distribution of a match set\n\
             hyalo find 'bm25' --facet tags --jq '.facets[0].buckets[:5]'\n\

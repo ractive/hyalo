@@ -384,6 +384,14 @@ pub struct HintContext {
     /// invisible to a check that used `search_suggestions` as a stand-in
     /// for "this word matched nothing".
     pub zero_posting_terms: Vec<String>,
+    /// Positive words shaped like a removed field term (`title:x`; DEC-366)
+    /// as `(field, value)`, recorded only for a zero-result ranked query so
+    /// the hint layer can name the flag that replaced it.
+    pub legacy_field_terms: Vec<(String, String)>,
+    /// The query with those words removed, when it still parses (empty when
+    /// nothing else remains); `None` leaves the migration hint without a
+    /// runnable command.
+    pub legacy_field_rest: Option<String>,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -468,6 +476,8 @@ impl HintContext {
             section_file_matches: None,
             pure_negative_query: false,
             zero_posting_terms: Vec::new(),
+            legacy_field_terms: Vec::new(),
+            legacy_field_rest: None,
             resolved: None,
         }
     }

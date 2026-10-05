@@ -6425,7 +6425,10 @@ its own frontmatter `language`. A zero-result query said nothing useful.
   `prefix*` supported), `tag:` uses `--tag`'s prefix rule, `path:` is a
   case-insensitive substring. A field-only query returns its files with score 0,
   sorted by path, without snippets. An unknown `foo:bar` stays a plain term, so
-  URLs and `std::fs` keep working.
+  URLs and `std::fs` keep working. **Amended by [[decision-log#DEC-366: Field terms removed from the search grammar — structure is selected with flags (2026-10-05)]]:
+  field terms were removed before 0.25.0 shipped; every `name:value` token is
+  a plain word, and structure is selected with `--title`, `--section`,
+  `--tag` and `--glob`.**
 - The query is compiled once per stemming language present in the scoped corpus
   plus the effective `--language`/config language; each term leaf is the OR of
   its deduplicated per-language stems, and snippets use the same expansion.
@@ -6483,7 +6486,8 @@ the same question of a section instead of a file.
   group must be satisfied in it (`kiwi OR title:x` hits every section of a file
   titled x, scoring 0 where kiwi is absent), and a phrase may span lines within
   a section but never two sections. `prefix*` expands against the corpus
-  dictionary with the same 256-term cap.
+  dictionary with the same 256-term cap. **Amended by [[decision-log#DEC-366: Field terms removed from the search grammar — structure is selected with flags (2026-10-05)]]:
+  field terms no longer exist, so only negated leaves are per-file constants.**
 - Score = Σ over positive leaves of idf(t)·tfnorm, with the corpus N and n(t)
   (the same IDF as file-level ranking) and the section's token length as dl;
   avgdl is the mean token length over every eligible section of every matched
@@ -8315,3 +8319,64 @@ shape), `crates/hyalo-core/src/index.rs` (`IndexEntry.valid_utf8`,
 `::non_utf8_skip_warning_is_silenced_by_quiet`,
 `::index_mode_agrees_with_disk_on_the_non_utf8_file`.
 [[iterations/iteration-314-config-files-and-yaml-leftovers]].
+
+## DEC-366: Field terms removed from the search grammar — structure is selected with flags (2026-10-05)
+
+**Context.** Iteration 302 ([[decision-log#DEC-333: Ranked search grammar: OR binds tighter than AND, groups, prefixes, field terms (2026-10-03)]]) added `title:`,
+`heading:`, `tag:` and `path:` field terms to the ranked-search PATTERN.
+Reviewing them after the 2026-10-04 dogfood, the owner found that each one
+duplicates an existing flag — `--title`, `--section`, `--tag`, `--glob` — and
+that the only new capability, OR/negation composition of structure with
+words (`kiwi OR title:x`), has no demonstrated need. Keeping them cost a
+colon-splitting rule with exceptions (`foo:bar`, URLs, `std::fs`), field-term
+interaction with `OR`, groups and negation, the "field-only query scores 0,
+sorts by path, has no snippets" special case, per-file field constants in
+section mode ([[decision-log#DEC-334: Section-granular ranked hits: flat sections, positive tree per section, corpus IDF (2026-10-03)]]), a dedicated `title:(a OR b)`
+diagnostic, help and claims text, and disk/index parity tests. Decided on
+2026-10-05, before 0.25.0 ships, so no released version ever had them.
+
+**Decision** (iteration 315,
+[[iterations/iteration-315-remove-field-terms]]). Search terms are words,
+phrases, prefixes and their boolean combinations; structure is selected with
+flags. The lexer no longer recognises any `name:` prefix: `title:dogfood` is
+the plain word it tokenizes to (`title` AND `dogfood`), exactly as `foo:bar`
+always was. Removed with it: `FieldKind`/`FieldTerm`/`FieldSource`/
+`FieldDocument`/`NoFields` and `Bm25InvertedIndex::score_with_fields` in
+hyalo-core (`score_compiled` is the one scoring entry point), the field-only
+special case, field constants in the section pruner (negated leaves remain
+the only per-file constants), the `has_text_terms`/`has_field_terms` split
+(`has_positive_leaf` answers both), and the `title:(…)` "cannot take a group"
+diagnostic — that query is now an ordinary unbalanced-parenthesis error,
+because a parenthesis glued to a word is literal.
+
+**Consequences.** Every query without a field term answers exactly as before
+(the dogfood grammar table's counts are unchanged, disk and `--index` alike);
+no snapshot format or `TOKENIZER_VERSION` change, since field terms were
+query-side only. A query written with a field term now searches the literal
+words instead; `find --help`, the skills and the claims paragraph point at
+the flags. Migration aid for agents with the old habit: when a ranked query
+returns nothing and a positive word has the shape `title:x`, `heading:x`,
+`tag:x` or `path:x` (or the phrase form `title:"two words"`), the
+zero-result notice says field terms are not part of the grammar and names the
+flag (`--title`, `--section`, `--tag`, and for the old substring-anywhere
+`path:x` the segment glob `--glob '{**/*x*,**/*x*/**}'`), and the JSON hints
+carry a runnable `hyalo find --title x … -- <rest of the query>` (the "Try
+OR" rewrite is withheld for such a query). The rewrite is offered only when
+every such word is a direct child of the top-level AND and the rest gains no
+parse warning — `a OR title:x` or `(title:x OR b) c` would leave a dangling
+`OR` — otherwise the hint points at `find --help`; and `--granularity
+section` is dropped from it when no PATTERN remains, since section mode
+requires one. The token is recognised only for that hint; matching is
+plain-word.
+Alongside, `check-help-drift` gained gate 3g: every "… in `hyalo <cmd>
+--help`" hint in the CLI source must read "see SECTION" ("see" in any case)
+with an ALL-CAPS SECTION that page prints as a header; a hint whose section
+cannot be parsed fails too.
+
+**Rejected alternative.** Keeping `title:` and `heading:` only, the two that
+compare stemmed tokens rather than reproducing a flag's exact rule. Rejected:
+`--title` already selects by title and `--section` by heading, so the pair
+would still carry the colon-lexing exceptions, the field-only scoring special
+case and the per-file section constants for the same unproven composition
+benefit; a partial grammar would also invite "why not `tag:`?" and re-grow
+the removed surface.

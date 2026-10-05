@@ -18,8 +18,6 @@ and this project adheres to
   suggestions and preview changes through Hyalo before applying them.
 - Ranked search query language (DEC-333): `conf*` prefix terms matched against
   the stemmed dictionary (capped at 256 terms with a `-q`-proof warning);
-  `title:`, `heading:`, `tag:` and `path:` field terms evaluated from index
-  metadata (a field-only query returns files sorted by path with score 0);
   each term is stemmed in every language present in the vault, so a `language:
   de` note is found by its German inflection; a zero-result query names close
   dictionary terms, hints the corrected query and reports them under a
@@ -31,7 +29,7 @@ and this project adheres to
 - `find PATTERN --granularity section` returns one ranked hit per matching
   section (`{file, section: {heading, level, line_start, line_end, path},
   score, matches}`) instead of per file (DEC-334). A section must satisfy the
-  query's positive words on its own; negated terms and field terms are
+  query's positive words on its own; negated terms are
   decided once per file and hold for all its sections. Scores use the corpus IDF with section-length normalisation,
   `--limit` counts sections, `--section` restricts eligible sections, and each
   hit hints a `hyalo read` that shows it. Same answer with `--index`.
@@ -149,8 +147,7 @@ and this project adheres to
   names when a comparison's values are all strings.
 - `--facet property:a:b` is rejected like a bare `property:`, naming the
   four accepted forms.
-- `title:(a OR b)` reports "a field term cannot take a group" instead of a
-  confusing unbalanced-parenthesis error; a pure-negative query says it
+- A pure-negative query says it
   needs a positive term; `--granularity section` snippet lines print in
   line order in text mode; the corrected-query hint keeps `--granularity
   section` when the original query ran in section mode.
@@ -310,6 +307,14 @@ and this project adheres to
 
 ### Removed
 
+- The `title:`, `heading:`, `tag:` and `path:` field terms of the ranked
+  search grammar, added earlier in this release cycle and never released
+  (DEC-366). Each duplicated a flag (`--title`, `--section`, `--tag`,
+  `--glob`); a `name:value` token is now a plain word like `foo:bar`, and the
+  field-only "score 0, sorted by path" special case is gone with them. A
+  zero-result query holding a `title:x`-shaped word names the flag and hints
+  the query rewritten to use it; `check-help-drift` now fails on a
+  "see SECTION in `hyalo <cmd> --help`" hint whose header does not exist.
 - The unembedded copies of the hyalo-tidy Jev helper and reference under the
   crate's pi and codex template trees (about 118 KB of the crate tarball); the
   crate installs them from `templates/jev/` (DEC-344).

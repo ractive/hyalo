@@ -7,7 +7,7 @@
 //! and_expr:= or_expr ( ["AND"] or_expr )*      -- implicit AND
 //! or_expr := unary ( "OR" unary )*             -- OR binds tighter than AND
 //! unary   := "-" unary | primary               -- negates a term, phrase or group
-//! primary := WORD | PREFIX* | "PHRASE" | FIELD:value | "(" and_expr ")"
+//! primary := WORD | PREFIX* | "PHRASE" | "(" and_expr ")"
 //! ```
 //!
 //! A parsed query is compiled once per stemming language present in the
@@ -15,11 +15,11 @@
 //! (identical stems deduplicated), so a German note is found by its German
 //! inflection even when the vault default language is English.
 //!
-//! Field terms (`title:`, `heading:`, `tag:`, `path:`) are per-document
-//! predicates evaluated from index metadata, never from the token stream, so
-//! the snapshot format and [`super::TOKENIZER_VERSION`] are unchanged.
+//! Every leaf searches the token stream: there are no field terms
+//! (DEC-366). A `name:value` token such as `title:x`, `std::fs` or a URL is a
+//! plain word; structure is selected with `find`'s flags (`--title`,
+//! `--section`, `--tag`, `--glob`).
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 use rust_stemmers::Stemmer;
@@ -63,48 +63,6 @@ impl std::error::Error for QuerySyntaxError {}
 // Lexer
 // ---------------------------------------------------------------------------
 
-/// Document field a `field:value` term tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldKind {
-    /// Stemmed tokens of the promoted title (property, H1, filename).
-    Title,
-    /// Stemmed tokens of any heading.
-    Heading,
-    /// A tag, matched with the same prefix rule as `--tag`.
-    Tag,
-    /// Case-insensitive substring of the vault-relative path.
-    Path,
-}
-
-impl FieldKind {
-    fn parse(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "title" => Some(Self::Title),
-            "heading" => Some(Self::Heading),
-            "tag" => Some(Self::Tag),
-            "path" => Some(Self::Path),
-            _ => None,
-        }
-    }
-
-    /// The field name as written in a query, for error messages.
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Title => "title",
-            Self::Heading => "heading",
-            Self::Tag => "tag",
-            Self::Path => "path",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum FieldText {
-    Word(String),
-    /// A quoted phrase and its `~N` slop (0 when absent).
-    Phrase(String, u32),
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum Lexeme {
     Open,
@@ -122,10 +80,6 @@ enum Lexeme {
     /// of its content's first character in the query (for did-you-mean
     /// rewrites of a misspelled word inside the phrase — DEC-357).
     Phrase(String, u32, usize),
-    Field {
-        kind: FieldKind,
-        value: FieldText,
-    },
 }
 
 /// Largest accepted phrase slop; a larger `~N` is clamped to it.
@@ -237,8 +191,7 @@ fn read_word(
     (query[start..end].to_owned(), start, end)
 }
 
-/// Error text shared by every malformed-slop site (plain phrase, negated
-/// phrase, field phrase).
+/// Error text shared by every malformed-slop site (plain and negated phrase).
 const MALFORMED_SLOP_MESSAGE: &str =
     "'~' after a phrase takes a number of extra words, e.g. \"a b\"~3 -- not a word";
 
@@ -308,14 +261,7 @@ fn lex(query: &str) -> Result<(Vec<Lexeme>, QueryWarnings), QuerySyntaxError> {
                         out.push(Lexeme::Not);
                         // A negated word is always literal: `-or` excludes "or".
                         let (text, start, end) = read_word(query, &mut chars);
-                        out.push(classify_word(
-                            text,
-                            start,
-                            end,
-                            &mut chars,
-                            false,
-                            &mut warnings,
-                        )?);
+                        out.push(classify_word(text, start, end, false));
                     }
                 }
             }
@@ -326,59 +272,23 @@ fn lex(query: &str) -> Result<(Vec<Lexeme>, QueryWarnings), QuerySyntaxError> {
                     chars.next();
                     continue;
                 }
-                out.push(classify_word(
-                    text,
-                    start,
-                    end,
-                    &mut chars,
-                    true,
-                    &mut warnings,
-                )?);
+                out.push(classify_word(text, start, end, true));
             }
         }
     }
     Ok((out, warnings))
 }
 
-fn classify_word(
-    text: String,
-    start: usize,
-    end: usize,
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    keywords: bool,
-    warnings: &mut QueryWarnings,
-) -> Result<Lexeme, QuerySyntaxError> {
+/// `OR`/`AND` (case-insensitive) are operators unless negated; everything
+/// else is a word, a `name:value` token included (DEC-366).
+fn classify_word(text: String, start: usize, end: usize, keywords: bool) -> Lexeme {
     if keywords && text.eq_ignore_ascii_case("or") {
-        return Ok(Lexeme::Or);
+        return Lexeme::Or;
     }
     if keywords && text.eq_ignore_ascii_case("and") {
-        return Ok(Lexeme::And);
+        return Lexeme::And;
     }
-    if let Some((name, rest)) = text.split_once(':')
-        && let Some(kind) = FieldKind::parse(name)
-    {
-        if !rest.is_empty() {
-            return Ok(Lexeme::Field {
-                kind,
-                value: FieldText::Word(rest.to_owned()),
-            });
-        }
-        if matches!(chars.peek(), Some(&(_, '"'))) {
-            chars.next();
-            let (phrase, terminated) = read_phrase(chars);
-            if terminated && peek_malformed_slop(chars) {
-                return Err(QuerySyntaxError::new(MALFORMED_SLOP_MESSAGE));
-            }
-            let (slop, clamped_from) = read_slop(chars);
-            warnings.unterminated_quote |= !terminated;
-            warnings.clamped_slops.extend(clamped_from);
-            return Ok(Lexeme::Field {
-                kind,
-                value: FieldText::Phrase(phrase, slop),
-            });
-        }
-    }
-    Ok(Lexeme::Word { text, start, end })
+    Lexeme::Word { text, start, end }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +308,6 @@ enum RawNode {
     /// Content, slop, and the byte offset of the content's first character
     /// in the query (DEC-357).
     Phrase(String, u32, usize),
-    Field {
-        kind: FieldKind,
-        value: FieldText,
-    },
 }
 
 struct Parser {
@@ -517,7 +423,6 @@ impl Parser {
             Lexeme::Phrase(text, slop, content_start) => {
                 Ok(RawNode::Phrase(text, slop, content_start))
             }
-            Lexeme::Field { kind, value } => Ok(RawNode::Field { kind, value }),
             // Unreachable from parse_and/parse_or, which consume these first.
             Lexeme::Close | Lexeme::Or | Lexeme::And | Lexeme::Not => Err(QuerySyntaxError::new(
                 "'-' must be followed by a term, phrase or group",
@@ -533,24 +438,6 @@ fn parse(query: &str) -> Result<(RawNode, QueryWarnings), QuerySyntaxError> {
     // an *opening* quote, so `"~home dir"` -- an ordinary phrase whose
     // content starts with `~` -- was rejected before it was ever lexed).
     let (lexemes, lex_warnings) = lex(query)?;
-    // UX-10 text polish: `title:(a OR b)` reads `(a` as the literal start of
-    // the field's word value (parens inside a word are literal, like
-    // `main()`), so the `(` never reaches the parser as a group opener and
-    // the trailing `)` fails later as unbalanced -- a confusing error about
-    // the wrong character. Catch it here, once, with a message that names
-    // the actual problem: a field term takes one word or phrase, not a group.
-    if let Some(kind) = lexemes.iter().find_map(|l| match l {
-        Lexeme::Field {
-            kind,
-            value: FieldText::Word(text),
-        } if text.starts_with('(') => Some(*kind),
-        _ => None,
-    }) {
-        let name = kind.as_str();
-        return Err(QuerySyntaxError::new(format!(
-            "a field term cannot take a group: write {name}:word or {name}:\"phrase\", not {name}:(…)"
-        )));
-    }
     let mut parser = Parser {
         lexemes,
         pos: 0,
@@ -563,111 +450,6 @@ fn parse(query: &str) -> Result<(RawNode, QueryWarnings), QuerySyntaxError> {
 // ---------------------------------------------------------------------------
 // Compiled (stemmed) AST
 // ---------------------------------------------------------------------------
-
-/// What a field term compares against.
-#[derive(Debug, Clone, PartialEq)]
-enum FieldValue {
-    /// Alternative stemmed token sequences (one per query language, deduped)
-    /// and the phrase slop.
-    Sequences(Vec<Vec<String>>, u32),
-    /// Lowercase prefix tested against each stemmed token (`title:conf*`).
-    Prefix(Vec<String>),
-    /// Literal text: a tag query or a lowercase path substring.
-    Literal(String),
-}
-
-/// A compiled `field:value` predicate.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FieldTerm {
-    kind: FieldKind,
-    value: FieldValue,
-}
-
-/// Index metadata a field term is evaluated against.
-pub struct FieldDocument<'a> {
-    /// Promoted title (frontmatter, first H1, filename stem).
-    pub title: Cow<'a, str>,
-    /// Every heading text in the document.
-    pub headings: Vec<&'a str>,
-    /// Frontmatter tags.
-    pub tags: &'a [String],
-    /// The document's stemming language.
-    pub language: StemLanguage,
-}
-
-/// Supplies [`FieldDocument`]s by vault-relative path. `path:` never needs one.
-pub trait FieldSource {
-    /// Metadata for `rel_path`, or `None` when unknown (field terms then fail).
-    fn field_document(&self, rel_path: &str) -> Option<FieldDocument<'_>>;
-}
-
-/// A [`FieldSource`] that knows no document: only `path:` terms can match.
-pub struct NoFields;
-
-impl FieldSource for NoFields {
-    fn field_document(&self, _rel_path: &str) -> Option<FieldDocument<'_>> {
-        None
-    }
-}
-
-impl FieldTerm {
-    /// The field this term tests.
-    #[must_use]
-    pub fn kind(&self) -> FieldKind {
-        self.kind
-    }
-
-    fn matches_tokens(&self, tokens: &[String]) -> bool {
-        match &self.value {
-            FieldValue::Sequences(alternatives, slop) => alternatives
-                .iter()
-                .any(|seq| seq_in_tokens(tokens, seq, *slop)),
-            FieldValue::Prefix(candidates) => tokens
-                .iter()
-                .any(|t| candidates.iter().any(|p| t.starts_with(p.as_str()))),
-            FieldValue::Literal(_) => false,
-        }
-    }
-
-    fn matches(
-        &self,
-        rel_path: &str,
-        source: &dyn FieldSource,
-        stemmers: &mut HashMap<StemLanguage, Stemmer>,
-    ) -> bool {
-        if self.kind == FieldKind::Path {
-            return match &self.value {
-                FieldValue::Literal(needle) => rel_path.to_lowercase().contains(needle.as_str()),
-                _ => false,
-            };
-        }
-        let Some(doc) = source.field_document(rel_path) else {
-            return false;
-        };
-        match self.kind {
-            FieldKind::Tag => match &self.value {
-                FieldValue::Literal(query) => doc
-                    .tags
-                    .iter()
-                    .any(|tag| crate::filter::tag_matches(tag, query)),
-                _ => false,
-            },
-            FieldKind::Title | FieldKind::Heading => {
-                let stemmer = stemmers
-                    .entry(doc.language)
-                    .or_insert_with(|| create_stemmer(doc.language));
-                if self.kind == FieldKind::Title {
-                    self.matches_tokens(&tokenize(&doc.title, stemmer))
-                } else {
-                    doc.headings
-                        .iter()
-                        .any(|heading| self.matches_tokens(&tokenize(heading, stemmer)))
-                }
-            }
-            FieldKind::Path => false,
-        }
-    }
-}
 
 /// A node of the compiled query.
 #[derive(Debug, Clone, PartialEq)]
@@ -684,7 +466,6 @@ pub(super) enum Node {
     /// Alternative stem sequences, one per query language, and the slop:
     /// tokens in order with at most that many extra positions (DEC-338).
     Phrase(Vec<Vec<String>>, u32),
-    Field(FieldTerm),
 }
 
 /// A positive plain query word, kept for did-you-mean.
@@ -699,6 +480,55 @@ struct QueryWord {
     stems: Vec<String>,
 }
 
+/// A positive word shaped like one of the removed field terms (`title:x`,
+/// `heading:x`, `tag:x`, `path:x`; DEC-366). It is searched as plain words;
+/// the hint layer uses it to point a zero-result query at the matching flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyFieldTerm {
+    /// The field name, lowercased: `title`, `heading`, `tag` or `path`.
+    pub field: String,
+    /// The text after the colon, as written (a quoted phrase's content for
+    /// `title:"two words"`).
+    pub value: String,
+    /// Byte span of the whole token (phrase and `~N` included) in the query.
+    start: usize,
+    end: usize,
+    /// A direct child of the query's top-level AND: only then does removing
+    /// it leave a query that means "the rest, scoped by the flag".
+    top_level: bool,
+}
+
+/// The removed field-term names (DEC-366), recognised only for the
+/// migration hint.
+const LEGACY_FIELDS: [&str; 4] = ["title", "heading", "tag", "path"];
+
+/// The lowercased field name when `text` is `name:value` with `name` a
+/// removed field term, and the value (possibly empty).
+fn legacy_field_parts(text: &str) -> Option<(String, &str)> {
+    let (name, value) = text.split_once(':')?;
+    let field = name.to_ascii_lowercase();
+    LEGACY_FIELDS
+        .contains(&field.as_str())
+        .then_some((field, value))
+}
+
+/// Byte offset just past the phrase whose content starts at `content_start`
+/// and reads `text`: its closing quote and any `~N` slop.
+fn phrase_end(source: &str, content_start: usize, text: &str) -> usize {
+    let mut end = content_start + text.len();
+    if source.as_bytes().get(end) != Some(&b'"') {
+        return source.len();
+    }
+    end += 1;
+    if source.as_bytes().get(end) == Some(&b'~') {
+        end += 1;
+        while source.as_bytes().get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+    }
+    end
+}
+
 /// One normalized query shared by indexed scoring, disk fallback and snippets.
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
@@ -709,6 +539,8 @@ pub struct CompiledQuery {
     params: super::SearchSettings,
     /// Non-fatal issues found while parsing (UX-6 / DEC-358).
     warnings: QueryWarnings,
+    /// Positive words shaped like a removed field term (DEC-366).
+    legacy_fields: Vec<LegacyFieldTerm>,
 }
 
 fn dedup<T: PartialEq>(items: Vec<T>) -> Vec<T> {
@@ -811,12 +643,64 @@ struct Compiler<'a> {
     /// Words with a `*` that is not the trailing prefix marker (UX-6 /
     /// DEC-358): `*foo`, `sn*p`.
     misplaced_wildcards: Vec<String>,
+    /// Positive `title:x`-shaped words (DEC-366).
+    legacy_fields: Vec<LegacyFieldTerm>,
+    /// The query text, for spans of `title:"phrase"` pairs.
+    source: &'a str,
+    /// Nesting depth of the node being compiled: the root AND is 0, its
+    /// direct children 1.
+    depth: usize,
 }
 
 impl Compiler<'_> {
+    /// Compile the parser's root AND at depth 0.
+    fn compile_root(&mut self, node: RawNode) -> Result<Option<Node>, QuerySyntaxError> {
+        self.compile_inner(node, true)
+    }
+
+    /// `title:"two words"` lexes as the word `title:` followed by a phrase
+    /// starting right after the colon: record the pair as one legacy term.
+    fn legacy_phrase_pairs(&mut self, children: &[RawNode], positive: bool) {
+        if !positive {
+            return;
+        }
+        for pair in children.windows(2) {
+            if let [
+                RawNode::Word { text, start, end },
+                RawNode::Phrase(phrase, _, content_start),
+            ] = pair
+                && *content_start == end + 1
+                && let Some((field, "")) = legacy_field_parts(text)
+            {
+                self.legacy_fields.push(LegacyFieldTerm {
+                    field,
+                    value: phrase.clone(),
+                    start: *start,
+                    end: phrase_end(self.source, *content_start, phrase),
+                    top_level: self.depth == 1,
+                });
+            }
+        }
+    }
+
     fn compile(&mut self, node: RawNode, positive: bool) -> Result<Option<Node>, QuerySyntaxError> {
+        self.depth += 1;
+        let compiled = self.compile_inner(node, positive);
+        self.depth -= 1;
+        compiled
+    }
+
+    fn compile_inner(
+        &mut self,
+        node: RawNode,
+        positive: bool,
+    ) -> Result<Option<Node>, QuerySyntaxError> {
         Ok(match node {
             RawNode::And(children) => {
+                // Children of the node at depth `self.depth` sit one deeper.
+                self.depth += 1;
+                self.legacy_phrase_pairs(&children, positive);
+                self.depth -= 1;
                 let mut out = Vec::new();
                 for child in children {
                     out.extend(self.compile(child, positive)?);
@@ -865,7 +749,6 @@ impl Compiler<'_> {
                     (!alternatives.is_empty()).then_some(Node::Phrase(alternatives, slop))
                 }
             }
-            RawNode::Field { kind, value } => self.field(kind, value)?.map(Node::Field),
         })
     }
 
@@ -876,6 +759,18 @@ impl Compiler<'_> {
         end: usize,
         positive: bool,
     ) -> Result<Option<Node>, QuerySyntaxError> {
+        if positive
+            && let Some((field, value)) = legacy_field_parts(text)
+            && !value.is_empty()
+        {
+            self.legacy_fields.push(LegacyFieldTerm {
+                field,
+                value: value.to_owned(),
+                start,
+                end,
+                top_level: self.depth == 1,
+            });
+        }
         if let Some(body) = text.strip_suffix('*') {
             let body = body.trim_end_matches('*');
             let parts: Vec<String> = body
@@ -933,52 +828,6 @@ impl Compiler<'_> {
             .collect();
         Ok(group(nodes, Node::And))
     }
-
-    fn field(
-        &self,
-        kind: FieldKind,
-        value: FieldText,
-    ) -> Result<Option<FieldTerm>, QuerySyntaxError> {
-        let (text, slop) = match value {
-            FieldText::Word(text) => (text, None),
-            FieldText::Phrase(text, slop) => (text, Some(slop)),
-        };
-        let value = match kind {
-            FieldKind::Tag => {
-                let tag = text.trim().trim_start_matches('#');
-                if tag.is_empty() {
-                    return Ok(None);
-                }
-                FieldValue::Literal(tag.to_owned())
-            }
-            FieldKind::Path => {
-                if text.is_empty() {
-                    return Ok(None);
-                }
-                FieldValue::Literal(text.to_lowercase())
-            }
-            FieldKind::Title | FieldKind::Heading => {
-                if slop.is_none()
-                    && let Some(body) = text.strip_suffix('*')
-                {
-                    let prefix = body.trim_end_matches('*').to_lowercase();
-                    if !prefix.chars().any(char::is_alphanumeric) {
-                        return Err(QuerySyntaxError::new(format!(
-                            "'{text}': a prefix term needs at least one letter or digit before '*'"
-                        )));
-                    }
-                    FieldValue::Prefix(prefix_candidates(&prefix, self.stemmers))
-                } else {
-                    let alternatives = sequences(&text, self.stemmers);
-                    if alternatives.is_empty() {
-                        return Ok(None);
-                    }
-                    FieldValue::Sequences(alternatives, slop.unwrap_or(0))
-                }
-            }
-        };
-        Ok(Some(FieldTerm { kind, value }))
-    }
 }
 
 impl CompiledQuery {
@@ -1022,6 +871,7 @@ impl CompiledQuery {
             source: query.to_owned(),
             params: super::search_settings(),
             warnings: QueryWarnings::default(),
+            legacy_fields: Vec::new(),
         }
     }
 
@@ -1031,16 +881,55 @@ impl CompiledQuery {
             stemmers,
             words: Vec::new(),
             misplaced_wildcards: Vec::new(),
+            legacy_fields: Vec::new(),
+            source: query,
+            depth: 0,
         };
-        let root = compiler.compile(raw, true)?;
+        let root = compiler.compile_root(raw)?;
         warnings.misplaced_wildcard_terms = compiler.misplaced_wildcards;
+        compiler.legacy_fields.sort_by_key(|t| t.start);
         Ok(Self {
             root,
             words: compiler.words,
             source: query.to_owned(),
             params: super::search_settings(),
             warnings,
+            legacy_fields: compiler.legacy_fields,
         })
+    }
+
+    /// Positive words shaped like a removed field term (`title:x`; DEC-366),
+    /// in query order. They are searched as plain words.
+    #[must_use]
+    pub fn legacy_field_terms(&self) -> &[LegacyFieldTerm] {
+        &self.legacy_fields
+    }
+
+    /// The query text with every [`Self::legacy_field_terms`] token removed
+    /// and whitespace collapsed -- what is left to search once those tokens
+    /// become flags (empty when nothing remains). `None` when that rewrite
+    /// would not mean "the rest, scoped by the flags": a legacy term nested
+    /// in a group, an `OR` or a negation (`a OR title:x` would leave a
+    /// dangling `a OR`), or a rest that fails to parse or gains a parse
+    /// warning the original did not have.
+    #[must_use]
+    pub fn legacy_field_rewrite(&self) -> Option<String> {
+        if self.legacy_fields.is_empty() || self.legacy_fields.iter().any(|t| !t.top_level) {
+            return None;
+        }
+        let mut out = String::with_capacity(self.source.len());
+        let mut cursor = 0;
+        for term in &self.legacy_fields {
+            out.push_str(self.source.get(cursor..term.start)?);
+            out.push(' ');
+            cursor = term.end;
+        }
+        out.push_str(self.source.get(cursor..)?);
+        let rest = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        let (_, rest_warnings) = parse(&rest).ok()?;
+        let new_warning = (rest_warnings.dangling_operator && !self.warnings.dangling_operator)
+            || (rest_warnings.unterminated_quote && !self.warnings.unterminated_quote);
+        (!new_warning).then_some(rest)
     }
 
     /// Non-fatal issues found while parsing this query (UX-6 / DEC-358):
@@ -1068,14 +957,14 @@ impl CompiledQuery {
 
     /// The query's required ("Must") text groups for proximity (DEC-338):
     /// each direct child of the top-level AND (or the root itself) made only
-    /// of positive text leaves. A group containing a negation or a field term
-    /// is not positional and is skipped.
+    /// of positive text leaves. A group containing a negation is not
+    /// positional and is skipped.
     pub(super) fn must_groups(&self) -> Vec<&Node> {
         fn pure_text(node: &Node) -> bool {
             match node {
                 Node::Term(_) | Node::Prefix(_) | Node::Phrase(..) => true,
                 Node::And(c) | Node::Or(c) => c.iter().all(pure_text),
-                Node::Not(_) | Node::Field(_) => false,
+                Node::Not(_) => false,
             }
         }
         match &self.root {
@@ -1085,7 +974,9 @@ impl CompiledQuery {
         }
     }
 
-    /// `true` when the query has a positive (non-negated) leaf of any kind.
+    /// `true` when the query has a positive (non-negated) leaf: a word,
+    /// prefix or phrase that can rank a document. A query without one (only
+    /// negations) matches nothing.
     #[must_use]
     pub fn has_positive_leaf(&self) -> bool {
         fn walk(node: &Node, positive: bool) -> bool {
@@ -1096,29 +987,6 @@ impl CompiledQuery {
             }
         }
         self.root.as_ref().is_some_and(|n| walk(n, true))
-    }
-
-    /// `true` when a positive leaf searches body text (term, prefix, phrase).
-    /// A query of field terms only ranks nothing: every hit scores 0.
-    #[must_use]
-    pub fn has_text_terms(&self) -> bool {
-        let mut found = false;
-        self.visit_positive_text(&mut |_| found = true);
-        found
-    }
-
-    /// `true` when the query uses a field term anywhere.
-    #[must_use]
-    pub fn has_field_terms(&self) -> bool {
-        fn walk(node: &Node) -> bool {
-            match node {
-                Node::And(c) | Node::Or(c) => c.iter().any(walk),
-                Node::Not(n) => walk(n),
-                Node::Field(_) => true,
-                _ => false,
-            }
-        }
-        self.root.as_ref().is_some_and(walk)
     }
 
     fn visit_positive_text<'a>(&'a self, f: &mut dyn FnMut(&'a Node)) {
@@ -1292,7 +1160,7 @@ fn collect_snippet_tests(node: &Node, out: &mut Vec<SnippetGroup>) {
                 alternatives.iter().flatten().cloned().collect(),
             )));
         }
-        Node::Not(_) | Node::Field(_) => {}
+        Node::Not(_) => {}
     }
 }
 
@@ -1494,8 +1362,6 @@ struct ScoringUnit<'a> {
 
 struct Evaluator<'a> {
     index: &'a Bm25InvertedIndex,
-    fields: &'a dyn FieldSource,
-    stemmers: HashMap<StemLanguage, Stemmer>,
     units: Vec<ScoringUnit<'a>>,
 }
 
@@ -1571,17 +1437,6 @@ impl<'a> Evaluator<'a> {
                     })
                     .collect();
                 self.leaf(units.into_iter(), positive)
-            }
-            Node::Field(term) => {
-                let mut set = DocSet::empty(self.len());
-                for (id, path) in self.index.doc_paths.iter().enumerate() {
-                    if term.matches(path, self.fields, &mut self.stemmers)
-                        && let Ok(id) = u32::try_from(id)
-                    {
-                        set.insert(id);
-                    }
-                }
-                set
             }
         }
     }
@@ -1665,12 +1520,10 @@ impl Bm25InvertedIndex {
 
     /// Documents for which `node`, read with positive polarity, evaluates
     /// true — the file-level verdict of one leaf (section scoring uses it for
-    /// field terms and negated leaves, DEC-334).
-    pub(super) fn node_docs(&self, node: &Node, fields: &dyn FieldSource) -> DocSet {
+    /// negated leaves, DEC-334).
+    pub(super) fn node_docs(&self, node: &Node) -> DocSet {
         let mut evaluator = Evaluator {
             index: self,
-            fields,
-            stemmers: HashMap::new(),
             units: Vec::new(),
         };
         evaluator.eval(node, true)
@@ -1736,18 +1589,13 @@ impl Bm25InvertedIndex {
         terms
     }
 
-    /// Score a compiled query whose field terms resolve through `fields`.
+    /// Score a compiled query.
     ///
     /// A document matches when the query tree evaluates true for it. Its score
-    /// sums BM25 contributions of every positive text leaf it satisfies; a
-    /// match through field terms or negations alone scores 0. A query with no
-    /// positive leaf at all matches nothing.
+    /// sums BM25 contributions of every positive leaf it satisfies. A query
+    /// with no positive leaf at all matches nothing.
     #[must_use]
-    pub fn score_with_fields(
-        &self,
-        query: &CompiledQuery,
-        fields: &dyn FieldSource,
-    ) -> Vec<Bm25Match> {
+    pub fn score_compiled(&self, query: &CompiledQuery) -> Vec<Bm25Match> {
         let Some(root) = &query.root else {
             return Vec::new();
         };
@@ -1756,8 +1604,6 @@ impl Bm25InvertedIndex {
         }
         let mut evaluator = Evaluator {
             index: self,
-            fields,
-            stemmers: HashMap::new(),
             units: Vec::new(),
         };
         let admitted = evaluator.eval(root, true);
@@ -1821,7 +1667,7 @@ impl Bm25InvertedIndex {
             Node::Phrase(alternatives, _) => {
                 out.extend(alternatives.iter().flatten().map(String::as_str));
             }
-            Node::Not(_) | Node::Field(_) => {}
+            Node::Not(_) => {}
         }
     }
 
@@ -2099,22 +1945,6 @@ mod tests {
     }
 
     #[test]
-    fn field_term_with_a_group_names_the_real_problem() {
-        // UX-10 text polish: `title:(` reads the `(` as literal, so the
-        // parser used to blame the trailing `)` for being unbalanced -- the
-        // wrong character. The real problem is the field term itself.
-        for query in ["title:(index OR snapshot)", "heading:(a OR b)"] {
-            let err = CompiledQuery::parse(query, &[StemLanguage::English]).unwrap_err();
-            assert!(
-                err.to_string().contains("cannot take a group"),
-                "{query} -> {err}"
-            );
-        }
-        // Parens as literal text inside a plain word are unaffected.
-        assert!(CompiledQuery::parse("main()", &[StemLanguage::English]).is_ok());
-    }
-
-    #[test]
     fn parentheses_inside_a_word_are_literal() {
         assert_eq!(compile("main()").root, Some(term("main")));
         assert_eq!(
@@ -2219,7 +2049,7 @@ mod tests {
             compile("std::f*").root,
             Some(Node::And(vec![term("std"), Node::Prefix(vec!["f".into()])]))
         );
-        for bad in ["*", "**", "-*", "(*)", "title:*"] {
+        for bad in ["*", "**", "-*", "(*)"] {
             assert!(
                 CompiledQuery::parse(bad, &[StemLanguage::English]).is_err(),
                 "{bad}"
@@ -2272,78 +2102,85 @@ mod tests {
         assert!(got.is_empty(), "expected empty, got {got:?}");
     }
 
-    struct MapFields(HashMap<&'static str, (&'static str, Vec<&'static str>, Vec<String>)>);
-
-    impl FieldSource for MapFields {
-        fn field_document(&self, rel_path: &str) -> Option<FieldDocument<'_>> {
-            self.0
-                .get(rel_path)
-                .map(|(title, headings, tags)| FieldDocument {
-                    title: Cow::Borrowed(*title),
-                    headings: headings.clone(),
-                    tags,
-                    language: StemLanguage::English,
-                })
-        }
+    #[test]
+    fn legacy_field_terms_are_reported_but_searched_as_words() {
+        let q = compile("snapshot title:Dogfood -tag:x OR \"path:y\" HEADING:install");
+        let got: Vec<(&str, &str)> = q
+            .legacy_field_terms()
+            .iter()
+            .map(|t| (t.field.as_str(), t.value.as_str()))
+            .collect();
+        // Negated and quoted tokens are not positive words.
+        assert_eq!(got, vec![("title", "Dogfood"), ("heading", "install")]);
+        // `OR` binds only `-tag:x` and `"path:y"`; both legacy words are
+        // direct children of the top-level AND.
+        assert_eq!(
+            q.legacy_field_rewrite().as_deref(),
+            Some("snapshot -tag:x OR \"path:y\"")
+        );
+        assert_eq!(compile("foo:bar title:").legacy_field_terms(), &[]);
+        assert_eq!(
+            compile("title:x").legacy_field_rewrite().as_deref(),
+            Some("")
+        );
     }
 
     #[test]
-    fn field_terms_are_predicates() {
+    fn legacy_field_rewrite_refuses_nested_terms() {
+        // Inside an OR: removing it would leave a dangling `zzqq OR`.
+        let q = compile("zzqq OR title:yyqq");
+        assert_eq!(q.legacy_field_terms().len(), 1);
+        assert_eq!(q.legacy_field_rewrite(), None);
+        // Inside a group: removing it would leave `( OR qqzz) foo`.
+        let q = compile("(title:zzqq OR qqzz) foo");
+        assert_eq!(q.legacy_field_terms().len(), 1);
+        assert_eq!(q.legacy_field_rewrite(), None);
+        let q = compile("(title:zzqq qqzz) foo");
+        assert_eq!(q.legacy_field_rewrite(), None);
+    }
+
+    #[test]
+    fn legacy_field_phrase_value_is_one_term() {
+        let q = compile("snapshot title:\"two words\"~2 rest");
+        let got: Vec<(&str, &str)> = q
+            .legacy_field_terms()
+            .iter()
+            .map(|t| (t.field.as_str(), t.value.as_str()))
+            .collect();
+        assert_eq!(got, vec![("title", "two words")]);
+        assert_eq!(q.legacy_field_rewrite().as_deref(), Some("snapshot rest"));
+        // A space between the colon and the quote is two separate things.
+        assert_eq!(compile("title: \"two words\"").legacy_field_terms(), &[]);
+        // Negated: not a positive word.
+        assert_eq!(compile("a -title:\"two words\"").legacy_field_terms(), &[]);
+    }
+
+    #[test]
+    fn name_value_tokens_are_plain_words() {
+        // DEC-366: there are no field terms. `title:`, `heading:`, `tag:`,
+        // `path:` and any other `name:value` token tokenize like `foo:bar`,
+        // `std::fs` or a URL always did.
+        for (query, words) in [
+            ("title:alpha", "title alpha"),
+            ("TITLE:x1", "title x1"),
+            ("heading:install", "heading install"),
+            ("tag:project", "tag project"),
+            ("path:notes/", "path notes"),
+            ("foo:bar", "foo bar"),
+        ] {
+            assert_eq!(compile(query).root, compile(words).root, "{query}");
+        }
         let index = corpus(&[
-            ("iterations/a.md", "alpha links"),
-            ("notes/b.md", "beta links"),
-            ("notes/c.md", "gamma"),
+            ("a.md", "the title alpha is here"),
+            ("b.md", "alpha without the other word"),
         ]);
-        let fields = MapFields(HashMap::from([
-            (
-                "iterations/a.md",
-                (
-                    "Iteration Planning",
-                    vec!["Install steps"],
-                    vec!["iteration".into()],
-                ),
-            ),
-            (
-                "notes/b.md",
-                ("Running notes", vec!["Usage"], vec!["project/alpha".into()]),
-            ),
-            ("notes/c.md", ("Gamma", vec![], vec![])),
-        ]));
-        let run = |q: &str| -> Vec<(String, f64)> {
-            let mut out: Vec<_> = index
-                .score_with_fields(&compile(q), &fields)
-                .into_iter()
-                .map(|m| (m.rel_path, m.score))
-                .collect();
-            out.sort_by(|a, b| a.0.cmp(&b.0));
-            out
-        };
-        let paths = |q: &str| run(q).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
-        assert_eq!(paths("title:iterations"), vec!["iterations/a.md"]);
-        assert_eq!(paths("title:run"), vec!["notes/b.md"]);
-        assert_eq!(paths("title:\"running notes\""), vec!["notes/b.md"]);
-        assert_eq!(paths("title:\"notes running\""), Vec::<String>::new());
-        assert_eq!(paths("title:iter*"), vec!["iterations/a.md"]);
-        assert_eq!(paths("heading:install"), vec!["iterations/a.md"]);
-        assert_eq!(paths("tag:project"), vec!["notes/b.md"]);
-        assert_eq!(paths("tag:proj"), Vec::<String>::new());
-        assert_eq!(paths("path:ITERATIONS/"), vec!["iterations/a.md"]);
-        assert_eq!(paths("path:notes/ -tag:project"), vec!["notes/c.md"]);
+        assert_eq!(hits(&index, "title:alpha"), vec!["a.md"]);
+        assert_eq!(hits(&index, "-title:alpha alpha"), vec!["b.md"]);
+        // A quoted value after a colon is an ordinary phrase.
         assert_eq!(
-            paths("tag:iteration OR title:gamma"),
-            vec!["iterations/a.md", "notes/c.md"]
+            compile("title:\"alpha beta\"").root,
+            compile("title \"alpha beta\"").root
         );
-        // Field-only queries score 0; mixed queries rank by the text leaves.
-        assert!(run("path:notes/").iter().all(|(_, s)| *s == 0.0));
-        let mixed = run("links path:notes/");
-        assert_eq!(mixed.len(), 1);
-        assert!(mixed[0].1 > 0.0);
-        // Unknown prefixes and URLs stay plain terms.
-        assert!(!compile("foo:bar").has_field_terms());
-        assert!(!compile("https://example.com").has_field_terms());
-        assert!(compile("TITLE:x").has_field_terms());
-        // Without a field source only path: can match.
-        assert_eq!(index.score_compiled(&compile("tag:iteration")).len(), 0);
     }
 
     #[test]
