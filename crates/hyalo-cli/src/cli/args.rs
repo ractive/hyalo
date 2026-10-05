@@ -1540,7 +1540,9 @@ pub(crate) enum Commands {
             is the way to discover what a `find` query will actually match before running it.\n\
             PREFIX (optional) narrows the listing to terms starting with it, normalized like a\n\
             query word: accents and case folded, a trailing `*` and an identifier's separators\n\
-            dropped (`rés` = `res`, `get_user` lists the joined `getusernam`).\n\n\
+            dropped (`rés` = `res`, `get_user` lists the joined `getusernam`). Dropping more than\n\
+            a trailing `*` warns with the effective prefix; a PREFIX with no letter or digit\n\
+            lists the whole dictionary, with a note.\n\n\
             OUTPUT: JSON envelope {results: [{term, docs}], total, hints}. `docs` counts files\n\
             whose title, headings, body or tags/aliases contain the stem (document frequency, so\n\
             a tag-only term counts), not raw occurrences.\n\
@@ -1775,8 +1777,9 @@ writes a YAML null (DEC-314): `hyalo remove --property K` takes the key out inst
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error \
             {\"error\": \"frontmatter would exceed size budget\", \"limit_bytes\": ..., \"would_be_bytes\": ..., \"file\": ...}.\n\
@@ -1867,8 +1870,9 @@ Repeatable (AND).\n\
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
@@ -2139,8 +2143,9 @@ Repeatable (AND).\n\
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             UNUSABLE SCHEMA: when [schema] is present but could not be loaded (an uncompilable \

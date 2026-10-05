@@ -170,6 +170,7 @@ pub fn links_fix(
     expand_short_form: bool,
     fuzzy: FuzzyApply,
     case_insensitive_resolve: bool,
+    frontmatter_link_props: Option<&[String]>,
 ) -> Result<(CommandOutcome, Vec<String>, bool)> {
     let mut report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
@@ -522,7 +523,9 @@ pub fn links_fix(
                     scan_body: true,
                     bm25_tokenize: false,
                     default_language: None,
-                    frontmatter_link_props: None,
+                    // The run's own `[links] frontmatter` scope, so the
+                    // re-plan sees exactly the links the first pass did.
+                    frontmatter_link_props,
                 },
                 case_insensitive_resolve,
             )?;
@@ -2241,6 +2244,7 @@ pub(crate) fn run(
                             config_min_confidence: ctx.config_fuzzy_min_confidence,
                         },
                         ctx.case_insensitive_resolve || case_insensitive,
+                        ctx.frontmatter_link_props,
                     )?
                 }
                 IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),

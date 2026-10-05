@@ -192,6 +192,37 @@ fn plain_read_of_a_non_utf8_frontmatter_note_prints_its_body() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("body"));
 }
 
+#[test]
+fn bulk_writes_skip_a_non_utf8_frontmatter_note_and_leave_its_bytes_untouched() {
+    for args in [
+        &["set", "--glob", "*.md", "--property", "x=1"][..],
+        &["append", "--glob", "*.md", "--property", "tags=z"][..],
+        &["remove", "--glob", "*.md", "--property", "title"][..],
+        &["tags", "rename", "--from", "a", "--to", "aa"][..],
+        &["properties", "rename", "--from", "title", "--to", "name"][..],
+    ] {
+        let tmp = utf8_vault();
+        let before = std::fs::read(tmp.path().join("bad.md")).unwrap();
+        let (json, out) = run_json(tmp.path(), &[args, &["--format", "json"]].concat());
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        assert_eq!(
+            std::fs::read(tmp.path().join("bad.md")).unwrap(),
+            before,
+            "{args:?}: bytes changed"
+        );
+        let ok = std::fs::read_to_string(tmp.path().join("ok.md")).unwrap();
+        assert_ne!(ok, "---\ntitle: Ok\ntags: [a]\n---\nbody ok\n", "{args:?}");
+        if let Some(detail) = json["results"]["skipped_detail"].as_array() {
+            assert!(
+                detail
+                    .iter()
+                    .any(|d| d["file"] == "bad.md" && d["reason"] == "unparsable"),
+                "{args:?}: {json}"
+            );
+        }
+    }
+}
+
 /// Runs `hyalo --dir <dir> <args>` and returns (exit code, stdout, stderr).
 fn run_text(dir: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let out = hyalo_no_hints()
@@ -357,6 +388,36 @@ fn zero_result_migration_hint_strips_the_trailing_star_for_title() {
     );
 }
 
+/// A swallowed filter that matches headings/tags may be deliberate: the tip
+/// is an ordinary note `-q` silences. One matching nothing stays `-q`-proof.
+#[test]
+fn dash_tip_is_quiet_able_only_when_the_swallowed_filter_matches() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "t.md",
+        "---\ntags: [iteration]\n---\n## Tasks\n\nindex body\n\n## Snapshot notes\n\nindex here\n",
+    );
+    let tip_count = |args: &[&str]| {
+        let (_, _, err) = run_text(tmp.path(), args);
+        err.matches(DASH_TIP).count()
+    };
+    for args in [
+        &["find", "-sTasks"][..],
+        &["find", "-titeration"][..],
+        &["find", "-snapshot", "index"][..],
+    ] {
+        assert_eq!(tip_count(args), 1, "{args:?} without -q");
+        assert_eq!(tip_count(&[&["-q"], args].concat()), 0, "{args:?} with -q");
+    }
+    // Matches nothing: -q-proof.
+    assert_eq!(tip_count(&["-q", "find", "-sZzqq"]), 1);
+    // Invalid swallowed tag: the error itself names the fix, under -q too.
+    let (code, _, err) = run_text(tmp.path(), &["-q", "find", "-tag:x"]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains(DASH_TIP), "{err}");
+}
+
 #[test]
 fn a_dash_term_after_double_dash_gets_no_tip() {
     let tmp = vault();
@@ -418,6 +479,31 @@ fn index_files_from_counts_a_deleted_file_as_missing() {
 // ---------------------------------------------------------------------------
 // `links fix --apply`: a target repair and an anchor repair in one file
 // ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_replan_honours_frontmatter_false() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n[links]\nfrontmatter = false\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "sub/note.md", "# note\n");
+    write_md(tmp.path(), "note2.md", "## 1. Intro\n");
+    let source = "---\nsee: \"[[note2#Intro]]\"\n---\n[[sub/NOTE]]\n\n[[note2#Intro]]\n";
+    write_md(tmp.path(), "c.md", source);
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "fix", "--apply", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let c = std::fs::read_to_string(tmp.path().join("c.md")).unwrap();
+    assert_eq!(
+        c, "---\nsee: \"[[note2#Intro]]\"\n---\n[[sub/note]]\n\n[[note2#1. Intro]]\n",
+        "an out-of-scope frontmatter link is not rewritten on the second pass"
+    );
+}
 
 #[test]
 fn links_fix_applies_a_target_and_an_anchor_repair_in_one_file_in_one_run() {
@@ -506,6 +592,10 @@ fn dry_run_refuses_under_an_unusable_config_like_the_real_run() {
     for args in [
         &["set", "a.md", "--property", "x=1", "--dry-run"][..],
         &["remove", "a.md", "--property", "title", "--dry-run"][..],
+        &["links", "fix"][..],
+        &["links"][..],
+        &["types", "set", "note", "--required", "title", "--dry-run"][..],
+        &["task", "toggle", "a.md", "--line", "6", "--dry-run"][..],
     ] {
         let out = hyalo_no_hints()
             .current_dir(tmp.path())
@@ -598,4 +688,30 @@ fn facet_drilldown_and_narrow_by_tag_hint_are_not_duplicated() {
     cmds.sort_unstable();
     cmds.dedup();
     assert_eq!(cmds.len(), before, "{json}");
+}
+
+#[test]
+fn terms_prefix_that_loses_characters_names_the_effective_prefix() {
+    let tmp = vault();
+    let (code, _, err) = run_text(tmp.path(), &["terms", "s++", "--count"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("is searched as 's'"), "{err}");
+    let (_, all, err) = run_text(tmp.path(), &["terms", "*", "--count"]);
+    assert!(err.contains("listing the whole dictionary"), "{err}");
+    let (_, plain, _) = run_text(tmp.path(), &["terms", "--count"]);
+    assert_eq!(all, plain);
+    let (_, _, err) = run_text(tmp.path(), &["terms", "sna*", "--count"]);
+    assert!(!err.contains("is searched as"), "{err}");
+}
+
+#[test]
+fn negated_field_word_gets_the_migration_notice_but_a_phrase_does_not() {
+    let tmp = vault();
+    let (_, _, err) = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "snapshot -title:beta"],
+    );
+    assert!(err.contains("field terms were removed"), "{err}");
+    let (_, _, err) = run_text(tmp.path(), &["find", "--count", "--", "\"title:beta\""]);
+    assert!(!err.contains("field terms were removed"), "{err}");
 }

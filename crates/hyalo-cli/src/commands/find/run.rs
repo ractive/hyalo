@@ -190,12 +190,6 @@ pub(crate) fn run(
         }
     }
 
-    // Emitted after the tag check: an invalid swallowed tag already carries
-    // the same advice as its error hint, once.
-    if dash_swallowed_argv {
-        crate::warn::warn_always(super::DASH_SWALLOWED_TIP);
-    }
-
     // Dispatch owns an already-normalized identity. Disk fallback and filters
     // must consume this same selection without another prefix interpretation.
     selection.precheck(&hyalo_core::rooted::VaultRoot::new(dir)?)?;
@@ -270,6 +264,35 @@ pub(crate) fn run(
             // JSON is untouched — every link is still reported, with its own
             // `path` / `broken_anchor` verdict.
             crate::output::set_broken_links_only(broken_links);
+            // DEC-371: the dash tip. An invalid swallowed `--tag` already
+            // carried it in its error above. A swallowed filter that matches
+            // nothing in the vault is almost certainly a mangled PATTERN, so
+            // the tip is `-q`-proof; one that does match may be a deliberate
+            // `-sTasks` / `-tproject`, so it is an ordinary note `-q` silences.
+            if dash_swallowed_argv {
+                let entries = resolved.as_index().entries();
+                let sections_match = section_filters.iter().all(|filter| {
+                    entries.iter().any(|e| {
+                        e.sections.iter().any(|s| {
+                            s.heading
+                                .as_deref()
+                                .is_some_and(|text| filter.matches(s.level, text))
+                        })
+                    })
+                });
+                let tags_match = tag.iter().all(|query| {
+                    entries.iter().any(|e| {
+                        e.tags
+                            .iter()
+                            .any(|t| hyalo_core::filter::tag_matches(t, query))
+                    })
+                });
+                if sections_match && tags_match {
+                    crate::warn::note(super::DASH_SWALLOWED_TIP);
+                } else {
+                    crate::warn::warn_always(super::DASH_SWALLOWED_TIP);
+                }
+            }
             let mut search_report = super::SearchReport::default();
             let mut outcome = find_prepared(
                 resolved.as_index(),

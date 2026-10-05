@@ -110,10 +110,14 @@ and this project adheres to
   `read bad.md --frontmatter` exits 1 naming the file (DEC-370).
 - `prefix*` and `terms PREFIX` fold accents and case like a bare word:
   `résumé*` = `resume*`, `terms rés` = `terms res`; `terms` also drops a
-  trailing `*` and an identifier's separators (`get_user`) (DEC-371).
+  trailing `*` and an identifier's separators (`get_user`), warning when a
+  PREFIX loses more than a trailing `*` (`c++` → `c`) (DEC-371). A negated
+  `-title:x` gets the migration notice too.
 - `find -snapshot index` (a `-s…`/`-t…` word read as a flag, followed by a
-  PATTERN) now prints the `hyalo find -- '-term'` tip, and the tip is
-  `-q`-proof (DEC-371, completes DEC-356).
+  PATTERN) now prints the `hyalo find -- '-term'` tip. It is `-q`-proof when
+  the swallowed filter matched nothing; a deliberate `-sTasks`/`-tproject`
+  that matches gets an ordinary note `-q` silences (DEC-371, completes
+  DEC-356).
 - `find --index --file <deleted>` and `find --index PATTERN <deleted>` exit 1
   "file not found" like a disk scan instead of serving the stale snapshot
   entry (exit 0) or failing while reading snippets (exit 2); `--files-from`
@@ -387,8 +391,10 @@ and this project adheres to
   unchanged. `title:(a OR b)`'s parenthesis error names the removal, and the
   zero-result migration hint drops a trailing `*` for `--title`/`--section`
   (DEC-371, amends DEC-366).
-- **An explicit `--dry-run` refuses under a malformed `.hyalo.toml`** exactly
-  like the write it previews (exit 1), reversing iteration 201's carve-out.
+- **A preview refuses under a malformed `.hyalo.toml`** exactly like the
+  write it predicts (exit 1): an explicit `--dry-run`, and an `--apply`-style
+  command without `--apply` (`links fix`, `links auto`, `okf`, `madr`,
+  `changelog`). Reverses iteration 201's carve-out (DEC-070 amended).
 - Teaching hints (DEC-371, amends DEC-367): a PATTERN-less `--section X` no
   longer hints section mode; a zero-result `"a b"~N` whose words all occur
   hints the plain AND and the reversed order instead of `terms`; `find

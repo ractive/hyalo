@@ -85,7 +85,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every
-  mutating command (an explicit `--dry-run` of one included) **and every gate command**
+  mutating command (its preview included: `--dry-run`, or `links fix` without `--apply`) **and every gate command**
   (`lint`, `find --strict`, `views run`) with exit 1; other reads continue on defaults, with a `-q`-proof warning.
 - **A project-local `dir` must stay at-or-below the config directory**: an absolute `dir` or one
   whose `..` components net above where `.hyalo.toml` lives refuses *every* command (reads

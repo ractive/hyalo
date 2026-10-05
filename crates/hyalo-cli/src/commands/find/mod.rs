@@ -745,7 +745,13 @@ pub(crate) fn find_prepared(
         // migration notice whether or not the query matched -- `title:dogfood`
         // silently matching 134 files on the plain words was the trap. One
         // ordinary (`-q`-silenced) line per query, not per word.
-        if let Some(notice) = legacy_field_notice(query.legacy_field_terms()) {
+        let field_words: Vec<hyalo_core::bm25::LegacyFieldTerm> = query
+            .legacy_field_terms()
+            .iter()
+            .chain(query.negated_legacy_field_terms())
+            .cloned()
+            .collect();
+        if let Some(notice) = legacy_field_notice(&field_words) {
             crate::warn::warn(notice);
         }
     }

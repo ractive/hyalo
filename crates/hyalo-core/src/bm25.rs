@@ -254,6 +254,7 @@ pub use tokenizer::{
 pub use query::{
     CompiledQuery, LegacyFieldTerm, MAX_PHRASE_SLOP, MAX_PREFIX_EXPANSION, QuerySyntaxError,
     QueryWarnings, TermCandidate, TermSuggestion, corrected_query,
+    dictionary_prefix_drops_characters, normalize_dictionary_prefix,
 };
 pub use sections::{FileSections, SectionHit, SectionScorer, SectionSpan};
 

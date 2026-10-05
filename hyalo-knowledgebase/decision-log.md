@@ -1360,6 +1360,13 @@ migration (point `--dir` outside the configured vault instead).
 
 ## DEC-070: unusable `.hyalo.toml` is fatal for writers, advisory for readers (2026-08-22)
 
+**Amended in iteration 318 (with DEC-370/DEC-371):** a preview is no longer exempt.
+`Commands::previews_write()` — an explicit `--dry-run` of a writer, or an
+`--apply`-style command run without `--apply` (`links fix`/`links auto`, bare
+`links`, `okf`, `madr`, `changelog`) — refuses under a malformed `.hyalo.toml`
+exactly like the write it predicts (exit 1). `writes()` itself still excludes
+previews; the refusal checks both.
+
 **Decision:** A `.hyalo.toml` that exists but does not parse sets
 `ResolvedDefaults::malformed`. Commands that would actually write — per
 `Commands::writes()`, which excludes `--dry-run` and preview-only forms — exit 1
@@ -8615,13 +8622,21 @@ query was silently read as something else, or a hint led nowhere.
   flags, results or not (`title:dogfood` silently matched 134 files).
   `title:(a OR b)`'s parenthesis error names the removal; the zero-result
   hint drops a trailing `*` for the substring flags `--title`/`--section`.
+- *Negated field words.* `-title:x` gets the same notice; a quoted phrase
+  `"title:x"` does not.
 - *Accent folding.* `prefix*` and `terms PREFIX` fold accents and case with
   the tokenizer's own `fold` before matching stems (DEC-336), folding before
   the word is split so a decomposed accent's combining mark cannot split it.
   `terms` also drops a trailing `*` and an identifier's separators, so
-  `get_user` lists the joined whole the index holds.
+  `get_user` lists the joined whole the index holds. When dropping characters
+  shortens the PREFIX (`c++` → `c`), a warning names the effective prefix; a
+  PREFIX that normalizes to nothing (`*`) lists the whole dictionary, with a
+  note.
 - *Dash tip* (completes DEC-356). Fires for any `-s…`/`-t…` cluster before
-  `--`, PATTERN or not, and is `-q`-proof like the other query warnings.
+  `--`, PATTERN or not. It is `-q`-proof when the swallowed filter matched
+  nothing in the vault (and an invalid swallowed `--tag` carries it in its
+  error); when the filter does match — a deliberate `-sTasks` or
+  `-tproject` — it is an ordinary note that `-q` silences.
 - *Named files under `--index`* (amends DEC-301). See the amendment note there.
 - *Teaching hints* (amends DEC-367). The PATTERN-less `--section` hint is
   removed (299 files became 1 007 sections); a zero-result whole-query

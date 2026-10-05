@@ -127,8 +127,10 @@ impl Commands {
         }
     }
 
-    /// `true` for an explicit `--dry-run` of a command that would otherwise
-    /// write (iteration 318). A dry run predicts the real run, so under an
+    /// `true` for a preview of a command that would otherwise write: an
+    /// explicit `--dry-run`, or an `--apply`-style command run without
+    /// `--apply` (`links fix`, `links auto`, `okf`, `madr`, `changelog`)
+    /// (iteration 318). A dry run predicts the real run, so under an
     /// unusable `.hyalo.toml` it must refuse exactly like the write it
     /// previews instead of planning on built-in defaults and exiting 0.
     pub(crate) fn previews_write(&self) -> bool {
@@ -164,6 +166,28 @@ impl Commands {
                         | LintRulesAction::Remove { dry_run, .. },
                     ),
             } => *dry_run,
+            // `links` with no subcommand is the `fix` preview; the
+            // `--apply`-style generators preview by default.
+            Self::Links { action: None } => true,
+            Self::Links {
+                action:
+                    Some(
+                        LinksAction::Fix { apply, dry_run, .. }
+                        | LinksAction::Auto { apply, dry_run, .. },
+                    ),
+            }
+            | Self::Okf {
+                action:
+                    OkfAction::Index { apply, dry_run, .. } | OkfAction::Log { apply, dry_run, .. },
+            }
+            | Self::Madr {
+                action: MadrAction::Toc { apply, dry_run, .. },
+            }
+            | Self::Changelog {
+                action:
+                    ChangelogAction::Release { apply, dry_run, .. }
+                    | ChangelogAction::Add { apply, dry_run, .. },
+            } => !*apply || *dry_run,
             _ => false,
         }
     }

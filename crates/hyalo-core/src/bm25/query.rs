@@ -541,6 +541,9 @@ pub struct CompiledQuery {
     warnings: QueryWarnings,
     /// Positive words shaped like a removed field term (DEC-366).
     legacy_fields: Vec<LegacyFieldTerm>,
+    /// Negated ones (`-title:x`), named by the migration notice only
+    /// (DEC-371); they never feed the zero-result rewrite.
+    negated_legacy_fields: Vec<LegacyFieldTerm>,
 }
 
 fn dedup<T: PartialEq>(items: Vec<T>) -> Vec<T> {
@@ -586,9 +589,19 @@ fn positional_alternatives(text: &str, stemmers: &[&Stemmer]) -> Vec<Vec<String>
 /// stem (at least three characters). The fallbacks are used only when the raw
 /// prefix matches no dictionary stem, so `configuration*` still finds
 /// `configur` (the stem of "configuration").
+/// Whether `terms PREFIX` normalization drops more than a trailing `*`
+/// (`c++`, `get_user`), after accents and case are folded.
+#[must_use]
+pub fn dictionary_prefix_drops_characters(raw: &str) -> bool {
+    super::tokenizer::fold_lower(raw.trim_end_matches('*'))
+        .chars()
+        .any(|c| !c.is_alphanumeric())
+}
+
 /// `terms PREFIX` normalization: fold accents and case, drop every
 /// non-alphanumeric character (a trailing `*`, an identifier's `_`/`-`/`.`).
-fn normalize_dictionary_prefix(raw: &str) -> String {
+#[must_use]
+pub fn normalize_dictionary_prefix(raw: &str) -> String {
     super::tokenizer::fold_lower(raw)
         .chars()
         .filter(|c| c.is_alphanumeric())
@@ -654,6 +667,8 @@ struct Compiler<'a> {
     misplaced_wildcards: Vec<String>,
     /// Positive `title:x`-shaped words (DEC-366).
     legacy_fields: Vec<LegacyFieldTerm>,
+    /// Negated `-title:x`-shaped words (DEC-371).
+    negated_legacy_fields: Vec<LegacyFieldTerm>,
     /// The query text, for spans of `title:"phrase"` pairs.
     source: &'a str,
     /// Nesting depth of the node being compiled: the root AND is 0, its
@@ -768,17 +783,21 @@ impl Compiler<'_> {
         end: usize,
         positive: bool,
     ) -> Result<Option<Node>, QuerySyntaxError> {
-        if positive
-            && let Some((field, value)) = legacy_field_parts(text)
+        if let Some((field, value)) = legacy_field_parts(text)
             && !value.is_empty()
         {
-            self.legacy_fields.push(LegacyFieldTerm {
+            let term = LegacyFieldTerm {
                 field,
                 value: value.to_owned(),
                 start,
                 end,
                 top_level: self.depth == 1,
-            });
+            };
+            if positive {
+                self.legacy_fields.push(term);
+            } else {
+                self.negated_legacy_fields.push(term);
+            }
         }
         if let Some(body) = text.strip_suffix('*') {
             // Fold before splitting: a decomposed accent's combining mark is
@@ -883,6 +902,7 @@ impl CompiledQuery {
             params: super::search_settings(),
             warnings: QueryWarnings::default(),
             legacy_fields: Vec::new(),
+            negated_legacy_fields: Vec::new(),
         }
     }
 
@@ -893,6 +913,7 @@ impl CompiledQuery {
             words: Vec::new(),
             misplaced_wildcards: Vec::new(),
             legacy_fields: Vec::new(),
+            negated_legacy_fields: Vec::new(),
             source: query,
             depth: 0,
         };
@@ -906,6 +927,7 @@ impl CompiledQuery {
             params: super::search_settings(),
             warnings,
             legacy_fields: compiler.legacy_fields,
+            negated_legacy_fields: compiler.negated_legacy_fields,
         })
     }
 
@@ -914,6 +936,13 @@ impl CompiledQuery {
     #[must_use]
     pub fn legacy_field_terms(&self) -> &[LegacyFieldTerm] {
         &self.legacy_fields
+    }
+
+    /// Negated words shaped like a removed field term (`-title:x`; DEC-371).
+    /// Only the migration notice names them.
+    #[must_use]
+    pub fn negated_legacy_field_terms(&self) -> &[LegacyFieldTerm] {
+        &self.negated_legacy_fields
     }
 
     /// The query text with every [`Self::legacy_field_terms`] token removed
