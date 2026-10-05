@@ -8,8 +8,8 @@
 //! Ranked snippet qualification (iteration 283): a body line qualifies when it
 //! contains a positive query leaf: any stem alternative of a plain term, a token
 //! starting with a `prefix*`, or the complete consecutive stemmed sequence for a
-//! quoted phrase. OR accepts any positive side; excluded terms and field terms
-//! never supply snippets. Query tokens carry one stem per corpus language
+//! quoted phrase. OR accepts any positive side; excluded terms never supply
+//! snippets. Query tokens carry one stem per corpus language
 //! (iteration 302); body tokens use the document language, exactly as scoring does.
 //! CJK uses the same overlapping bigrams, including single-character unigrams.
 //! Frontmatter never qualifies, but raw body code/fence/comment lines do. Phrases
@@ -252,9 +252,8 @@ pub use tokenizer::{
 };
 
 pub use query::{
-    CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PHRASE_SLOP,
-    MAX_PREFIX_EXPANSION, NoFields, QuerySyntaxError, QueryWarnings, TermCandidate, TermSuggestion,
-    corrected_query,
+    CompiledQuery, LegacyFieldTerm, MAX_PHRASE_SLOP, MAX_PREFIX_EXPANSION, QuerySyntaxError,
+    QueryWarnings, TermCandidate, TermSuggestion, corrected_query,
 };
 pub use sections::{FileSections, SectionHit, SectionScorer, SectionSpan};
 
@@ -548,7 +547,9 @@ pub(crate) struct DocMarks {
 /// | `"foo bar"` | Phrase — tokens must be adjacent and in order |
 /// | `"foo bar"~3` | Phrase with slop — in order, up to 3 extra positions (DEC-338) |
 /// | `conf*` | Prefix — any dictionary stem starting with `conf` |
-/// | `title:x` `heading:x` `tag:x` `path:x` | Field predicates from index metadata |
+///
+/// There are no field terms (DEC-366): `title:x` is the plain word it
+/// tokenizes to, like `std::fs`; `find` selects structure with flags.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bm25InvertedIndex {
     /// Term → postings, sorted by doc_id.
@@ -834,12 +835,6 @@ impl Bm25InvertedIndex {
     /// use [`CompiledQuery::parse`] to surface the error.
     pub fn score(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
         self.score_compiled(&CompiledQuery::lenient_with_stemmer(query, stemmer))
-    }
-
-    /// Score an already-compiled query. Field terms other than `path:` match
-    /// nothing here; use [`Bm25InvertedIndex::score_with_fields`] for those.
-    pub fn score_compiled(&self, query: &CompiledQuery) -> Vec<Bm25Match> {
-        self.score_with_fields(query, &NoFields)
     }
 
     /// Reconstruct every document's [`DocTokens`] from postings.

@@ -202,6 +202,14 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
             }
         );
     }
+    for (field, value) in &ctx.legacy_field_terms {
+        let (flag, flag_value) = legacy_field_flag(field, value);
+        let _ = write!(
+            notice,
+            "\n'{field}:{value}' is not a field term -- the search grammar has none (DEC-366), \
+             so it was searched as plain words; select by {field} with {flag} '{flag_value}'"
+        );
+    }
     for suggestion in &ctx.search_suggestions {
         let _ = write!(
             notice,
@@ -211,6 +219,26 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
         );
     }
     notice
+}
+
+/// The `find` flag and value that replace a removed `field:value` search
+/// term (DEC-366): `title:` → `--title`, `heading:` → `--section`, `tag:` →
+/// `--tag`, `path:` → `--glob 'value/**'` (a value with a `*`, or naming a
+/// `.md` file, is used as the glob itself).
+pub(crate) fn legacy_field_flag(field: &str, value: &str) -> (&'static str, String) {
+    match field {
+        "heading" => ("--section", value.to_owned()),
+        "tag" => ("--tag", value.trim_start_matches('#').to_owned()),
+        "path" => {
+            let glob = if value.contains('*') || value.to_ascii_lowercase().ends_with(".md") {
+                value.to_owned()
+            } else {
+                format!("{}/**", value.trim_end_matches('/'))
+            };
+            ("--glob", glob)
+        }
+        _ => ("--title", value.to_owned()),
+    }
 }
 
 /// Prefix for the zero-result `hyalo terms` hint: the first three letters of
@@ -340,6 +368,18 @@ fn rebuild_find_with(
     skip_index: Option<usize>,
     map: impl Fn(&str) -> String,
 ) -> String {
+    rebuild_find_full(ctx, filters, skip_index, map, &[])
+}
+
+/// [`rebuild_find_with`] plus `extra` flag/value pairs appended after the
+/// existing filters.
+fn rebuild_find_full(
+    ctx: &HintContext,
+    filters: &[ActiveFilter],
+    skip_index: Option<usize>,
+    map: impl Fn(&str) -> String,
+    extra: &[(&str, String)],
+) -> String {
     let mut b = HintBuilder::cmd("find");
     let mut pattern = None;
     for (i, f) in filters.iter().enumerate() {
@@ -364,6 +404,9 @@ fn rebuild_find_with(
     // rebuilt command here, including the corrected-query hint — silently
     // reverting a section-mode query to file mode. `section_file_matches` is
     // `Some` exactly when this query ran in section mode (DEC-334).
+    for (flag, value) in extra {
+        b = b.flag_value(flag, value);
+    }
     if ctx.section_file_matches.is_some() {
         b = b.flag_value("--granularity", "section");
     }
@@ -423,6 +466,49 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 .flag_value("-e", &suggestion.pattern)
                 .finish(ctx),
         ));
+    }
+
+    // 0a'. A `title:x`-shaped word: field terms were removed from the
+    //      grammar (DEC-366), so name the flag that replaced each one and
+    //      run the rest of the query with those flags.
+    if !ctx.legacy_field_terms.is_empty() {
+        let extra: Vec<(&str, String)> = ctx
+            .legacy_field_terms
+            .iter()
+            .map(|(field, value)| legacy_field_flag(field, value))
+            .collect();
+        let mut flags: Vec<&str> = extra.iter().map(|(flag, _)| *flag).collect();
+        flags.dedup();
+        let description = format!(
+            "Field terms are not part of the search grammar -- select with {}",
+            flags.join(", ")
+        );
+        match (&ctx.legacy_field_rest, &ctx.body_pattern) {
+            (Some(rest), Some(pattern)) => {
+                let skip = rest
+                    .is_empty()
+                    .then(|| filters.iter().position(|f| f.rank == 0))
+                    .flatten();
+                let command = rebuild_find_full(
+                    ctx,
+                    &filters,
+                    skip,
+                    |token| {
+                        if token == pattern {
+                            rest.clone()
+                        } else {
+                            token.to_owned()
+                        }
+                    },
+                    &extra,
+                );
+                hints.push(Hint::new(description, command));
+            }
+            _ => hints.push(Hint::new(
+                description,
+                HintBuilder::cmd("find --help").build(),
+            )),
+        }
     }
 
     // 0b. Ranked search: a query term occurs in no document, and a close
@@ -774,6 +860,40 @@ mod tests {
                 .any(|h| h.description.contains("these are strings")),
             "a regex filter is not a numeric comparison: {hints:?}"
         );
+    }
+
+    #[test]
+    fn legacy_field_term_names_the_flag_in_notice_and_hint() {
+        let mut ctx = HintContext::new(HintSource::Find);
+        ctx.body_pattern = Some("snapshot title:dogfood path:notes/".to_owned());
+        ctx.legacy_field_terms = vec![
+            ("title".to_owned(), "dogfood".to_owned()),
+            ("path".to_owned(), "notes/".to_owned()),
+        ];
+        ctx.legacy_field_rest = Some("snapshot".to_owned());
+        let notice = zero_result_notice(&ctx);
+        assert!(
+            notice.contains("'title:dogfood' is not a field term")
+                && notice.contains("--title 'dogfood'")
+                && notice.contains("--glob 'notes/**'"),
+            "{notice}"
+        );
+        let hints = zero_result_hints(&ctx);
+        assert_eq!(
+            hints[0].description,
+            "Field terms are not part of the search grammar -- select with --title, --glob"
+        );
+        assert_eq!(
+            hints[0].cmd,
+            "hyalo find --title dogfood --glob 'notes/**' -- snapshot"
+        );
+        // Nothing else left: the rebuilt command has no PATTERN at all.
+        ctx.body_pattern = Some("tag:#rust".to_owned());
+        ctx.legacy_field_terms = vec![("tag".to_owned(), "#rust".to_owned())];
+        ctx.legacy_field_rest = Some(String::new());
+        assert_eq!(zero_result_hints(&ctx)[0].cmd, "hyalo find --tag rust");
+        assert_eq!(legacy_field_flag("heading", "Install").0, "--section");
+        assert_eq!(legacy_field_flag("path", "a/b.md").1, "a/b.md");
     }
 
     #[test]

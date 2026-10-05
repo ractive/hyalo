@@ -289,7 +289,13 @@ pub(super) fn hints_for_find(
                     .iter()
                     .any(|t| t.eq_ignore_ascii_case(w))
             });
-            if !has_quotes && words.len() >= 2 && any_word_has_docs {
+            // DEC-366: a `title:x`-shaped word gets the flag hint instead;
+            // OR-ing it as a word would only bury that.
+            if !has_quotes
+                && words.len() >= 2
+                && any_word_has_docs
+                && ctx.legacy_field_terms.is_empty()
+            {
                 let or_query = words.join(" OR ");
                 hints.push(Hint::new(
                     "Try OR instead of AND (match any word)",

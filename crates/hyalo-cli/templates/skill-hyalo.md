@@ -72,10 +72,9 @@ hyalo terms conf                         # Stemmed dictionary terms with documen
 
 `OR` binds tighter than implicit AND (before iteration 302 one `OR` made every term an
 alternative). `prefix*` expands to the dictionary's **stems** (most frequent 256, with a
-`-q`-proof warning past that). Field terms: `title:`, `heading:` (stemmed words, phrases,
-prefixes), `tag:` (the `--tag` prefix rule), `path:` (case-insensitive substring); a
-field-only query returns files sorted by path with `score: 0` and no snippets, and an
-unknown `foo:bar` is a plain word. Unbalanced `(`, empty `()` or bare `*` exit 1
+`-q`-proof warning past that). Search terms are words, phrases, prefixes and their boolean
+combinations; structure is selected with flags (`--title`, `--section`, `--tag`, `--glob`),
+so `title:x` or `foo:bar` is a plain word (DEC-366). Unbalanced `(`, empty `()` or bare `*` exit 1
 (`invalid search query`). Terms are stemmed in every language present in the vault.
 Accents fold (`résumé` = `resume`); an identifier (`getUserName`, `get_user_name`,
 `get-user-name`) indexes its whole plus its parts, so `user` finds it. Ranking is BM25F:
@@ -90,7 +89,7 @@ Find the paragraph, not just the file: `hyalo find 'snapshot index' --granularit
 --limit 5` returns one hit per matching section (`{file, section: {heading, level,
 line_start, line_end, path}, score, matches}`), then follow each hit's read hint
 (`hyalo read <file> --section '<heading>'` or `--lines A:B`). A section must hold every
-positive word itself; negated and field terms are decided per file (DEC-334). `--limit`
+positive word itself; negated terms are decided per file (DEC-334). `--limit`
 counts sections; `--sort`, `--reverse`, `--fields` and `-e` are rejected.
 
 See the distribution of a match set: `hyalo find --tag iteration --facet property:status

@@ -54,8 +54,8 @@ stemming/OR/CJK rules, and honor `--section`. Quoted phrases must fit on one lin
 frontmatter is excluded and title-only hits can have an empty array. Indexed queries
 read snippet text only for final results after `--limit`.
 The query language: implicit AND, `OR` binding tighter (`a b OR c` = a AND (b OR c)),
-`( … )` groups, `-` negation, `prefix*` over stems, and `title:`/`heading:`/`tag:`/`path:`
-field terms (field-only queries score 0, no snippets). A zero-result query carries
+`( … )` groups, `-` negation and `prefix*` over stems; no field terms (`title:x` is a plain
+word — use `--title`, `--section`, `--tag`, `--glob`). A zero-result query carries
 `suggestions`; `hyalo terms [PREFIX]` lists the stemmed dictionary.
 `"a b"~N` allows N extra words between phrase tokens. Accents fold, identifiers match by
 whole or parts, and title/headings/tags outweigh body.

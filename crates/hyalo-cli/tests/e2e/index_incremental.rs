@@ -321,7 +321,7 @@ fn stale_entry_is_repaired_in_memory_with_an_unsuppressible_note() {
 
 /// A vault with titles, headings, tags, aliases, a code fence and an
 /// identifier, exercised through eight query shapes — plain, phrase, slop
-/// phrase, OR/negation, prefix, a field term, section granularity and a
+/// phrase, OR/negation, prefix, an identifier, section granularity and a
 /// facet — to pin disk/`--index` parity across every new v4 feature at once.
 fn parity_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
@@ -350,7 +350,7 @@ fn index_and_disk_agree_across_eight_query_shapes() {
         "\"alpha beta\"~5",
         "alpha OR gamma -beta",
         "conf*",
-        "title:configuration",
+        "getUserName",
     ];
     for query in plain_queries {
         let disk = find(&tmp, &[query]).0;

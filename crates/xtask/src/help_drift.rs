@@ -24,6 +24,11 @@
 //!     shipped lines like "…; reject writes that would" and "Scaffold a preset
 //!     vault flavour (okf, madr, skills, changelog) by". Nothing failed, which
 //!     is exactly why it needs a gate.
+//!
+//! 3g. (iter-315) Every hint in `crates/hyalo-cli/src` of the form
+//!     "see SECTION in `hyalo <cmd> --help`" names an ALL-CAPS header that
+//!     `hyalo <cmd> --help` actually prints, so a renamed or removed help
+//!     section cannot leave error hints pointing at nothing.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -585,6 +590,131 @@ fn check_short_help_fragments(root: &std::path::Path) -> Vec<String> {
     failures
 }
 
+/// One "see SECTION in `hyalo <cmd> --help`" reference found in source.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SectionReference {
+    pub section: String,
+    pub command: Vec<String>,
+}
+
+/// Undo Rust's `\`-newline string continuation so a hint split across
+/// source lines reads as the one line the binary prints.
+fn join_continuations(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(pos) = rest.find("\\\n") {
+        out.push_str(&rest[..pos]);
+        rest = rest[pos + 2..].trim_start();
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every "see SECTION in `hyalo <cmd> --help`" in `src` whose SECTION is
+/// ALL-CAPS (letters, digits, spaces, `-`).
+pub fn section_references(src: &str) -> Vec<SectionReference> {
+    const MARKER: &str = " in `hyalo ";
+    let joined = join_continuations(src);
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while let Some(found) = joined[cursor..].find(MARKER) {
+        let at = cursor + found;
+        cursor = at + MARKER.len();
+        let after = &joined[cursor..];
+        let Some(end) = after.find(" --help`") else {
+            continue;
+        };
+        let command: Vec<String> = after[..end].split_whitespace().map(str::to_owned).collect();
+        if command.is_empty()
+            || command
+                .iter()
+                .any(|w| w.starts_with('-') || w.contains('`'))
+        {
+            continue;
+        }
+        let before = &joined[..at];
+        let Some(see) = before.rfind("see ") else {
+            continue;
+        };
+        let section = &before[see + 4..];
+        let is_caps = !section.is_empty()
+            && section.chars().any(|c| c.is_ascii_uppercase())
+            && section
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' ' || c == '-');
+        if is_caps {
+            out.push(SectionReference {
+                section: section.to_owned(),
+                command,
+            });
+        }
+    }
+    out
+}
+
+/// `true` when `help` has a line starting with `section` followed by `:` or
+/// ` (` — the shape of every long-help header (`QUERY SYNTAX (for PATTERN):`,
+/// `EXAMPLES:`).
+pub fn has_section_header(help: &str, section: &str) -> bool {
+    help.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(section)
+            .is_some_and(|rest| rest.starts_with(':') || rest.starts_with(" ("))
+    })
+}
+
+fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// 3g: every "see SECTION in `hyalo <cmd> --help`" names a real header.
+fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    rust_sources(
+        &root.join("crates").join("hyalo-cli").join("src"),
+        &mut files,
+    );
+    files.sort();
+    let mut helps: std::collections::HashMap<Vec<String>, Option<String>> =
+        std::collections::HashMap::new();
+    let mut failures = Vec::new();
+    for file in files {
+        let Ok(src) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for reference in section_references(&src) {
+            let help = helps.entry(reference.command.clone()).or_insert_with(|| {
+                let argv: Vec<&str> = reference.command.iter().map(String::as_str).collect();
+                help_text(root, &argv)
+            });
+            let label = format!("hyalo {} --help", reference.command.join(" "));
+            let ok = help
+                .as_deref()
+                .is_some_and(|h| has_section_header(h, &reference.section));
+            if !ok {
+                let rel = file.strip_prefix(root).unwrap_or(&file);
+                failures.push(format!(
+                    "Help drift (3g): {} points at '{}' in `{label}`, which prints no such \
+                     header",
+                    rel.display(),
+                    reference.section
+                ));
+            }
+        }
+    }
+    failures
+}
+
 pub fn run() -> Result<bool> {
     let root = workspace_root()?;
     run_with_root(&root)
@@ -610,11 +740,14 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     let indent_failures = check_help_body_indentation(root);
     all_failures.extend(indent_failures);
 
+    all_failures.extend(check_help_section_references(root));
+
     if all_failures.is_empty() {
         println!(
             "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, \
-             short help within its byte ceilings with no sentence fragments, and no leaked \
-             doc-comment indentation."
+             short help within its byte ceilings with no sentence fragments, no leaked \
+             doc-comment indentation, and every `see SECTION in --help` hint names a real \
+             header."
         );
         Ok(true)
     } else {
@@ -634,6 +767,38 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn section_references_are_found_across_continuations() {
+        let src = "Some(\"quote it; \\\n             see QUERY SYNTAX in `hyalo find --help`\"),\n\
+                   Some(\"see FACETS in `hyalo find --help`\"),\n\
+                   \"(see `hyalo find --help`)\",\n\
+                   \"see `hyalo set --help` for details\",\n\
+                   \"see TASKS in `hyalo task toggle --help`\"";
+        let refs = section_references(src);
+        let got: Vec<(&str, String)> = refs
+            .iter()
+            .map(|r| (r.section.as_str(), r.command.join(" ")))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("QUERY SYNTAX", "find".to_owned()),
+                ("FACETS", "find".to_owned()),
+                ("TASKS", "task toggle".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn section_header_needs_a_colon_or_parenthesis() {
+        let help = "Intro\n\nQUERY SYNTAX (for PATTERN):\n- words\nEXAMPLES:\n  hyalo x\n\
+                    The QUERY word in prose\n";
+        assert!(has_section_header(help, "QUERY SYNTAX"));
+        assert!(has_section_header(help, "EXAMPLES"));
+        assert!(!has_section_header(help, "QUERY"));
+        assert!(!has_section_header(help, "SEARCH MODES"));
+    }
 
     #[test]
     fn count_examples_plain_lines() {

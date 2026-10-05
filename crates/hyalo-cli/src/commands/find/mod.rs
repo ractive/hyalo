@@ -312,34 +312,14 @@ pub(crate) struct SearchReport {
     /// can tell a truly hopeless word (`qqqzzz`) from one `suggest()` simply
     /// chose not to propose a correction for.
     pub(crate) zero_posting_terms: Vec<String>,
-}
-
-/// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
-struct IndexFieldSource<'a> {
-    index: &'a dyn VaultIndex,
-    language: Option<&'a str>,
-    config_language: Option<&'a str>,
-}
-
-impl hyalo_core::bm25::FieldSource for IndexFieldSource<'_> {
-    fn field_document(&self, rel_path: &str) -> Option<hyalo_core::bm25::FieldDocument<'_>> {
-        let entry = self.index.get(rel_path)?;
-        let title = match extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path) {
-            serde_json::Value::String(title) => std::borrow::Cow::Owned(title),
-            _ => std::borrow::Cow::Borrowed(""),
-        };
-        let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-        Some(hyalo_core::bm25::FieldDocument {
-            title,
-            headings: entry
-                .sections
-                .iter()
-                .filter_map(|s| s.heading.as_deref())
-                .collect(),
-            tags: &entry.tags,
-            language: resolve_language(fm_lang, self.language, self.config_language),
-        })
-    }
+    /// Positive words shaped like a removed field term (`title:x`; DEC-366)
+    /// as `(field, value)`, recorded only for a zero-result ranked query so
+    /// the hint layer can name the flag that replaced it.
+    pub(crate) legacy_field_terms: Vec<(String, String)>,
+    /// The query with those words removed, when it still parses (empty when
+    /// nothing else remains); `None` leaves the migration hint without a
+    /// runnable command.
+    pub(crate) legacy_field_rest: Option<String>,
 }
 
 /// Score `query` against `corpus` and, when nothing survives the candidate
@@ -348,7 +328,6 @@ impl hyalo_core::bm25::FieldSource for IndexFieldSource<'_> {
 fn score_corpus(
     corpus: &Bm25InvertedIndex,
     query: &hyalo_core::bm25::CompiledQuery,
-    fields: &IndexFieldSource<'_>,
     keep: impl Fn(&str) -> bool,
     report: &mut SearchReport,
 ) -> Vec<hyalo_core::bm25::Bm25Match> {
@@ -360,7 +339,7 @@ fn score_corpus(
         ));
     }
     let scored: Vec<_> = corpus
-        .score_with_fields(query, fields)
+        .score_compiled(query)
         .into_iter()
         .filter(|m| keep(&m.rel_path))
         .collect();
@@ -368,6 +347,17 @@ fn score_corpus(
         report.suggestions = corpus.suggest(query);
         report.corrected_query = hyalo_core::bm25::corrected_query(query, &report.suggestions);
         report.zero_posting_terms = corpus.words_without_postings(query);
+        report.legacy_field_terms = query
+            .legacy_field_terms()
+            .iter()
+            .map(|t| (t.field.clone(), t.value.clone()))
+            .collect();
+        if !report.legacy_field_terms.is_empty() {
+            let rest = query.without_legacy_field_terms();
+            report.legacy_field_rest = (rest.is_empty()
+                || hyalo_core::bm25::CompiledQuery::parse(&rest, &[]).is_ok())
+            .then_some(rest);
+        }
     }
     scored
 }
@@ -635,14 +625,14 @@ pub(crate) fn find_prepared(
                 }
             }
             match hyalo_core::bm25::CompiledQuery::parse(pattern, &languages) {
-                Ok(query) if extras.section_mode && !query.has_text_terms() => {
+                Ok(query) if extras.section_mode && !query.has_positive_leaf() => {
                     return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                         format,
                         "--granularity section needs a text term in PATTERN",
                         None,
                         Some(
-                            "field terms (title:, heading:, tag:, path:) and negations apply to \
-                             whole files; add a word or phrase to rank sections by",
+                            "negations apply to whole files; add a word or phrase to rank \
+                             sections by",
                         ),
                         None,
                     )));
@@ -702,11 +692,6 @@ pub(crate) fn find_prepared(
             ));
         }
     }
-    let field_source = IndexFieldSource {
-        index,
-        language,
-        config_language,
-    };
     // DEC-334: section scoring borrows the IDF and prefix expansion of the
     // very corpus that answered the file-level query, so section hits and
     // file hits never disagree about the query.
@@ -829,12 +814,11 @@ pub(crate) fn find_prepared(
             {
                 hyalo_core::internal_metrics::record_direct_indexed_scoring();
                 if extras.section_mode {
-                    section_scorer = Some(bm25_idx.section_scorer(query, &field_source));
+                    section_scorer = Some(bm25_idx.section_scorer(query));
                 }
                 let map: HashMap<String, f64> = score_corpus(
                     bm25_idx,
                     query,
-                    &field_source,
                     |path| candidate_paths.contains(path),
                     search_report,
                 )
@@ -851,8 +835,7 @@ pub(crate) fn find_prepared(
                         score: s,
                     })
                     .collect();
-                if query.has_text_terms() && is_low_discriminative(&filtered, candidate_paths.len())
-                {
+                if is_low_discriminative(&filtered, candidate_paths.len()) {
                     crate::warn::warn(
                         "BM25 search: query matched most documents with low scores — \
                          try more specific search terms",
@@ -1112,19 +1095,18 @@ pub(crate) fn find_prepared(
             let scored = score_corpus(
                 &corpus,
                 query,
-                &field_source,
                 |path| corpus_section_scoped || candidate_paths.contains(path),
                 search_report,
             );
             if extras.section_mode {
-                section_scorer = Some(corpus.section_scorer(query, &field_source));
+                section_scorer = Some(corpus.section_scorer(query));
             }
 
             // Warn if the query has low discriminative power (matches most docs with low scores).
             // Use candidate count as denominator so the heuristic is based on the
             // result set actually returned to the user, not the full scoped corpus.
             let total_corpus_docs = candidates.len();
-            if query.has_text_terms() && is_low_discriminative(&scored, total_corpus_docs) {
+            if is_low_discriminative(&scored, total_corpus_docs) {
                 crate::warn::warn(
                     "BM25 search: query matched most documents with low scores — \
                      try more specific search terms",

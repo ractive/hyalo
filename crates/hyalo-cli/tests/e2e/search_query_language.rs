@@ -1,5 +1,6 @@
 //! Ranked-search query language (DEC-333): OR precedence, parentheses,
-//! prefix terms, field terms, multi-language stemming and did-you-mean.
+//! prefix terms, multi-language stemming and did-you-mean. There are no
+//! field terms (DEC-366): `name:value` is plain text.
 
 use super::common::{hyalo, hyalo_no_hints, write_md};
 use tempfile::TempDir;
@@ -109,19 +110,6 @@ fn malformed_queries_exit_1_with_json_envelope() {
         );
         assert!(json["hint"].as_str().unwrap().contains("QUERY SYNTAX"));
     }
-}
-
-/// UX-10 text polish: `title:(a OR b)` names the real problem (a field term
-/// cannot take a group) instead of blaming the trailing `)` for being
-/// unbalanced.
-#[test]
-fn field_term_with_group_names_the_real_problem() {
-    let tmp = vault();
-    let (_, output) = run(&tmp, &["find", "title:(rust OR tokio)"]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    let error = json["error"].as_str().unwrap();
-    assert!(error.contains("cannot take a group"), "{error}");
 }
 
 /// UX-6 / DEC-358: malformed-but-recoverable query input warns (`-q`-proof)
@@ -243,63 +231,54 @@ fn prefix_expansion_cap_warns_even_with_quiet() {
     assert_eq!(json["total"], 1);
 }
 
+/// DEC-366: `title:`, `heading:`, `tag:` and `path:` are not field terms.
+/// `title:tokio` is the two plain words `title` and `tokio` (no body here
+/// says "title"), exactly like `foo:bar`; structure is selected with flags.
 #[test]
-fn field_terms_filter_by_metadata() {
+fn name_value_tokens_are_plain_words_not_field_terms() {
     let tmp = vault();
+    for query in [
+        "title:tokio",
+        "heading:install",
+        "tag:project",
+        "path:notes/",
+        "foo:bar",
+    ] {
+        let got = files(&tmp, query, &[]);
+        assert!(got.is_empty(), "{query}: expected no hits, got {got:?}");
+    }
+    // The flags are the way to select structure.
     assert_eq!(
-        files(&tmp, "title:tokio", &[]),
+        files(&tmp, "tokio", &["--title", "tokio"]),
         vec!["notes/rust-tokio.md", "notes/tokio-only.md"]
     );
     assert_eq!(
-        files(&tmp, "title:\"tokio notes\"", &[]),
-        vec!["notes/rust-tokio.md"]
-    );
-    assert_eq!(
-        files(&tmp, "heading:install", &[]),
-        vec!["notes/rust-async.md"]
-    );
-    assert_eq!(files(&tmp, "tag:project", &[]), vec!["notes/rust-async.md"]);
-    assert_eq!(
-        files(&tmp, "path:ITERATIONS/", &[]),
+        files(
+            &tmp,
+            "link*",
+            &["--title", "iteration", "--tag", "iteration"]
+        ),
         vec!["iterations/iteration-01-links.md"]
     );
-    assert_eq!(
-        files(&tmp, "tokio -tag:rust", &[]),
-        vec!["notes/tokio-only.md"]
+    // A word that does occur matches through a `name:value` token.
+    write_md(
+        tmp.path(),
+        "notes/colon.md",
+        "---\ntitle: Colon\n---\nthe page title tokio sits here\n",
     );
-    assert_eq!(
-        files(&tmp, "title:iteration tag:iteration link*", &[]),
-        vec!["iterations/iteration-01-links.md"]
+    assert_eq!(files(&tmp, "title:tokio", &[]), vec!["notes/colon.md"]);
+    // A parenthesis glued to the word is literal, so the closing `)` of
+    // `title:(rust OR tokio)` is unbalanced -- an ordinary syntax error.
+    let (_, output) = run(&tmp, &["find", "title:(rust OR tokio)"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid search query"),
+        "{json}"
     );
-    // Unknown prefixes stay plain terms (no error).
-    let (_, output) = run(&tmp, &["find", "foo:bar"]);
-    assert!(output.status.success());
-}
-
-#[test]
-fn field_only_query_scores_zero_sorted_by_file_without_snippets() {
-    let tmp = vault();
-    let (json, output) = run(&tmp, &["find", "path:notes/"]);
-    assert!(output.status.success(), "{output:?}");
-    let results = json["results"].as_array().unwrap();
-    let paths: Vec<&str> = results
-        .iter()
-        .map(|r| r["file"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        paths,
-        vec![
-            "notes/rust-async.md",
-            "notes/rust-tokio.md",
-            "notes/tokio-only.md"
-        ]
-    );
-    for r in results {
-        assert_eq!(r["score"], 0.0);
-        assert_eq!(r["matches"], serde_json::json!([]));
-    }
-    // No low-score warning for a metadata-only query.
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("low scores"));
 }
 
 #[test]
@@ -657,5 +636,85 @@ fn try_or_hint_is_withheld_when_no_word_has_any_postings() {
             .iter()
             .any(|d| d.contains("Try OR instead of AND")),
         "{descriptions:?}"
+    );
+}
+
+/// The invalid-query envelope's hint names a `find --help` section; that
+/// header must exist (check-help-drift 3g guards every such hint).
+#[test]
+fn invalid_query_hint_names_a_real_help_section() {
+    let tmp = vault();
+    let (_, output) = run(&tmp, &["find", "(rust"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let hint = json["hint"].as_str().unwrap();
+    let section = hint
+        .split("see ")
+        .nth(1)
+        .and_then(|rest| rest.split(" in `hyalo find --help`").next())
+        .unwrap_or_else(|| panic!("no section named in {hint}"));
+    let help = hyalo_no_hints().args(["find", "--help"]).output().unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help.lines().any(|line| line
+            .trim_start()
+            .strip_prefix(section)
+            .is_some_and(|r| r.starts_with(':') || r.starts_with(" ("))),
+        "find --help has no '{section}' header"
+    );
+}
+
+/// DEC-366 migration: a zero-result query holding a `title:x`-shaped word
+/// says field terms are gone and hints the flag, carrying the rest of the
+/// query.
+#[test]
+fn zero_result_field_shaped_word_hints_the_flag() {
+    let tmp = vault();
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "rust tag:zzqmissing", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("'tag:zzqmissing' is not a field term")
+            && text.contains("--tag 'zzqmissing'"),
+        "{text}"
+    );
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "rust title:zzqmissing", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().unwrap();
+    let hint = hints
+        .iter()
+        .find(|h| {
+            h["description"]
+                .as_str()
+                .unwrap()
+                .contains("Field terms are not part of the search grammar")
+        })
+        .unwrap_or_else(|| panic!("{hints:?}"));
+    let cmd = hint["cmd"].as_str().unwrap();
+    assert!(
+        cmd.starts_with("hyalo find --title zzqmissing") && cmd.ends_with("-- rust"),
+        "{cmd}"
+    );
+    // No "Try OR" rewrite of the field-shaped word.
+    assert!(
+        !hints
+            .iter()
+            .any(|h| h["description"].as_str().unwrap().contains("Try OR")),
+        "{hints:?}"
     );
 }
