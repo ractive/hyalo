@@ -44,7 +44,7 @@ iteration: **DEC-351 to DEC-354**.
 
 - [x] Every fix has a regression test named by behaviour; the Obsidian Hub dry-run counts (`summary`, `find --broken-links`, HYALO006) agree at 162
 - [x] A scratch vault with a numbered heading, one wikilink and one markdown link to it: after `links fix --apply` the wikilink carries the heading text and the markdown link the slug, both resolve, Obsidian's rule is satisfied
-- [ ] Exit codes stay 0/1/2 (DEC-307); `check-jq-recipes` and help-drift gates pass
+- [x] Exit codes stay 0/1/2 (DEC-307); `check-jq-recipes` and help-drift gates pass
 - [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check` and `hyalo lint --strict` are green; CI green on Linux, macOS and Windows
 
 ## Outcome
@@ -109,3 +109,69 @@ lines above (`check-jq-recipes`/help-drift; the CI line) are left
 unticked honestly rather than claimed. The CI line is the orchestrator's to
 tick after a real CI run; the help-drift half of the gates line should be
 re-run once the lock contention is gone.
+
+### Review round (PR #377), 2026-10-05
+
+An independent review of PR #377 raised 2 MUST-FIX and 4 SHOULD-FIX items,
+all addressed on this branch with regression tests:
+
+1. **MUST-FIX — `SNAPSHOT_FORMAT_VERSION` stayed 4** although `IndexEntry`
+   gained `explicit_anchor_ids` (DEC-353): an incremental `create-index` on a
+   pre-existing v4 index reused mtime-old entries that never got anchor ids
+   scanned, so `summary --index`/`find --broken-links --index` silently
+   under-reported broken anchors. Fixed by bumping to **v5**, so a v4
+   snapshot is refused and rebuilt (precedent: iteration 304's v4 bump);
+   amended DEC-353's "Why" to explain the staleness risk, updated the claims
+   paragraph and CHANGELOG, and added
+   `v4_snapshot_without_explicit_anchor_ids_is_refused_not_silently_served`
+   (tampers a real v4 snapshot's header + entries, confirms disk and
+   `--index` both answer correctly and `create-index` rebuilds).
+2. **MUST-FIX — `ExplicitAnchorScanner::on_body_line` scanned `raw`**, so an
+   HTML comment, a backtick code span, or `data-id="x"` (the `\b` boundary
+   matched after the `-`) all produced false anchor matches. Fixed by
+   scanning the pre-stripped `cleaned` line and requiring whitespace before
+   `id`/`name` (`\s(?:id|name)\s*=`); added
+   `explicit_anchor_scanner_ignores_a_multiline_html_comment`,
+   `_a_single_line_html_comment`, `_a_backtick_code_span`, and
+   `explicit_anchor_ids_in_line_ignores_data_id_attribute` in
+   `hyalo-core::anchor`, plus `explicit_anchor_false_positives_are_excluded_in_find_and_hyalo008`
+   (e2e, covers both `find` and HYALO008 agreeing).
+3. **SHOULD-FIX — a heading containing `#` or `^` written verbatim into a
+   wikilink fragment**: Obsidian splits on `#` (nested heading path) and
+   treats `^` as a block reference, so `## 1. C# basics` or
+   `## 7. Caret ^ thing` produced a fragment Obsidian cannot resolve even
+   though hyalo itself does. Fixed by deferring the fix (not writing it) with
+   a reason naming the offending character, in
+   `anchor_fix::plan_anchor_fixes_filtered`; added a DEC-351 addendum and
+   `heading_with_hash_or_caret_defers_the_wikilink_anchor_fix` (both inputs).
+4. **SHOULD-FIX — a link differing in case AND Unicode composition emitted
+   NFD**: `discovery.rs`'s three canonical-target call sites returned the
+   raw on-disk bytes once a case difference was already detected, so
+   `[[sub/café]]` (NFC) against `sub/Café.md` (NFD) emitted the decomposed
+   form instead of NFC, contradicting DEC-354. Fixed with a new
+   `nfc_normalize` helper applied at all three sites; added
+   `case_and_composition_mismatch_emits_nfc_not_the_files_raw_decomposed_bytes`.
+5. **SHOULD-FIX — BUG-17's `--fields links` half had no follow-up**: filed
+   as [[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]]
+   and linked from the "Deliberately left out" note above.
+6. **SHOULD-FIX — anchor/index and comment/code-span test coverage**:
+   covered by items 1 and 2's new tests.
+
+Rebased onto `origin/main` after PR #376 (iter-312) merged; the
+`decision-log.md`/`CHANGELOG.md`/`.claude/CLAUDE.md` conflicts were resolved
+by keeping both sides (iter-312's DEC-355..358 content and this branch's
+DEC-351..354 content, DEC-numeric order), per instruction. The rebase
+surfaced two small fallout fixes: a test fixture in `sort.rs` missing the
+new `explicit_anchor_ids` field (clippy caught it), and a dropped blank
+line before `## DEC-355` in the merged decision log (`hyalo lint --strict`
+caught it, MD022) — both fixed in a follow-up commit.
+
+Full gate order rerun clean on the final commit: `cargo fmt`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
+(2465 e2e + 1678 unit + others, all green — confirmed as a solo run, no
+concurrent-build binary race), `cargo deny check`, `hyalo lint --strict`
+(15 violations / 5 files, all pre-existing in `iterations/iteration-29{1..5}-*.md`,
+untouched by this branch), `check-help-drift`, `check-jq-recipes`,
+`check-ts-types` (0 drift — none of the touched fields carry a `ts_rs::TS`
+derive), `check-pi-package-sync`, `check-pi-runtime` — all clean, so no
+TypeScript regeneration or `pi-package` sync was needed.
