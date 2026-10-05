@@ -3,7 +3,7 @@ title: "Iteration 316: search discoverability for agents"
 type: iteration
 date: 2026-10-05
 tags: [iteration, search, find, hints, help, docs]
-status: in-progress
+status: completed
 branch: iter-316/search-discoverability-for-agents
 priority: 1
 ---
@@ -41,7 +41,7 @@ reserved: **DEC-367**.
 - [x] `hyalo find 'snapshot index stale'` (100+ hits) prints a runnable `--granularity section` hint; `hyalo find 'snapshot zzqq'`-style zero results with existing words hint `OR`; `hyalo find --section Tasks` with many matches hints section mode; every hinted command exits 0 when run
 - [x] Every "see X in `hyalo <cmd> --help`" envelope carries the matching `-> hyalo <cmd> --help` hint
 - [x] Both experiment transcripts are in the research note with the commands tried and the outcome per task
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, jq-recipes, ts-types, pi-package-sync, pi-runtime, bundled-skills and `hyalo lint --strict` green; CI green on three platforms
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, jq-recipes, ts-types, pi-package-sync, pi-runtime, bundled-skills and `hyalo lint --strict` green; CI green on three platforms
 
 ## Implementation notes
 
