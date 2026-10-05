@@ -249,6 +249,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
 /// [`help_long`]. Never hand-write the list-command enumeration here (iter-192).
 const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
+    PATTERN is a query language: implicit AND, OR (binds tighter), \"phrase\"~N, prefix*, -term, ( ) groups.
     PATTERN returns score and up to 3 body matches {line, section, text}, ranked by distinct query
     tokens then line number; --section scopes matches. Regex returns all matching lines, unranked.
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
@@ -415,6 +416,9 @@ COOKBOOK:
 
   # Find files tagged 'project' (matches project/backend, project/frontend, etc.)
   hyalo find --tag project
+
+  # Which dictionary stems a prefix like config* expands to (with document counts)
+  hyalo terms config
 
   # Regex body search (standalone)
   hyalo find -e 'TODO|FIXME'

@@ -3,7 +3,7 @@ title: "Iteration 316: search discoverability for agents"
 type: iteration
 date: 2026-10-05
 tags: [iteration, search, find, hints, help, docs]
-status: planned
+status: in-progress
 branch: iter-316/search-discoverability-for-agents
 priority: 1
 ---

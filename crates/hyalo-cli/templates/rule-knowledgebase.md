@@ -2,6 +2,21 @@
 paths:
   - "hyalo-knowledgebase/**"
 ---
+Search with `hyalo find` — the same block opens `hyalo find --help`:
+
+```text
+FIND 101 -- PATTERN is a query language; structure is a flag:
+  hyalo find 'a b'                         # both words (implicit AND), ranked
+  hyalo find 'a b OR c'                    # OR binds tighter: a AND (b OR c)
+  hyalo find '"a b"~3'                     # in order, at most 3 words apart; '"a b"' = exact
+  hyalo find 'config*'                     # prefix over stems: config, configur, ...
+  hyalo find -- '-a (b OR c)'              # -term excludes, ( ) groups; lead - or ( needs --
+  hyalo find 'a b' --granularity section   # one hit per section: the paragraph, not the file
+  hyalo find 'a' --facet dir --facet tags  # file counts per directory / tag, all matches
+  hyalo terms config                       # the dictionary: the stems a prefix expands to
+  structure is selected with flags: --title --tag --glob --section --property
+```
+
 Prefer `hyalo` CLI for operations on files in this directory:
 - **Read the CLI's own help before guessing a flag**: `hyalo -h` lists every command grouped by
   intent, one line each; `hyalo <cmd> -h` is one screen for one command; `hyalo <cmd> --help` is the

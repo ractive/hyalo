@@ -383,13 +383,16 @@ fn find_empty_selection_preflight(
             !filters.fields.is_empty(),
         )
     {
-        return Some(CommandOutcome::UserError(crate::output::user_diagnostic(
-            ctx.effective_format,
-            message,
-            None,
-            Some("see SEARCH MODES in `hyalo find --help`"),
-            None,
-        )));
+        return Some(CommandOutcome::UserError(
+            crate::output::user_diagnostic(
+                ctx.effective_format,
+                message,
+                None,
+                Some("see SEARCH MODES in `hyalo find --help`"),
+                None,
+            )
+            .with_help_pointer("find", "SEARCH MODES"),
+        ));
     }
     if filters.facet.is_empty() {
         return None;
@@ -402,13 +405,16 @@ fn find_empty_selection_preflight(
             });
             None
         }
-        Err(message) => Some(CommandOutcome::UserError(crate::output::user_diagnostic(
-            ctx.effective_format,
-            &message,
-            None,
-            Some("see FACETS in `hyalo find --help`"),
-            None,
-        ))),
+        Err(message) => Some(CommandOutcome::UserError(
+            crate::output::user_diagnostic(
+                ctx.effective_format,
+                &message,
+                None,
+                Some("see FACETS in `hyalo find --help`"),
+                None,
+            )
+            .with_help_pointer("find", "FACETS"),
+        )),
     }
 }
 

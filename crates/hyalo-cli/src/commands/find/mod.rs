@@ -634,16 +634,19 @@ pub(crate) fn find_prepared(
                 }
                 Ok(query) => Some(query),
                 Err(error) => {
-                    return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
-                        format,
-                        &format!("invalid search query: {error}"),
-                        None,
-                        Some(
-                            "quote text to search it literally (e.g. '\"a)\"'); \
+                    return Ok(CommandOutcome::UserError(
+                        crate::output::user_diagnostic(
+                            format,
+                            &format!("invalid search query: {error}"),
+                            None,
+                            Some(
+                                "quote text to search it literally (e.g. '\"a)\"'); \
                              see QUERY SYNTAX in `hyalo find --help`",
-                        ),
-                        None,
-                    )));
+                            ),
+                            None,
+                        )
+                        .with_help_pointer("find", "QUERY SYNTAX"),
+                    ));
                 }
             }
         }

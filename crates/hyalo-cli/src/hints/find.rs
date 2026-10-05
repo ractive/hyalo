@@ -13,6 +13,97 @@ use super::{
 /// Largest buckets of each `--facet` that get a drill-down hint (DEC-335).
 pub(super) const FACET_HINT_BUCKETS: usize = 3;
 
+/// A ranked query needs this many positive words, and
+/// [`SECTION_HINT_MIN_FILES`] matching files, before `find` teaches
+/// `--granularity section` (iteration 316, DEC-367): a long query that still
+/// matches a hundred files is asking for a paragraph, not a file list.
+const SECTION_HINT_MIN_WORDS: usize = 3;
+/// See [`SECTION_HINT_MIN_WORDS`].
+const SECTION_HINT_MIN_FILES: u64 = 100;
+/// A PATTERN-less `--section` filter matching headings in this many files
+/// teaches section mode with the heading words as PATTERN (DEC-367).
+const SECTION_FILTER_HINT_MIN_FILES: u64 = 10;
+/// Extra words the many-results proximity hint allows between the query
+/// words (`"a b"~5`, DEC-338 / DEC-367).
+const PROXIMITY_HINT_SLOP: usize = 5;
+
+/// The positive words of an unquoted, ungrouped ranked PATTERN, without
+/// `-negations` and the `OR`/`AND` keywords. `None` for a pattern holding a
+/// phrase or a group, whose words cannot be recombined safely.
+fn positive_bare_words(pattern: &str) -> Option<Vec<&str>> {
+    if pattern.contains(['"', '(', ')']) {
+        return None;
+    }
+    Some(
+        pattern
+            .split_whitespace()
+            .filter(|w| {
+                !w.starts_with('-')
+                    && !w.eq_ignore_ascii_case("or")
+                    && !w.eq_ignore_ascii_case("and")
+            })
+            .collect(),
+    )
+}
+
+/// The words of a `--section` filter, as a ranked PATTERN: `## Open
+/// questions` gives `Open questions`. `None` for a `/regex/` filter or one
+/// with no word in it.
+fn heading_words(filter: &str) -> Option<String> {
+    let text = filter.trim().trim_start_matches('#').trim();
+    if text.len() >= 2 && text.starts_with('/') && text.ends_with('/') {
+        return None;
+    }
+    let words: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| {
+            !w.is_empty() && !w.eq_ignore_ascii_case("or") && !w.eq_ignore_ascii_case("and")
+        })
+        .collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// The "paragraph, not the file" teaching hint (iteration 316, DEC-367):
+/// a ranked query of [`SECTION_HINT_MIN_WORDS`]+ positive words matching
+/// [`SECTION_HINT_MIN_FILES`]+ files, or a PATTERN-less `--section` filter
+/// matching headings in [`SECTION_FILTER_HINT_MIN_FILES`]+ files, gets the
+/// same scope re-asked at `--granularity section`. Withheld whenever the
+/// rewrite would carry a flag section mode refuses.
+fn section_mode_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
+    let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved else {
+        return None;
+    };
+    if spec.is_section_granularity() || ctx.has_regex_search {
+        return None;
+    }
+    let (description, rewrite) = if let Some(pattern) = &ctx.body_pattern {
+        let words = positive_bare_words(pattern)?;
+        if words.len() < SECTION_HINT_MIN_WORDS || total < SECTION_HINT_MIN_FILES {
+            return None;
+        }
+        (
+            format!("{total} files match -- rank sections instead (the paragraph, not the file)"),
+            spec.section_mode_rewrite(ctx, pattern, true)?,
+        )
+    } else {
+        let filter = ctx.section_filters.first()?;
+        if total < SECTION_FILTER_HINT_MIN_FILES {
+            return None;
+        }
+        let words = heading_words(filter)?;
+        (
+            format!(
+                "--section matched headings in {total} files -- rank the sections that \
+                 mention '{words}' instead (the paragraph, not the file)"
+            ),
+            spec.section_mode_rewrite(ctx, &words, false)?,
+        )
+    };
+    rewrite
+        .ok()
+        .map(|builder| Hint::from_builder(description, builder))
+}
+
 /// A bucket value that can be written back as `--property K=V` and mean
 /// exactly that value: no second `=`, no operator-like prefix, and not one of
 /// the literals `K=null` / `K=[]` give a special meaning.
@@ -296,9 +387,24 @@ pub(super) fn hints_for_find(
                 && any_word_has_docs
                 && ctx.legacy_field_terms.is_empty()
             {
+                // DEC-367: when every word occurs somewhere, AND failed only
+                // because no single file holds them all -- say so. (A
+                // `"a b"~N` phrase is never offered here: it is narrower
+                // than the AND that already matched nothing.)
+                let every_word_has_docs = words.iter().all(|w| {
+                    !ctx.zero_posting_terms
+                        .iter()
+                        .any(|t| t.eq_ignore_ascii_case(w))
+                });
+                let description = if every_word_has_docs {
+                    "Try OR instead of AND (match any word) -- every word occurs, but no \
+                     file holds them all"
+                } else {
+                    "Try OR instead of AND (match any word)"
+                };
                 let or_query = words.join(" OR ");
                 hints.push(Hint::new(
-                    "Try OR instead of AND (match any word)",
+                    description,
                     build_find_command_with_pattern(ctx, &or_query),
                 ));
             }
@@ -330,6 +436,10 @@ pub(super) fn hints_for_find(
     let mut hints = Vec::new();
     let result_count = results.len();
     let is_single = result_count == 1;
+
+    // iteration 316 (DEC-367): teach section mode first, so the budget
+    // never truncates it away.
+    hints.extend(section_mode_hint(ctx, total.unwrap_or(result_count as u64)));
 
     // iter-267 (UX-3, reverse direction): the PATTERN was itself an existing
     // `.md` path, so this ran as a body search for that literal text. The
@@ -611,9 +721,14 @@ pub(super) fn hints_for_find(
         if !has_quotes && words.len() >= 2 && result_count > 10 {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
-                let phrase = format!("\"{}\"", words.join(" "));
+                // DEC-367: the slop form teaches `"…"~N`; without `~N` the
+                // quotes alone are the exact phrase.
+                let phrase = format!("\"{}\"~{PROXIMITY_HINT_SLOP}", words.join(" "));
                 hints.push(Hint::new(
-                    "Try as exact phrase for more precise results",
+                    format!(
+                        "Require the words in order, at most {PROXIMITY_HINT_SLOP} words apart \
+                         (drop ~{PROXIMITY_HINT_SLOP} for the exact phrase)"
+                    ),
                     build_find_command_with_pattern(ctx, &phrase),
                 ));
             }

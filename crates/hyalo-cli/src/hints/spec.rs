@@ -102,6 +102,71 @@ impl FindHintSpec {
         }
     }
 
+    /// The same query asked at `--granularity section` with `pattern` as
+    /// PATTERN (iteration 316, DEC-367): the teaching hint for "the
+    /// paragraph, not the file". `None` when the query carries a flag section
+    /// mode refuses (`--regexp`, `--sort`, `--reverse`, `--fields`), so the
+    /// hint is never a command that exits 1. `keep_sections` is `false` when
+    /// the `--section` heading words *became* `pattern`.
+    pub(crate) fn section_mode_rewrite(
+        &self,
+        ctx: &HintContext,
+        pattern: &str,
+        keep_sections: bool,
+    ) -> Option<Result<HintBuilder, String>> {
+        if self.regexp.is_some() || self.sort.is_some() || self.reverse || !self.fields.is_empty() {
+            return None;
+        }
+        let mut builder = HintBuilder::cmd("find");
+        for property in &self.properties {
+            builder = builder.flag_value("--property", property);
+        }
+        for tag in &self.tags {
+            builder = builder.flag_value("--tag", tag);
+        }
+        if let Some(task) = &self.task {
+            builder = builder.flag_value("--task", task);
+        }
+        if keep_sections {
+            for section in &self.sections {
+                builder = builder.flag_value("--section", section);
+            }
+        }
+        builder = match self.files.push(builder) {
+            Ok(builder) => builder,
+            Err(reason) => return Some(Err(reason.to_owned())),
+        };
+        for glob in &self.globs {
+            builder = builder.flag_value("--glob", glob);
+        }
+        if let Some(limit) = self.limit {
+            builder = builder.flag_value("--limit", &limit.to_string());
+        }
+        if self.broken_links {
+            builder = builder.flag("--broken-links");
+        }
+        if self.orphan {
+            builder = builder.flag("--orphan");
+        }
+        if self.dead_end {
+            builder = builder.flag("--dead-end");
+        }
+        if let Some(title) = &self.title {
+            builder = builder.flag_value("--title", title);
+        }
+        if let Some(language) = &self.language {
+            builder = builder.flag_value("--language", language);
+        }
+        if self.strict {
+            builder = builder.flag("--strict");
+        }
+        builder = builder.flag_value("--granularity", "section");
+        for facet in &self.facets {
+            builder = builder.flag_value("--facet", facet);
+        }
+        Some(Ok(builder.with_globals(ctx).raw("--").arg(pattern)))
+    }
+
     /// `true` when the query asked for `--granularity section`.
     pub(crate) fn is_section_granularity(&self) -> bool {
         self.granularity == Some(crate::cli::args::Granularity::Section)

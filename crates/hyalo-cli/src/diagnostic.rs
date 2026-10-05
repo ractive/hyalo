@@ -11,6 +11,11 @@ pub struct UserDiagnostic {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Runnable follow-ups (DEC-367): a `hint` that points at a section of a
+    /// command's long help carries that `hyalo <cmd> --help` here, so the next
+    /// command is one copy away. Added through [`Self::with_help_pointer`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<crate::hints::Hint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,10 +32,25 @@ impl UserDiagnostic {
             details: std::collections::BTreeMap::new(),
             path: None,
             hint: None,
+            hints: Vec::new(),
             cause: None,
             effects: None,
             category: None,
         }
+    }
+
+    /// Attach the runnable twin of a prose hint that points at `section` of
+    /// the command's long help: `-> hyalo <command> --help  # <section>`
+    /// (DEC-367).
+    /// check-help-drift (3g) fails on a prose pointer whose source file has
+    /// no matching `with_help_pointer("<command>", "<section>")` call.
+    #[must_use]
+    pub fn with_help_pointer(mut self, command: &str, section: &str) -> Self {
+        self.hints.push(crate::hints::Hint::from_builder(
+            section,
+            crate::hints::HintBuilder::cmd(command).flag("--help"),
+        ));
+        self
     }
     #[must_use]
     pub fn render(&self, format: crate::output::Format) -> String {
@@ -45,6 +65,12 @@ impl UserDiagnostic {
                 self.hint.as_deref(),
                 self.cause.as_deref(),
             );
+            for hint in &self.hints {
+                text.push_str("\n  -> ");
+                text.push_str(&hint.cmd);
+                text.push_str("  # ");
+                text.push_str(&hint.description);
+            }
             if let Some(effects) = &self.effects {
                 text.push_str("\nEffects: ");
                 text.push_str(&effects.committed_paths().join(", "));
@@ -84,6 +110,7 @@ pub fn user_diagnostic(
         details: std::collections::BTreeMap::new(),
         path: path.map(str::to_owned),
         hint: hint.map(str::to_owned),
+        hints: Vec::new(),
         cause: cause.map(str::to_owned),
         effects: None,
         category: None,
