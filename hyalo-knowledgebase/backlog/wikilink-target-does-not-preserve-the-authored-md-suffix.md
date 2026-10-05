@@ -65,3 +65,71 @@ Not yet designed. Whoever picks this up should:
       change to resolution, only to the reported `target` field.
 - [ ] A new regression test pins the exact DEC-310 fixture from the dogfood
       report.
+
+## Audit (iteration 317, DEC-368) — not implemented
+
+[[iterations/iteration-317-backlog-leftovers-before-0250]] audited every
+reader of a wikilink's `target` against the contained design (keep
+`Link.target` as the stripped stem for resolution, carry the authored `.md`
+suffix alongside it, report the authored text). The resolution side is
+indeed untouched by that design — but the *reporting* side is not small, so
+by the iteration's stop rule (more than ~6 behavioural call sites, or
+`links fix` matching would change) it was left open.
+
+Reproduced on the release binary (0.24.1 + iter-317): `[[sub/note.md]]`,
+`[[sub/note.md#H]]`, `[[sub/note.md|lbl]]`, `![[sub/note.md]]` all report
+`target: "sub/note"`; HYALO006 says ``broken wikilink: `missing` `` for
+`[[missing.md]]`; `links fix` prints `"sub/Note" → "sub/note"` for
+`[[sub/Note.MD]]`; `find --broken-links --format text` prints `"missing"`.
+`mv`'s text report already shows the authored text (it renders the source
+span, not `Link.target`).
+
+Internal consumers that assume stem form and would keep working unchanged
+under a second field (about 130 reads): `discovery::resolve_target` /
+`resolve_link_from_source`, `classify_short_form_wikilink`,
+`resolves_via_alias`, `link_graph` edge building, `link_rewrite` self-link
+and ambiguity guards (`ambiguous_bare_link_candidates`,
+`ambiguous_self_link_candidates`, `classify_outbound_target`),
+`link_resolve`, `anchor_fix` resolution, `auto_link`, `frontmatter_links`.
+
+User-visible sites that would each need a behavioural change:
+
+1. `Link` — new field (e.g. `md_suffix: Option<String>`, serde default,
+   skipped when `None`) set by `links::parse_wikilink`; ~30 `Link { … }`
+   literals (mostly tests in `link_fix.rs`, `links.rs`, `link_graph.rs`,
+   `link_rewrite.rs`, `hyalo-mdlint` section scanner) gain the field.
+2. Snapshot: `IndexEntry.links` stores `Link`, so an older snapshot would
+   decode with the suffix missing and `--index` would disagree with disk —
+   a format bump to **v8** (DEC-353 precedent).
+3. `find --fields links` — `find/mod.rs` `LinkInfo { target: link.target… }`.
+4. `find --broken-links --format text` — follows from 3.
+5. HYALO006 / HYALO008 messages — `hyalo-mdlint/src/profiles/link.rs`
+   (`check_broken_links`, `check_broken_anchors`) format the stem.
+6. `links fix` `old_target` — five construction sites in `link_fix.rs`
+   (unfixable, ambiguous, case-mismatch, fuzzy, anchor), and `old_target`
+   is ALSO the apply matching key (`link_fix.rs` frontmatter matcher
+   `f.old_target == link.target`, body matcher against
+   `normalized_span_target`/`span.link.target`) — changing it means
+   changing how `--apply` finds the span, the risk the stop rule names.
+7. `links.rs` (CLI) — `find_column` needle and `BrokenLinkInfo.target`.
+8. `backlinks` `written_target` (`backlinks.rs`) and the reconstructed
+   `[[target|label]]` snippet in `index.rs` backlink rendering.
+9. `mv` `skipped_ambiguous[].target` / `SkippedFrontmatterLink.target`
+   (`link_rewrite.rs`).
+10. `anchor_fix` report target.
+
+Related, observed during the audit: `links fix --apply` rewrites a
+case-mismatched `[[sub/Note.MD]]` to `[[sub/note]]`, dropping the authored
+suffix (the documented "a wikilink always drops `.md`" rule) — a byte-output
+change that a full fix would want to revisit at the same time.
+
+### Recommended design
+
+One iteration of its own, with the snapshot bump stated up front: add
+`Link::authored_target() -> Cow<str>` (stem + stored suffix) and route
+sites 3–10 through it; keep `old_target` as the authored text but match
+plans on the stem (`strip_wikilink_md_suffix(old_target)`) so `--apply`
+locates spans exactly as today; pin `mv`/`links fix --apply` byte output on
+a fixture before touching anything. Tests: `[[sub/note.md]]`,
+`[[sub/Note.MD]]`, `[[note.md#H]]`, `[[note.md|label]]`, `![[note.md]]`,
+frontmatter `related: "[[note.md]]"`, disk and `--index` identical.

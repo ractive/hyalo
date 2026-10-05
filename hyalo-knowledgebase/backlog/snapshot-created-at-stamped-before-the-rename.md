@@ -2,7 +2,7 @@
 title: "Snapshot created_at is stamped before the serialize-and-rename tail"
 type: backlog
 date: 2026-10-05
-status: planned
+status: completed
 priority: low
 origin: "iter-313 PR #379 review follow-up, 2026-10-05"
 ---
@@ -39,3 +39,14 @@ the next `create-index` is still a no-op and `tree_moved` stays false.
 
 - [[iterations/iteration-313-index-honesty-and-result-caps]] (DEC-361, the no-op guard this interacts with)
 - [[decision-log]] — DEC-339 (racily-clean rescan) and DEC-361
+
+## Outcome
+
+Fixed in [[iterations/iteration-317-backlog-leftovers-before-0250]] (DEC-368,
+amended in the PR #382 review). The publish re-stamps the snapshot file's
+mtime after the rename. `index::tree_moved`, shared by all three probes,
+compares every directory against `created_at` and excuses only the
+snapshot's own directory, and only when its bump coincides with the file's
+mtime. No format change. Remaining blind spot: a note created or deleted
+directly in the index's own directory within the tolerance of a publish or
+of a later `touch` of the index — the ~2 s window DEC-302 already documents.

@@ -560,6 +560,16 @@ struct SnapshotHeader {
     /// above this format version always writes it.
     #[serde(default)]
     skip_code_blocks: bool,
+    /// Whole-second mtime of the snapshot file this header was loaded from,
+    /// recorded at load time and never serialized (DEC-368, iter-317). `0`
+    /// for a snapshot that was not loaded from a file. See [`tree_moved`].
+    #[serde(skip)]
+    file_mtime: u64,
+    /// Canonical directory holding the snapshot file this header was loaded
+    /// from (symlinks resolved, so it is the directory the publishing rename
+    /// bumped). Never serialized; `None` when unknown. See [`tree_moved`].
+    #[serde(skip)]
+    file_dir: Option<PathBuf>,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -2015,20 +2025,20 @@ impl SnapshotIndex {
     /// fall back to a disk scan. A warning is printed to stderr in this case.
     /// Returns `Err` only for hard I/O failures.
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        let Some(bytes) = read_index_bytes(path, true)? else {
+        let Some((bytes, mtime)) = read_index_bytes(path, true)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(bytes, true))
+        Ok(Self::load_inner(bytes, true).map(|s| s.with_file_meta(path, mtime)))
     }
 
     /// Load a snapshot silently — identical to [`load`] but suppresses the
     /// incompatibility warning.  Used by `find_stale_indexes` which expects to
     /// silently skip files that cannot be deserialized.
     fn load_silent(path: &Path) -> Result<Option<Self>> {
-        let Some(bytes) = read_index_bytes(path, false)? else {
+        let Some((bytes, mtime)) = read_index_bytes(path, false)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(bytes, false))
+        Ok(Self::load_inner(bytes, false).map(|s| s.with_file_meta(path, mtime)))
     }
 
     /// Load a snapshot only to reuse its entries and BM25 postings
@@ -2036,8 +2046,20 @@ impl SnapshotIndex {
     /// build-time skip/exclusion counters, no graph resolution. `None` for a
     /// missing, unreadable or older-format snapshot.
     pub fn load_for_reuse(path: &Path) -> Option<Self> {
-        let bytes = read_index_bytes(path, false).ok()??;
-        Self::load_inner_with(bytes, false, false).filter(Self::format_is_current)
+        let (bytes, mtime) = read_index_bytes(path, false).ok()??;
+        Self::load_inner_with(bytes, false, false)
+            .filter(Self::format_is_current)
+            .map(|s| s.with_file_meta(path, mtime))
+    }
+
+    /// Record where the snapshot was read from and the file's whole-second
+    /// mtime, for [`tree_moved`].
+    fn with_file_meta(mut self, path: &Path, mtime: u64) -> Self {
+        self.header.file_mtime = mtime;
+        self.header.file_dir = dunce::canonicalize(path)
+            .ok()
+            .and_then(|real| real.parent().map(Path::to_path_buf));
+        self
     }
 
     /// Take the BM25 postings out of a snapshot loaded for reuse, decoding a
@@ -2166,7 +2188,7 @@ const MAX_INDEX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 /// Returns `Ok(None)` when the file exceeds the limit (a warning is printed
 /// when `warn` is `true`).
 /// Returns `Err` for hard I/O failures.
-fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
+fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<(Vec<u8>, u64)>> {
     use std::io::Read as _;
 
     let file = std::fs::File::open(path)
@@ -2191,7 +2213,12 @@ fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
     file.take(MAX_INDEX_FILE_SIZE + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read index file: {}", path.display()))?;
-    Ok(Some(bytes))
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    Ok(Some((bytes, mtime)))
 }
 
 /// Shared serialization logic for saving a snapshot index to disk.
@@ -2226,7 +2253,10 @@ fn write_snapshot(
         site_prefix,
         bm25_index,
         attachments,
-        crate::rooted::WriteSession::new(crate::rooted::Durability::PerFile),
+        // `PerDirectory` defers the parent-directory fsync to `finish()`, the
+        // same fence `PerFile` pays inside the commit, so `stamp_published`
+        // can run between the rename and that fsync (DEC-368).
+        crate::rooted::WriteSession::new(crate::rooted::Durability::PerDirectory),
     )
 }
 
@@ -2262,6 +2292,8 @@ fn write_snapshot_with_session(
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
         gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
         skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
+        file_mtime: 0,
+        file_dir: None,
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -2337,11 +2369,55 @@ fn write_snapshot_with_session(
         }
         Err(error) => return Err(error.into()),
     };
+    // Immediately after the rename, before the directory fsync in
+    // `finish()`: a slow fsync must not push the stamp past the tolerance
+    // from the rename's directory bump (DEC-368).
+    stamp_published(&publication_path);
+    #[cfg(test)]
+    test_hooks::before_finish();
     let finalization_error = effect
         .finalization_error()
         .map(str::to_owned)
         .or_else(|| session.finish().err().map(|error| error.to_string()));
     Ok(SnapshotWriteOutcome { finalization_error })
+}
+
+/// Test-only seam: an injected delay between the publishing rename and the
+/// session's directory fsync, standing in for a slow `fsync`.
+#[cfg(test)]
+mod test_hooks {
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    thread_local! {
+        static FINISH_DELAY: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    pub(super) fn set_finish_delay(delay: Duration) {
+        FINISH_DELAY.with(|d| d.set(delay));
+    }
+
+    pub(super) fn before_finish() {
+        let delay = FINISH_DELAY.with(Cell::get);
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+    }
+}
+
+/// Set the freshly published snapshot file's mtime to now (DEC-368).
+///
+/// The rename that publishes the snapshot bumps its directory's mtime after
+/// the temp file's last `write()` and its `sync_all`, so on a slow disk the
+/// directory can end up seconds newer than both the header's `created_at` and
+/// the file's own write mtime. Re-stamping the file after the rename makes
+/// its mtime coincide with that bump, which is what lets [`tree_moved`]
+/// attribute the bump to the publish. Best-effort: when it fails the probe
+/// is merely conservative (it reports a moved tree and re-walks), never blind.
+fn stamp_published(path: &Path) {
+    if let Ok(file) = std::fs::File::options().write(true).open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
 }
 
 impl VaultIndex for SnapshotIndex {
@@ -2518,6 +2594,49 @@ const STALENESS_PROBE_MAX_DEPTH: u32 = 3;
 /// `iterations/done/` and nearly everything in MDN/GitHub Docs, where notes
 /// live two or more directories deep.
 pub fn newest_dir_mtime(dir: &Path) -> Option<u64> {
+    let (others, exempt) = dir_mtimes_split(dir, None);
+    others.max(exempt)
+}
+
+/// Did the vault's directory tree move since `index` was built (DEC-302,
+/// DEC-339, DEC-361, DEC-368)?
+///
+/// The one directory-mtime staleness rule, shared by `snapshot_drift`'s
+/// missing-files walk, `create-index`'s no-op guard and the write path's
+/// stale-index warning so they cannot drift apart. `created_at` is the
+/// anchor for every directory: one newer than `created_at + tolerance`
+/// means the tree moved. A single exception: the directory the snapshot
+/// file itself lives in, when it lies inside the probed vault, is excused
+/// when its mtime coincides (within the tolerance) with the snapshot file's
+/// own mtime — that bump is the publishing rename, and the publish stamps
+/// the file's mtime right after it (`stamp_published`). A bump that does not
+/// coincide (a note added seconds before or after the file was last touched)
+/// still counts, and so does every other directory.
+#[must_use]
+pub fn tree_moved(index: &SnapshotIndex, dir: &Path) -> bool {
+    let header = &index.header;
+    let limit = header.created_at.saturating_add(STALENESS_TOLERANCE_SECS);
+    let exempt = header
+        .file_dir
+        .as_deref()
+        .filter(|_| header.file_mtime != 0)
+        .and_then(|file_dir| {
+            let vault = dunce::canonicalize(dir).ok()?;
+            let rel = file_dir.strip_prefix(&vault).ok()?;
+            Some(dir.join(rel))
+        });
+    let (others, exempt_mtime) = dir_mtimes_split(dir, exempt.as_deref());
+    if others.is_some_and(|m| m > limit) {
+        return true;
+    }
+    exempt_mtime
+        .is_some_and(|m| m > limit && m.abs_diff(header.file_mtime) > STALENESS_TOLERANCE_SECS)
+}
+
+/// One bounded walk (see [`newest_dir_mtime`]) returning the newest mtime of
+/// every probed directory except `exempt`, and `exempt`'s own mtime when the
+/// walk visits it.
+fn dir_mtimes_split(dir: &Path, exempt: Option<&Path>) -> (Option<u64>, Option<u64>) {
     fn mtime_secs(path: &Path) -> Option<u64> {
         std::fs::metadata(path)
             .ok()?
@@ -2535,7 +2654,17 @@ pub fn newest_dir_mtime(dir: &Path) -> Option<u64> {
             .is_some_and(|name| name.starts_with('.'))
     }
 
-    let mut newest = mtime_secs(dir);
+    let mut newest = None;
+    let mut exempt_mtime = None;
+    let mut record = |path: &Path, m: Option<u64>| {
+        let Some(m) = m else { return };
+        if exempt.is_some_and(|e| e == path) {
+            exempt_mtime = Some(m);
+        } else {
+            newest = Some(newest.map_or(m, |n: u64| n.max(m)));
+        }
+    };
+    record(dir, mtime_secs(dir));
     // (path, depth-below-root) — root itself is depth 0 and is not
     // re-visited (already stat'd above); its immediate children are depth 1.
     let mut stack = vec![(dir.to_path_buf(), 0u32)];
@@ -2560,15 +2689,13 @@ pub fn newest_dir_mtime(dir: &Path) -> Option<u64> {
             }
             let path = entry.path();
             let child_depth = depth + 1;
-            if let Some(m) = mtime_secs(&path) {
-                newest = Some(newest.map_or(m, |n: u64| n.max(m)));
-            }
+            record(&path, mtime_secs(&path));
             if child_depth < STALENESS_PROBE_MAX_DEPTH {
                 stack.push((path, child_depth));
             }
         }
     }
-    newest
+    (newest, exempt_mtime)
 }
 
 /// Parse an ISO 8601 UTC timestamp as written by [`format_iso8601`]
@@ -2726,10 +2853,7 @@ pub fn snapshot_drift(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
         })
         .map(|e| e.rel_path.clone())
         .collect();
-    let (_, _, created_at, _) = index.header_info();
-    let tree_moved = newest_dir_mtime(dir)
-        .is_some_and(|newest| newest > created_at.saturating_add(STALENESS_TOLERANCE_SECS));
-    if tree_moved {
+    if tree_moved(index, dir) {
         let skipped: std::collections::HashSet<&str> =
             index.header.skipped.iter().map(String::as_str).collect();
         out.extend(
@@ -2920,6 +3044,157 @@ mod iso_tests {
         // The snapshot file itself was not rewritten.
         let on_disk = SnapshotIndex::load(&snap).unwrap().unwrap();
         assert_eq!(on_disk.bm25_index().unwrap().doc_count(), 3);
+    }
+
+    /// Build a one-note snapshot at `<vault>/.hyalo-index` and load it back.
+    fn dec368_vault() -> (tempfile::TempDir, PathBuf, SnapshotIndex) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "# A\nalpha\n").unwrap();
+        let options = ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: None,
+        };
+        let build = ScannedIndex::build(
+            &[(dir.path().join("a.md"), "a.md".to_owned())],
+            None,
+            &options,
+        )
+        .unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap, &vault, None, None).unwrap();
+        let index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        (dir, snap, index)
+    }
+
+    fn dir_mtime_secs(path: &Path) -> u64 {
+        std::fs::metadata(path)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// DEC-368 (iter-317): a publish tail slower than the tolerance leaves the
+    /// root (the index's own directory) newer than `created_at + 1`. When the
+    /// snapshot file's mtime coincides with that bump the rename explains it;
+    /// when it does not (an fsync tail the publish did not re-stamp), the root
+    /// still counts as moved.
+    #[test]
+    fn root_bump_is_excused_only_when_it_coincides_with_the_index_file() {
+        let (dir, _snap, mut index) = dec368_vault();
+        // A note the snapshot never saw: only the tree probe's missing-files
+        // walk can surface it, so it is the witness for `tree_moved`.
+        std::fs::write(dir.path().join("b.md"), "# B\nbeta\n").unwrap();
+        let root = dir_mtime_secs(dir.path());
+
+        index.header.created_at = root - 3;
+        index.header.file_mtime = root;
+        assert!(!tree_moved(&index, dir.path()));
+        assert_eq!(snapshot_drift(&index, dir.path()), Vec::<String>::new());
+
+        // File mtime fixed at the last write, before a 3 s fsync + rename.
+        index.header.file_mtime = root - 3;
+        assert!(tree_moved(&index, dir.path()));
+        assert_eq!(snapshot_drift(&index, dir.path()), vec!["b.md".to_owned()]);
+
+        // Far-future file mtime: no coincidence, no excuse.
+        index.header.file_mtime = root + 86_400;
+        assert!(tree_moved(&index, dir.path()));
+    }
+
+    /// Only the directory holding the index file is ever excused; a
+    /// subdirectory bump compares against `created_at` whatever the file's
+    /// mtime says.
+    #[test]
+    fn subdirectory_bump_is_never_excused() {
+        let (dir, _snap, mut index) = dec368_vault();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/d.md"), "# D\n").unwrap();
+        let sub = dir_mtime_secs(&dir.path().join("sub"));
+        let root = dir_mtime_secs(dir.path());
+        index.header.created_at = sub.min(root) - 3;
+        index.header.file_mtime = sub.max(root);
+        assert!(tree_moved(&index, dir.path()));
+        assert_eq!(
+            snapshot_drift(&index, dir.path()),
+            vec!["sub/d.md".to_owned()]
+        );
+    }
+
+    /// The stamp is taken right after the rename, before the directory
+    /// fsync: with a 2.5 s delay injected in front of `finish()` (a slow
+    /// fsync), the file's mtime still coincides with the directory bump.
+    #[test]
+    fn stamp_precedes_a_slow_directory_fsync() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "# A\n").unwrap();
+        let build = ScannedIndex::build(
+            &[(dir.path().join("a.md"), "a.md".to_owned())],
+            None,
+            &ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        test_hooks::set_finish_delay(std::time::Duration::from_millis(2500));
+        let saved = SnapshotIndex::save(&build.index, &snap, &vault, None, None);
+        test_hooks::set_finish_delay(std::time::Duration::ZERO);
+        saved.unwrap();
+        let file = dir_mtime_secs(&snap);
+        let root = dir_mtime_secs(dir.path());
+        assert!(
+            file.abs_diff(root) <= STALENESS_TOLERANCE_SECS,
+            "stamp must be taken before the slow fsync: file {file}, dir {root}"
+        );
+        let index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        assert!(!tree_moved(&index, dir.path()));
+    }
+
+    /// With the index file outside the vault nothing is exempt.
+    #[test]
+    fn index_outside_the_vault_excuses_nothing() {
+        let (dir, _snap, mut index) = dec368_vault();
+        std::fs::write(dir.path().join("b.md"), "# B\n").unwrap();
+        let root = dir_mtime_secs(dir.path());
+        let elsewhere = tempfile::tempdir().unwrap();
+        index.header.file_dir = Some(dunce::canonicalize(elsewhere.path()).unwrap());
+        index.header.created_at = root - 3;
+        index.header.file_mtime = root;
+        assert!(tree_moved(&index, dir.path()));
+    }
+
+    /// The loader records the file's canonical directory and mtime, and the
+    /// publish re-stamps the file after the rename, so its mtime is never
+    /// older than the directory bump the rename caused.
+    #[test]
+    fn publish_stamps_the_file_after_the_rename_and_load_records_it() {
+        let (dir, snap, index) = dec368_vault();
+        let canonical_root = dunce::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            index.header.file_dir.as_deref(),
+            Some(canonical_root.as_path())
+        );
+        assert_eq!(index.header.file_mtime, dir_mtime_secs(&snap));
+        let file_mtime = std::fs::metadata(&snap).unwrap().modified().unwrap();
+        let root_mtime = std::fs::metadata(dir.path()).unwrap().modified().unwrap();
+        assert!(
+            file_mtime >= root_mtime,
+            "the snapshot file must be stamped after the rename: file {file_mtime:?} < dir {root_mtime:?}"
+        );
+        assert!(!tree_moved(&index, dir.path()));
+        let reuse = SnapshotIndex::load_for_reuse(&snap).unwrap();
+        assert_eq!(reuse.header.file_mtime, index.header.file_mtime);
+        assert_eq!(reuse.header.file_dir, index.header.file_dir);
     }
 
     /// UX-1 (iter-249 dogfood): the pre-fix `newest_shallow_dir_mtime` only
@@ -4094,6 +4369,8 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                file_mtime: 0,
+                file_dir: None,
             },
             entries,
             graph: &graph,
@@ -4461,6 +4738,8 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                file_mtime: 0,
+                file_dir: None,
             },
             bm25_index: Some(&original),
             entries: &entries,
