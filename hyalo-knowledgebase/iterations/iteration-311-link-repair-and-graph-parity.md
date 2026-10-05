@@ -45,7 +45,7 @@ iteration: **DEC-351 to DEC-354**.
 - [x] Every fix has a regression test named by behaviour; the Obsidian Hub dry-run counts (`summary`, `find --broken-links`, HYALO006) agree at 162
 - [x] A scratch vault with a numbered heading, one wikilink and one markdown link to it: after `links fix --apply` the wikilink carries the heading text and the markdown link the slug, both resolve, Obsidian's rule is satisfied
 - [x] Exit codes stay 0/1/2 (DEC-307); `check-jq-recipes` and help-drift gates pass
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check` and `hyalo lint --strict` are green; CI green on Linux, macOS and Windows
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check` and `hyalo lint --strict` are green; CI green on Linux, macOS and Windows
 
 ## Outcome
 
