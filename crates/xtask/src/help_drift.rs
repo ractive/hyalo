@@ -610,9 +610,12 @@ fn join_continuations(src: &str) -> String {
     out
 }
 
-/// Every "see SECTION in `hyalo <cmd> --help`" in `src` whose SECTION is
-/// ALL-CAPS (letters, digits, spaces, `-`).
-pub fn section_references(src: &str) -> Vec<SectionReference> {
+/// Every "<anything> in `hyalo <cmd> --help`" in `src`. `Ok` when the text
+/// before it on the same line ends in "see SECTION" ("see" in any case) with
+/// an ALL-CAPS SECTION (letters, digits, spaces, `-`); `Err` carries the
+/// line's text when no section can be parsed (`see the X section in …`,
+/// ``see `X` in …``, no "see" at all) -- such a hint names nothing checkable.
+pub fn section_references(src: &str) -> Vec<Result<SectionReference, String>> {
     const MARKER: &str = " in `hyalo ";
     let joined = join_continuations(src);
     let mut out = Vec::new();
@@ -628,26 +631,31 @@ pub fn section_references(src: &str) -> Vec<SectionReference> {
         if command.is_empty()
             || command
                 .iter()
-                .any(|w| w.starts_with('-') || w.contains('`'))
+                .any(|w| w.starts_with('-') || w.contains('`') || w.contains('\n'))
         {
             continue;
         }
-        let before = &joined[..at];
-        let Some(see) = before.rfind("see ") else {
-            continue;
+        let line_start = joined[..at].rfind('\n').map_or(0, |i| i + 1);
+        let window = &joined[line_start..at];
+        let lower = window.to_ascii_lowercase();
+        let section = lower.rfind("see ").map(|see| &window[see + 4..]);
+        let is_caps = |section: &str| {
+            section.chars().any(|c| c.is_ascii_uppercase())
+                && section
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' ' || c == '-')
         };
-        let section = &before[see + 4..];
-        let is_caps = !section.is_empty()
-            && section.chars().any(|c| c.is_ascii_uppercase())
-            && section
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == ' ' || c == '-');
-        if is_caps {
-            out.push(SectionReference {
+        out.push(match section {
+            Some(section) if is_caps(section) => Ok(SectionReference {
                 section: section.to_owned(),
                 command,
-            });
-        }
+            }),
+            _ => Err(format!(
+                "{}{}",
+                window.trim_start(),
+                &joined[at..cursor + end + 8]
+            )),
+        });
     }
     out
 }
@@ -693,6 +701,18 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
             continue;
         };
         for reference in section_references(&src) {
+            let rel = file.strip_prefix(root).unwrap_or(&file);
+            let reference = match reference {
+                Ok(reference) => reference,
+                Err(text) => {
+                    failures.push(format!(
+                        "Help drift (3g): {} names no ALL-CAPS help section to check -- write \
+                         \"see SECTION in `hyalo <cmd> --help`\":\n    {text}",
+                        rel.display()
+                    ));
+                    continue;
+                }
+            };
             let help = helps.entry(reference.command.clone()).or_insert_with(|| {
                 let argv: Vec<&str> = reference.command.iter().map(String::as_str).collect();
                 help_text(root, &argv)
@@ -702,7 +722,6 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
                 .as_deref()
                 .is_some_and(|h| has_section_header(h, &reference.section));
             if !ok {
-                let rel = file.strip_prefix(root).unwrap_or(&file);
                 failures.push(format!(
                     "Help drift (3g): {} points at '{}' in `{label}`, which prints no such \
                      header",
@@ -778,8 +797,10 @@ mod tests {
         let refs = section_references(src);
         let got: Vec<(&str, String)> = refs
             .iter()
+            .flatten()
             .map(|r| (r.section.as_str(), r.command.join(" ")))
             .collect();
+        assert!(refs.iter().all(Result::is_ok), "{refs:?}");
         assert_eq!(
             got,
             vec![
@@ -788,6 +809,30 @@ mod tests {
                 ("TASKS", "task toggle".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn unparseable_or_capitalised_section_references_are_reported() {
+        let src = "Some(\"See QUERYX SYNTAX in `hyalo find --help`\"),\n\
+                   Some(\"see the NOPE section in `hyalo find --help`\"),\n\
+                   Some(\"see `QUERYZ` in `hyalo find --help`\"),\n\
+                   Some(\"documented in `hyalo find --help`\"),\n";
+        let refs = section_references(src);
+        assert_eq!(refs.len(), 4, "{refs:?}");
+        // A capital "See" still parses -- and then fails the header check.
+        assert_eq!(
+            refs[0],
+            Ok(SectionReference {
+                section: "QUERYX SYNTAX".to_owned(),
+                command: vec!["find".to_owned()],
+            })
+        );
+        for bad in &refs[1..] {
+            let text = bad.as_ref().expect_err("should not parse");
+            assert!(text.contains("in `hyalo find --help`"), "{text}");
+        }
+        let help = "QUERY SYNTAX (for PATTERN):\n";
+        assert!(!has_section_header(help, "QUERYX SYNTAX"));
     }
 
     #[test]

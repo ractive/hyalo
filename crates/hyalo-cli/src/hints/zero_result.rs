@@ -223,17 +223,23 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
 
 /// The `find` flag and value that replace a removed `field:value` search
 /// term (DEC-366): `title:` → `--title`, `heading:` → `--section`, `tag:` →
-/// `--tag`, `path:` → `--glob 'value/**'` (a value with a `*`, or naming a
-/// `.md` file, is used as the glob itself).
+/// `--tag`, `path:` → `--glob '{**/*x*,**/*x*/**}'`.
+///
+/// `path:x` was a substring of the vault-relative path, matched anywhere.
+/// A glob `*` stops at `/`, so the closest glob is "some path segment
+/// contains x": `**/*x*` for a file name, `**/*x*/**` for a directory at any
+/// depth (`path:done` finds `iterations/done/…`). A value that already holds
+/// a `*` is passed through as the glob itself.
 pub(crate) fn legacy_field_flag(field: &str, value: &str) -> (&'static str, String) {
     match field {
         "heading" => ("--section", value.to_owned()),
         "tag" => ("--tag", value.trim_start_matches('#').to_owned()),
         "path" => {
-            let glob = if value.contains('*') || value.to_ascii_lowercase().ends_with(".md") {
+            let glob = if value.contains('*') {
                 value.to_owned()
             } else {
-                format!("{}/**", value.trim_end_matches('/'))
+                let needle = value.trim_matches('/');
+                format!("{{**/*{needle}*,**/*{needle}*/**}}")
             };
             ("--glob", glob)
         }
@@ -372,7 +378,9 @@ fn rebuild_find_with(
 }
 
 /// [`rebuild_find_with`] plus `extra` flag/value pairs appended after the
-/// existing filters.
+/// existing filters. `--granularity section` is re-added only when the
+/// rebuilt command keeps a PATTERN: it requires a ranked one (exit 1
+/// without).
 fn rebuild_find_full(
     ctx: &HintContext,
     filters: &[ActiveFilter],
@@ -407,7 +415,7 @@ fn rebuild_find_full(
     for (flag, value) in extra {
         b = b.flag_value(flag, value);
     }
-    if ctx.section_file_matches.is_some() {
+    if ctx.section_file_matches.is_some() && pattern.is_some() {
         b = b.flag_value("--granularity", "section");
     }
     let b = b.with_globals(ctx);
@@ -875,7 +883,7 @@ mod tests {
         assert!(
             notice.contains("'title:dogfood' is not a field term")
                 && notice.contains("--title 'dogfood'")
-                && notice.contains("--glob 'notes/**'"),
+                && notice.contains("--glob '{**/*notes*,**/*notes*/**}'"),
             "{notice}"
         );
         let hints = zero_result_hints(&ctx);
@@ -885,15 +893,35 @@ mod tests {
         );
         assert_eq!(
             hints[0].cmd,
-            "hyalo find --title dogfood --glob 'notes/**' -- snapshot"
+            "hyalo find --title dogfood --glob '{**/*notes*,**/*notes*/**}' -- snapshot"
         );
         // Nothing else left: the rebuilt command has no PATTERN at all.
         ctx.body_pattern = Some("tag:#rust".to_owned());
         ctx.legacy_field_terms = vec![("tag".to_owned(), "#rust".to_owned())];
         ctx.legacy_field_rest = Some(String::new());
         assert_eq!(zero_result_hints(&ctx)[0].cmd, "hyalo find --tag rust");
+        // Section mode with nothing left to rank: `--granularity section`
+        // would exit 1 without a PATTERN, so the hint drops it.
+        ctx.section_file_matches = Some(0);
+        assert_eq!(zero_result_hints(&ctx)[0].cmd, "hyalo find --tag rust");
+        ctx.body_pattern = Some("kiwi tag:rust".to_owned());
+        ctx.legacy_field_terms = vec![("tag".to_owned(), "rust".to_owned())];
+        ctx.legacy_field_rest = Some("kiwi".to_owned());
+        assert_eq!(
+            zero_result_hints(&ctx)[0].cmd,
+            "hyalo find --tag rust --granularity section -- kiwi"
+        );
+        // A rest that is not "the query minus the field words" (nested in
+        // an OR or a group): the notice still names the flag, but there is
+        // no runnable rewrite.
+        ctx.legacy_field_rest = None;
+        assert_eq!(zero_result_hints(&ctx)[0].cmd, "hyalo find --help");
         assert_eq!(legacy_field_flag("heading", "Install").0, "--section");
-        assert_eq!(legacy_field_flag("path", "a/b.md").1, "a/b.md");
+        assert_eq!(legacy_field_flag("path", "a/*.md").1, "a/*.md");
+        assert_eq!(
+            legacy_field_flag("path", "done/").1,
+            "{**/*done*,**/*done*/**}"
+        );
     }
 
     #[test]

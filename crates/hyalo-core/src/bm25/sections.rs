@@ -152,7 +152,6 @@ struct Pruner<'a> {
     alt_term_ids: Vec<Vec<usize>>,
     phrase_alt_groups: Vec<Vec<usize>>,
     consts: Vec<ConstLeaf>,
-    has_text: bool,
 }
 
 /// A file-level leaf: the documents where the leaf holds, and whether the
@@ -193,7 +192,6 @@ impl Pruner<'_> {
             query::Node::Not(child) => self.prune(child, !positive),
             _ if !positive => Some(self.constant(node, true)),
             query::Node::Term(stems) => {
-                self.has_text = true;
                 let ids = stems
                     .iter()
                     .map(|s| intern(&mut self.term_index, s))
@@ -203,7 +201,6 @@ impl Pruner<'_> {
             query::Node::Prefix(candidates) => {
                 // A prefix that expands to no dictionary term stays an
                 // always-false `Terms([])` leaf rather than relaxing an AND.
-                self.has_text = true;
                 let expanded = self.corpus.expand_prefix(candidates);
                 let ids = expanded
                     .iter()
@@ -212,7 +209,6 @@ impl Pruner<'_> {
                 Some(PrunedNode::Terms(ids))
             }
             query::Node::Phrase(alternatives, slop) => {
-                self.has_text = true;
                 let leaf_idx = self.phrase_alt_groups.len();
                 let mut group = Vec::with_capacity(alternatives.len());
                 for seq in alternatives {
@@ -307,8 +303,6 @@ pub struct SectionScorer {
     consts: Vec<ConstLeaf>,
     /// Corpus doc id per path, to look a file up in `consts`.
     doc_ids: HashMap<String, u32>,
-    /// `true` when the section tree has a positive text leaf.
-    has_text: bool,
     /// Field weights from the compiled query (headings and body apply).
     weights: super::FieldWeights,
     /// `[search] code_blocks = "skip"` in effect.
@@ -329,7 +323,6 @@ impl Bm25InvertedIndex {
             alt_term_ids: Vec::new(),
             phrase_alt_groups: Vec::new(),
             consts: Vec::new(),
-            has_text: false,
         };
         let root = query.root.as_ref().and_then(|r| pruner.prune(r, true));
         let Pruner {
@@ -339,7 +332,6 @@ impl Bm25InvertedIndex {
             alt_term_ids,
             phrase_alt_groups,
             consts,
-            has_text,
             ..
         } = pruner;
         let doc_ids = if consts.is_empty() {
@@ -388,7 +380,6 @@ impl Bm25InvertedIndex {
             matcher,
             consts,
             doc_ids,
-            has_text,
             weights: query.params().weights,
             skip_code: super::search_settings().skip_code_blocks,
         }
@@ -412,12 +403,6 @@ impl SectionMeta {
 }
 
 impl SectionScorer {
-    /// `false` when the query has no positive text leaf left after pruning.
-    #[must_use]
-    pub fn has_text_terms(&self) -> bool {
-        self.has_text
-    }
-
     /// File-level verdict of every constant leaf for `rel_path`.
     fn file_consts(&self, rel_path: &str) -> Vec<bool> {
         let id = self.doc_ids.get(rel_path).copied();
@@ -1013,7 +998,7 @@ Body of C.\n";
         let outline = vec![sec(1, "One", 1), sec(1, "Two", 3)];
         let idx = corpus(&[("doc.md", body)]);
         let q = compiled("-(-alpha)");
-        assert!(idx.section_scorer(&q).has_text_terms());
+        assert!(q.has_positive_leaf());
         let hits = headings_hit(&idx, &tmp, &outline, "-(-alpha)");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, "One");
@@ -1181,20 +1166,15 @@ Body of C.\n";
         }
     }
 
+    /// `find` rejects a section-mode query without a positive leaf before
+    /// scoring (DEC-334); negation alone never counts as one.
     #[test]
-    fn has_text_terms_false_for_negation_only_queries() {
-        let idx = corpus(&[("doc.md", "alpha beta")]);
-        for q in ["-alpha", "-(alpha beta)"] {
-            let compiled = compiled(q);
-            let scorer = idx.section_scorer(&compiled);
-            assert!(
-                !scorer.has_text_terms(),
-                "{q:?} should have no positive text leaf left"
-            );
+    fn negation_only_queries_have_no_positive_leaf() {
+        for q in ["-gamma", "-(gamma delta)"] {
+            assert!(!compiled(q).has_positive_leaf(), "{q:?}");
         }
-        // Sanity: a normal term query does have text terms.
-        let scorer = idx.section_scorer(&compiled("alpha"));
-        assert!(scorer.has_text_terms());
+        assert!(compiled("alpha").has_positive_leaf());
+        assert!(compiled("-(-alpha)").has_positive_leaf());
     }
 
     #[test]

@@ -718,3 +718,109 @@ fn zero_result_field_shaped_word_hints_the_flag() {
         "{hints:?}"
     );
 }
+
+/// Hints of a `find` run with `args` (plain `--format json`).
+fn hint_cmds(tmp: &TempDir, args: &[&str]) -> Vec<(String, String)> {
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["--format", "json"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{args:?}: {output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["description"].as_str().unwrap().to_owned(),
+                h["cmd"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn migration_hint(hints: &[(String, String)]) -> &str {
+    hints
+        .iter()
+        .find(|(d, _)| d.contains("Field terms are not part of the search grammar"))
+        .map_or_else(
+            || panic!("no migration hint in {hints:?}"),
+            |(_, c)| c.as_str(),
+        )
+}
+
+/// Review MUST-FIX 2: with nothing left to rank, the hint must not keep
+/// `--granularity section`, which needs a PATTERN (exit 1 without one).
+#[test]
+fn migration_hint_drops_granularity_when_no_pattern_remains() {
+    let tmp = vault();
+    let hints = hint_cmds(
+        &tmp,
+        &["find", "--granularity", "section", "--", "title:zzqq"],
+    );
+    let cmd = migration_hint(&hints).to_owned();
+    assert!(cmd.starts_with("hyalo find --title zzqq"), "{cmd}");
+    assert!(!cmd.contains("--granularity"), "{cmd}");
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--title", "zzqq"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+/// Review SHOULD-FIX 3: a field-shaped word nested in an OR or a group has
+/// no faithful rewrite; the hint names the flag but runs nothing broken.
+#[test]
+fn migration_hint_has_no_rewrite_for_nested_field_words() {
+    let tmp = vault();
+    for query in ["zzqq OR title:yyqq", "(title:zzqq OR qqzz) foo"] {
+        let hints = hint_cmds(&tmp, &["find", "--", query]);
+        assert_eq!(migration_hint(&hints), "hyalo find --help", "{query}");
+    }
+}
+
+/// Review SHOULD-FIX 4: `path:` was a substring anywhere in the path, so
+/// the glob matches a segment at any depth.
+#[test]
+fn migration_hint_path_glob_matches_nested_directories() {
+    let tmp = vault();
+    write_md(
+        tmp.path(),
+        "iterations/done/old.md",
+        "---\ntitle: Old\n---\nretired notes\n",
+    );
+    let hints = hint_cmds(&tmp, &["find", "retired path:done zzqqmissing"]);
+    let cmd = migration_hint(&hints).to_owned();
+    assert!(cmd.contains("--glob '{**/*done*,**/*done*/**}'"), "{cmd}");
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "retired", "--glob", "{**/*done*,**/*done*/**}"])
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"][0]["file"], "iterations/done/old.md",
+        "{json}"
+    );
+}
+
+/// Review SHOULD-FIX 5: the old phrase form `title:"two words"` gets the
+/// migration notice too, with the phrase as the flag value.
+#[test]
+fn migration_hint_covers_the_phrase_form() {
+    let tmp = vault();
+    let hints = hint_cmds(&tmp, &["find", "rust title:\"zzqq yyqq\""]);
+    let cmd = migration_hint(&hints);
+    assert!(
+        cmd.starts_with("hyalo find --title 'zzqq yyqq'") && cmd.ends_with("-- rust"),
+        "{cmd}"
+    );
+}

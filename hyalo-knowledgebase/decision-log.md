@@ -8356,13 +8356,22 @@ query-side only. A query written with a field term now searches the literal
 words instead; `find --help`, the skills and the claims paragraph point at
 the flags. Migration aid for agents with the old habit: when a ranked query
 returns nothing and a positive word has the shape `title:x`, `heading:x`,
-`tag:x` or `path:x`, the zero-result notice says field terms are not part of
-the grammar and names the flag (`--title`, `--section`, `--tag`,
-`--glob 'x/**'`), and the JSON hints carry a runnable `hyalo find --title x
-… -- <rest of the query>` (the "Try OR" rewrite is withheld for such a
-query). The token is recognised only for that hint; matching is plain-word.
-Alongside, `check-help-drift` gained gate 3g: every "see SECTION in `hyalo
-<cmd> --help`" hint in the CLI source must name a header that page prints.
+`tag:x` or `path:x` (or the phrase form `title:"two words"`), the
+zero-result notice says field terms are not part of the grammar and names the
+flag (`--title`, `--section`, `--tag`, and for the old substring-anywhere
+`path:x` the segment glob `--glob '{**/*x*,**/*x*/**}'`), and the JSON hints
+carry a runnable `hyalo find --title x … -- <rest of the query>` (the "Try
+OR" rewrite is withheld for such a query). The rewrite is offered only when
+every such word is a direct child of the top-level AND and the rest gains no
+parse warning — `a OR title:x` or `(title:x OR b) c` would leave a dangling
+`OR` — otherwise the hint points at `find --help`; and `--granularity
+section` is dropped from it when no PATTERN remains, since section mode
+requires one. The token is recognised only for that hint; matching is
+plain-word.
+Alongside, `check-help-drift` gained gate 3g: every "… in `hyalo <cmd>
+--help`" hint in the CLI source must read "see SECTION" ("see" in any case)
+with an ALL-CAPS SECTION that page prints as a header; a hint whose section
+cannot be parsed fails too.
 
 **Rejected alternative.** Keeping `title:` and `heading:` only, the two that
 compare stemmed tokens rather than reproducing a flag's exact rule. Rejected:

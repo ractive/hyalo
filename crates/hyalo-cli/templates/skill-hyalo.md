@@ -66,7 +66,7 @@ hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obs
 hyalo find "rust async OR tokio"         # OR binds tighter: rust AND (async OR tokio)
 hyalo find -- '(bm25 OR stemming) -tantivy' # Groups nest; -( … ) negates a group
 hyalo find "config*"                     # Prefix over stems: matches "configuration"
-hyalo find 'title:iteration tag:iteration link*'   # Field terms combine like words
+hyalo find --title iteration --tag iteration 'link*'   # Structure via flags, words in PATTERN
 hyalo terms conf                         # Stemmed dictionary terms with document counts
 ```
 

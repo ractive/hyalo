@@ -352,12 +352,7 @@ fn score_corpus(
             .iter()
             .map(|t| (t.field.clone(), t.value.clone()))
             .collect();
-        if !report.legacy_field_terms.is_empty() {
-            let rest = query.without_legacy_field_terms();
-            report.legacy_field_rest = (rest.is_empty()
-                || hyalo_core::bm25::CompiledQuery::parse(&rest, &[]).is_ok())
-            .then_some(rest);
-        }
+        report.legacy_field_rest = query.legacy_field_rewrite();
     }
     scored
 }

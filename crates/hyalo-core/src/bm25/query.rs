@@ -487,27 +487,46 @@ struct QueryWord {
 pub struct LegacyFieldTerm {
     /// The field name, lowercased: `title`, `heading`, `tag` or `path`.
     pub field: String,
-    /// The text after the colon, as written.
+    /// The text after the colon, as written (a quoted phrase's content for
+    /// `title:"two words"`).
     pub value: String,
-    /// Byte span of the whole token in the query string.
+    /// Byte span of the whole token (phrase and `~N` included) in the query.
     start: usize,
     end: usize,
+    /// A direct child of the query's top-level AND: only then does removing
+    /// it leave a query that means "the rest, scoped by the flag".
+    top_level: bool,
 }
 
 /// The removed field-term names (DEC-366), recognised only for the
 /// migration hint.
 const LEGACY_FIELDS: [&str; 4] = ["title", "heading", "tag", "path"];
 
-/// `Some` when `text` is `name:value` with `name` a removed field term.
-fn legacy_field_term(text: &str, start: usize, end: usize) -> Option<LegacyFieldTerm> {
+/// The lowercased field name when `text` is `name:value` with `name` a
+/// removed field term, and the value (possibly empty).
+fn legacy_field_parts(text: &str) -> Option<(String, &str)> {
     let (name, value) = text.split_once(':')?;
     let field = name.to_ascii_lowercase();
-    (LEGACY_FIELDS.contains(&field.as_str()) && !value.is_empty()).then(|| LegacyFieldTerm {
-        field,
-        value: value.to_owned(),
-        start,
-        end,
-    })
+    LEGACY_FIELDS
+        .contains(&field.as_str())
+        .then_some((field, value))
+}
+
+/// Byte offset just past the phrase whose content starts at `content_start`
+/// and reads `text`: its closing quote and any `~N` slop.
+fn phrase_end(source: &str, content_start: usize, text: &str) -> usize {
+    let mut end = content_start + text.len();
+    if source.as_bytes().get(end) != Some(&b'"') {
+        return source.len();
+    }
+    end += 1;
+    if source.as_bytes().get(end) == Some(&b'~') {
+        end += 1;
+        while source.as_bytes().get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+    }
+    end
 }
 
 /// One normalized query shared by indexed scoring, disk fallback and snippets.
@@ -626,12 +645,62 @@ struct Compiler<'a> {
     misplaced_wildcards: Vec<String>,
     /// Positive `title:x`-shaped words (DEC-366).
     legacy_fields: Vec<LegacyFieldTerm>,
+    /// The query text, for spans of `title:"phrase"` pairs.
+    source: &'a str,
+    /// Nesting depth of the node being compiled: the root AND is 0, its
+    /// direct children 1.
+    depth: usize,
 }
 
 impl Compiler<'_> {
+    /// Compile the parser's root AND at depth 0.
+    fn compile_root(&mut self, node: RawNode) -> Result<Option<Node>, QuerySyntaxError> {
+        self.compile_inner(node, true)
+    }
+
+    /// `title:"two words"` lexes as the word `title:` followed by a phrase
+    /// starting right after the colon: record the pair as one legacy term.
+    fn legacy_phrase_pairs(&mut self, children: &[RawNode], positive: bool) {
+        if !positive {
+            return;
+        }
+        for pair in children.windows(2) {
+            if let [
+                RawNode::Word { text, start, end },
+                RawNode::Phrase(phrase, _, content_start),
+            ] = pair
+                && *content_start == end + 1
+                && let Some((field, "")) = legacy_field_parts(text)
+            {
+                self.legacy_fields.push(LegacyFieldTerm {
+                    field,
+                    value: phrase.clone(),
+                    start: *start,
+                    end: phrase_end(self.source, *content_start, phrase),
+                    top_level: self.depth == 1,
+                });
+            }
+        }
+    }
+
     fn compile(&mut self, node: RawNode, positive: bool) -> Result<Option<Node>, QuerySyntaxError> {
+        self.depth += 1;
+        let compiled = self.compile_inner(node, positive);
+        self.depth -= 1;
+        compiled
+    }
+
+    fn compile_inner(
+        &mut self,
+        node: RawNode,
+        positive: bool,
+    ) -> Result<Option<Node>, QuerySyntaxError> {
         Ok(match node {
             RawNode::And(children) => {
+                // Children of the node at depth `self.depth` sit one deeper.
+                self.depth += 1;
+                self.legacy_phrase_pairs(&children, positive);
+                self.depth -= 1;
                 let mut out = Vec::new();
                 for child in children {
                     out.extend(self.compile(child, positive)?);
@@ -690,8 +759,17 @@ impl Compiler<'_> {
         end: usize,
         positive: bool,
     ) -> Result<Option<Node>, QuerySyntaxError> {
-        if positive && let Some(legacy) = legacy_field_term(text, start, end) {
-            self.legacy_fields.push(legacy);
+        if positive
+            && let Some((field, value)) = legacy_field_parts(text)
+            && !value.is_empty()
+        {
+            self.legacy_fields.push(LegacyFieldTerm {
+                field,
+                value: value.to_owned(),
+                start,
+                end,
+                top_level: self.depth == 1,
+            });
         }
         if let Some(body) = text.strip_suffix('*') {
             let body = body.trim_end_matches('*');
@@ -804,9 +882,12 @@ impl CompiledQuery {
             words: Vec::new(),
             misplaced_wildcards: Vec::new(),
             legacy_fields: Vec::new(),
+            source: query,
+            depth: 0,
         };
-        let root = compiler.compile(raw, true)?;
+        let root = compiler.compile_root(raw)?;
         warnings.misplaced_wildcard_terms = compiler.misplaced_wildcards;
+        compiler.legacy_fields.sort_by_key(|t| t.start);
         Ok(Self {
             root,
             words: compiler.words,
@@ -825,21 +906,30 @@ impl CompiledQuery {
     }
 
     /// The query text with every [`Self::legacy_field_terms`] token removed
-    /// and whitespace collapsed: what is left to search once those tokens
-    /// become flags. Empty when nothing else remains.
+    /// and whitespace collapsed -- what is left to search once those tokens
+    /// become flags (empty when nothing remains). `None` when that rewrite
+    /// would not mean "the rest, scoped by the flags": a legacy term nested
+    /// in a group, an `OR` or a negation (`a OR title:x` would leave a
+    /// dangling `a OR`), or a rest that fails to parse or gains a parse
+    /// warning the original did not have.
     #[must_use]
-    pub fn without_legacy_field_terms(&self) -> String {
+    pub fn legacy_field_rewrite(&self) -> Option<String> {
+        if self.legacy_fields.is_empty() || self.legacy_fields.iter().any(|t| !t.top_level) {
+            return None;
+        }
         let mut out = String::with_capacity(self.source.len());
         let mut cursor = 0;
         for term in &self.legacy_fields {
-            if let Some(kept) = self.source.get(cursor..term.start) {
-                out.push_str(kept);
-            }
+            out.push_str(self.source.get(cursor..term.start)?);
             out.push(' ');
             cursor = term.end;
         }
-        out.push_str(self.source.get(cursor..).unwrap_or_default());
-        out.split_whitespace().collect::<Vec<_>>().join(" ")
+        out.push_str(self.source.get(cursor..)?);
+        let rest = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        let (_, rest_warnings) = parse(&rest).ok()?;
+        let new_warning = (rest_warnings.dangling_operator && !self.warnings.dangling_operator)
+            || (rest_warnings.unterminated_quote && !self.warnings.unterminated_quote);
+        (!new_warning).then_some(rest)
     }
 
     /// Non-fatal issues found while parsing this query (UX-6 / DEC-358):
@@ -2022,12 +2112,47 @@ mod tests {
             .collect();
         // Negated and quoted tokens are not positive words.
         assert_eq!(got, vec![("title", "Dogfood"), ("heading", "install")]);
+        // `OR` binds only `-tag:x` and `"path:y"`; both legacy words are
+        // direct children of the top-level AND.
         assert_eq!(
-            q.without_legacy_field_terms(),
-            "snapshot -tag:x OR \"path:y\""
+            q.legacy_field_rewrite().as_deref(),
+            Some("snapshot -tag:x OR \"path:y\"")
         );
         assert_eq!(compile("foo:bar title:").legacy_field_terms(), &[]);
-        assert_eq!(compile("title:x").without_legacy_field_terms(), "");
+        assert_eq!(
+            compile("title:x").legacy_field_rewrite().as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn legacy_field_rewrite_refuses_nested_terms() {
+        // Inside an OR: removing it would leave a dangling `zzqq OR`.
+        let q = compile("zzqq OR title:yyqq");
+        assert_eq!(q.legacy_field_terms().len(), 1);
+        assert_eq!(q.legacy_field_rewrite(), None);
+        // Inside a group: removing it would leave `( OR qqzz) foo`.
+        let q = compile("(title:zzqq OR qqzz) foo");
+        assert_eq!(q.legacy_field_terms().len(), 1);
+        assert_eq!(q.legacy_field_rewrite(), None);
+        let q = compile("(title:zzqq qqzz) foo");
+        assert_eq!(q.legacy_field_rewrite(), None);
+    }
+
+    #[test]
+    fn legacy_field_phrase_value_is_one_term() {
+        let q = compile("snapshot title:\"two words\"~2 rest");
+        let got: Vec<(&str, &str)> = q
+            .legacy_field_terms()
+            .iter()
+            .map(|t| (t.field.as_str(), t.value.as_str()))
+            .collect();
+        assert_eq!(got, vec![("title", "two words")]);
+        assert_eq!(q.legacy_field_rewrite().as_deref(), Some("snapshot rest"));
+        // A space between the colon and the quote is two separate things.
+        assert_eq!(compile("title: \"two words\"").legacy_field_terms(), &[]);
+        // Negated: not a positive word.
+        assert_eq!(compile("a -title:\"two words\"").legacy_field_terms(), &[]);
     }
 
     #[test]
