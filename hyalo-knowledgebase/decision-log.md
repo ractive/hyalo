@@ -7704,6 +7704,166 @@ match — a warning a script does not read still leaves it searching for the
 word "abc" it never typed as a search term, which is a correctness problem,
 not merely a confusing-but-harmless one.
 
+## DEC-359: `terms` and the prefix-expansion cap keep joined identifier wholes, for now (2026-10-05)
+
+**Context.** DEC-336's identifier splitting indexes an identifier
+(`getUserName`, `get-user-name`) as its joined whole plus its parts, so a
+query for `user` finds it. The joined whole is itself a dictionary term —
+`hyalo terms` lists it, and `prefix*` expansion (`expand_prefix`,
+`capped_prefixes`) counts it toward the 256-term cap exactly like any
+ordinary word. On a corpus whose filenames or slugs feed the identifier
+splitter (GitHub Docs: `workflow-syntax-for-github-actions` →
+`workflowsyntaxforgithubact`, 66 docs after the stemmer trims the trailing
+`ions`), `hyalo terms` surfaces strings nobody would ever type, and they
+occupy slots a genuinely useful `prefix*` expansion could have used.
+
+**Decision.** Won't filter this iteration. Joined wholes stay in `terms`
+output and the prefix-expansion cap exactly as DEC-336 left them.
+
+**Why.** `Bm25InvertedIndex::postings` stores flat term strings with no
+provenance — nothing records whether a given stemmed token was pushed as a
+plain word, an identifier's whole, or one of its parts; `tokenize_word`
+knows this at tokenization time but `tokenize_into` immediately flattens
+the distinction away into one `Vec<String>`. Correctly reconstructing it at
+query time would mean threading a per-token "is this a joined whole" flag
+through `DocTokens`/`PreTokenizedInput` into the persisted BM25 section —
+a snapshot-format change, on the heels of iteration 311's v4→v5 bump for
+`explicit_anchor_ids` (DEC-353) and iteration 304's v3→v4 bump for the
+tokenizer itself (DEC-336). A heuristic at display time (e.g. "unusually
+long, strip it") was considered and rejected: it cannot reliably
+distinguish a joined whole from a genuinely long single word without
+re-deriving the original (lost) word boundaries, and a wrong guess either
+hides a real term from `hyalo terms` or lets through exactly the noise
+this DEC exists to document. Given the iteration's bug list is BUG-7/
+BUG-8/UX-5 — none of which this blocks — a cosmetic listing-noise and a
+soft recall-ceiling issue does not justify another format bump.
+
+**Consequences.** `hyalo terms` and `prefix*` continue to surface joined
+wholes; a corpus whose filenames look like GitHub Docs' will see them.
+Matching is unaffected either way — the steer for this iteration was keep
+them searchable regardless, which was already true and stays true.
+
+**Revisit when.** A future snapshot-format bump (for an unrelated reason)
+is the natural point to add per-term provenance and hide joined wholes
+from `terms`/the prefix cap without paying for a bump that exists only for
+this.
+
+## DEC-360: a `[search] code_blocks` mismatch refuses the snapshot outright, like an old format version (2026-10-05)
+
+**Context.** [[dogfood-results/dogfood-v0250-pre-search-roadmap-2026-10-04]]
+(BUG-8) found that an index built under one `[search] code_blocks` setting
+and queried under the other fell back to a disk scan with **no message at
+all** — `Bm25InvertedIndex::is_current()` silently returned `false` deep
+inside `find`'s scoring path, and `summary --index` had no field that
+could ever show the mismatch (`code_blocks` did not exist on `VaultSummary`
+before this iteration). The companion BUG-7 found that the sibling
+old-format-version refusal (`!idx.format_is_current()`) went through
+`crate::warn::warn` rather than `crate::warn::warn_always`, so `-q`
+silenced the one diagnostic a scripted caller had.
+
+**Decision.** `run.rs`'s snapshot-loading match now checks the loaded
+snapshot's own `[search] code_blocks` (read from its persisted BM25
+section's `skip_code_blocks()`) against the current config's effective
+setting *before* the snapshot is handed to any command — in the same place,
+and exactly like, the existing format-version check. A mismatch discards
+the snapshot (the run falls back to a full disk scan, consistent with
+`code_blocks` the config actually asks for) and emits one `warn_always`
+naming both settings (`"index was built with [search] code_blocks = \"X\",
+this run's config says \"Y\""). The format-version refusal a few lines
+above it is changed from `warn` to `warn_always` for the same reason BUG-7
+names. Both refusals now capture the discarded snapshot's own format
+version (and, for the `code_blocks` case, its own `code_blocks` setting)
+into a small `RefusedIndexInfo` carried on `CommandContext`, so `summary
+--index` can report `index_format_version`, `code_blocks` and a `source`
+(`"index"` | `"disk"`) field even on a refusal — previously
+`index_format_version` silently read back `null` the moment the snapshot
+was discarded, because by then `summary` was looking at a fresh
+`ScannedIndex`, whose `snapshot_format_version()` is always `None`.
+
+**Why.** A mismatch here is not cosmetic: `[search] code_blocks = "skip"`
+removes fenced-code text from the corpus, scores and snippets entirely —
+an index built the other way answers a materially different question, the
+same severity DEC-336 already treats a wrong tokenizer version as. Letting
+it fall back silently is strictly worse than an old-format refusal:
+at least the old-format case always warned (just not under `-q`); the
+`code_blocks` case warned never, under any flag. Treating the two the same
+way — discard, name both values, `warn_always` — keeps one mental model
+for "why did my `--index` query not use the index" instead of two.
+
+**Consequences.** A `[search] code_blocks` mismatch now costs a full disk
+scan on every affected query, same as an old-format snapshot already did;
+there was no cheaper correct answer available (the snapshot's code_blocks
+setting is unrelated to its format version, so `create-index` already
+treats a `code_blocks` change as one of the conditions that forces a full
+rebuild — DEC-339 — not an incremental patch). `summary`'s `VaultSummary`
+gains two new optional JSON fields, `code_blocks` and `source`, gated on
+whether `--index`/`--index-file` was given at all so a plain disk-only
+`summary` keeps its pre-iter-313 shape exactly. The compact text renderer's
+key-signature matcher (`is_vault_summary_signature`) switched from an
+enumerated list of exact signatures to a required-keys-plus-allowed-
+optionals check, because the `schema` × {absent, source-only,
+format-version+source, all-three} combinations the two new fields produce
+(eight total with `schema`) made the enumeration unmaintainable one field
+sooner than this one.
+
+**Rejected alternative.** Keep the silent disk fallback and only add the
+`summary --index` reporting fields: rejected because it leaves `find`,
+`links fix` and every other `--index` command answering from a different
+`code_blocks` setting than the one that was configured, with the mismatch
+visible only to a caller who happens to run `summary --index` afterward
+and compare two fields by hand.
+
+## DEC-361: a no-op `create-index` rerun leaves the snapshot file untouched (2026-10-05)
+
+**Context.** [[dogfood-results/dogfood-v0250-pre-search-roadmap-2026-10-04]]
+(UX-10) measured `create-index --force` (4.07 s) as slower than
+`rm .hyalo-index && create-index` (3.12 s) on MDN, and separately noted
+that a `create-index` rerun with nothing changed at all still rewrote the
+whole 141 MB snapshot (1.8-4.6 s measured) for byte content that would
+come out identical.
+
+**Decision, part one (confirmed, not changed).** `--force` already never
+loads the previous snapshot before discarding it: `let mut previous = if
+force || !replacing_existing { None } else { SnapshotIndex::load_for_reuse
+(...) ... }` short-circuits on `force` before any read of the old file.
+The dogfood timing difference was not a load-then-discard cost — there is
+none — it was ordinary measurement noise between two runs that do the same
+amount of work (a full re-scan and re-tokenize either way). No code change
+was needed for this half; it is recorded here because the task explicitly
+asked the question and the answer is "already true," not "unknown."
+
+**Decision, part two (new).** `create_index` now computes `reused ==
+file_count && removed == 0 && !rebuilt` (every entry was reused verbatim,
+nothing on disk was removed, and reuse actually happened rather than a
+from-scratch build) plus an equality check on the freshly-discovered
+attachment list against the previous snapshot's own `attachments()`. When
+all of that holds, the run skips `SnapshotIndex::save_with_attachments_
+observed` entirely and reports `results.written: false` with a `note`
+explaining the skip, instead of writing the same bytes back under a new
+`created_at`/`pid` header.
+
+**Why.** A `create-index` rerun against an unchanged vault is common — a
+CI job, a loop calling it defensively before every query — and rewriting
+140+ MB of identical content is pure cost: disk I/O, the atomic
+temp-file-plus-rename dance, and (iter-277, DEC-317) directory fsync. None
+of it changes what a subsequent `--index` query sees, because the content
+is unchanged.
+
+**Consequences.** `results.written` is a new field on `create-index`'s
+success envelope — `false` only on the exact no-op described above, `true`
+otherwise (first build, forced rebuild, any real change, or a changed
+attachment list even with zero file-entry changes). The attachment-list
+check exists because attachments are discovered independently of the
+`reused`/`removed` entry bookkeeping — a new or deleted attachment with no
+markdown file touched would otherwise be silently left stale by a "nothing
+changed" skip. `scan_exclude`/`gitignore_dropped` header bookkeeping is
+*not* compared (no public accessor exists on `SnapshotIndex` for either,
+and adding one for this alone was judged not worth it this iteration): a
+rerun whose `[scan] exclude` patterns or gitignore state changed without
+touching any file's reused/removed count is a corner case rare enough, and
+cheap enough when it does happen (the write only becomes "late" by one
+`create-index` cycle), to accept rather than add surface for.
+
 ## DEC-362: an unloadable `[schema]` joins the gate refusal, scoped to gates only (2026-10-05)
 
 **Decision.** `lint` (with or without `--strict`) and `views run <view>` now

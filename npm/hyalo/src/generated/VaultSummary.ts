@@ -64,4 +64,22 @@ schema?: LintSummary,
  * `snapshot_format_version` can tell an index this binary would refuse
  * from a fresh one *before* the numbers disagree.
  */
-index_format_version?: number, };
+index_format_version?: number,
+/**
+ * The snapshot's own effective `[search] code_blocks` setting
+ * (`"index"` or `"skip"`) — present whenever a snapshot was consulted,
+ * including one this run refused (BUG-8, iter-313), so a mismatch
+ * against `hyalo config`'s reported setting is visible without
+ * re-running under `-q` stripped off. `None` when no snapshot was
+ * requested, or a refused one's code_blocks could not be determined
+ * (an old-format refusal, BUG-7).
+ */
+code_blocks?: string,
+/**
+ * Where this summary's data actually came from: `"index"` when a
+ * snapshot was loaded and used, `"disk"` when a scan answered —
+ * including every case where `--index`/`--index-file` was given but the
+ * snapshot was refused (iter-313). `None` when no snapshot was requested
+ * at all.
+ */
+source?: string, };

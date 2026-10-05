@@ -22,10 +22,37 @@ pub(super) fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> 
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         if files_total > LARGE_VAULT_FILE_COUNT {
-            Some(Hint::new(
-                format!("Vault has {files_total} files — create an index for faster queries"),
-                build_command_no_glob(ctx, &["create-index"]),
-            ))
+            // iter-313: a `.hyalo-index` already on disk changes the right
+            // advice twice over. Fresh, the fix is to *use* it, not rebuild
+            // what is already there (UX-8 dogfood v0.25.0-pre: "summary
+            // hints create-index while a 10 MB .hyalo-index already exists
+            // and 19 files drifted" bundled both gaps). Stale (the cheap
+            // mtime probe — see `ctx.snapshot_stale` — thinks the vault
+            // moved since it was written), "create an index" reads as if
+            // none exists at all; "refresh" names what actually needs
+            // doing.
+            if ctx.snapshot_on_disk && ctx.snapshot_stale {
+                Some(Hint::new(
+                    format!(
+                        "Vault has {files_total} files — the on-disk `.hyalo-index` snapshot \
+                         looks stale; refresh the stale index for faster queries"
+                    ),
+                    build_command_no_glob(ctx, &["create-index"]),
+                ))
+            } else if ctx.snapshot_on_disk {
+                Some(Hint::new(
+                    format!(
+                        "Vault has {files_total} files — a `.hyalo-index` snapshot exists; \
+                         re-run with --index for faster queries"
+                    ),
+                    build_command_with_glob(ctx, &["summary", "--index"]),
+                ))
+            } else {
+                Some(Hint::new(
+                    format!("Vault has {files_total} files — create an index for faster queries"),
+                    build_command_no_glob(ctx, &["create-index"]),
+                ))
+            }
         } else {
             None
         }

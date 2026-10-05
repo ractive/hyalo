@@ -23,7 +23,13 @@ use crate::output::{CommandOutcome, Format, output_value};
 /// the same `[search] code_blocks`, unchanged files (same size and mtime) keep
 /// their entries, changed and new files are re-scanned, removed files are
 /// dropped, and the BM25 postings are patched in place. `force` rebuilds
-/// from scratch.
+/// from scratch and never loads the previous snapshot first (iter-313): it
+/// is discarded by construction (`force || !replacing_existing` short-
+/// circuits to `None`), not loaded and then thrown away. When the rerun
+/// changed nothing at all — every entry reused, nothing removed, attachments
+/// unchanged — the snapshot file itself is left untouched rather than
+/// rewritten byte-for-byte identical content (`results.written: false`,
+/// iter-313).
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn create_index(
     dir: &Path,
@@ -189,6 +195,52 @@ pub fn create_index(
     // exactly as a disk run does. A failed walk degrades to "no attachments",
     // which is the pre-iter-261 behaviour, not an error.
     let attachments = discovery::discover_attachments(dir).unwrap_or_default();
+    let file_count = build.index.entries().len();
+
+    // iter-313: a rerun that changed nothing — every entry reused verbatim,
+    // nothing removed, and the attachment list unchanged — used to rewrite
+    // the whole snapshot anyway (141 MB on MDN, 1.8-4.6 s for zero new
+    // information). `force` already skips loading the previous snapshot
+    // (short-circuited above), so this is the complementary half: skip the
+    // *write* when reusing it produced byte-for-byte the same set of
+    // documents it already held. `previous` is only `Some` here when its
+    // entries and BM25 postings were actually reused (see the `old_bm25`
+    // fallback to `None` above), so this cannot fire on a first build or a
+    // forced rebuild.
+    let no_op = !force
+        && replacing_existing
+        && !rebuilt
+        && removed == 0
+        && reused == file_count
+        && previous
+            .as_ref()
+            .is_some_and(|prev| prev.attachments() == attachments.as_slice());
+
+    if no_op {
+        let report = crate::commands::apply::ApplyReport {
+            paths: vec![crate::commands::apply::PathEffect {
+                file: index_path.display().to_string(),
+                state: crate::commands::apply::EffectState::Unchanged,
+                error: None,
+                category: None,
+            }],
+            index: crate::commands::apply::IndexDisposition::NotUsed,
+            index_error: None,
+        };
+        let result = CreateIndexResult {
+            path: index_path.display().to_string(),
+            files_indexed: file_count,
+            warnings: build.warnings.len(),
+            note: Some("nothing changed since the last create-index — snapshot left untouched"),
+            reused,
+            refreshed: 0,
+            skipped: files.len().saturating_sub(file_count),
+            removed,
+            rebuilt,
+            written: false,
+        };
+        return Ok(CommandOutcome::success(output_value(&result)).with_apply_report(report));
+    }
 
     // Save the snapshot (with the persisted BM25 index when available).
     let publication = SnapshotIndex::save_with_attachments_observed(
@@ -243,7 +295,6 @@ pub fn create_index(
         }
     }
 
-    let file_count = build.index.entries().len();
     let result = CreateIndexResult {
         path: index_path.display().to_string(),
         files_indexed: file_count,
@@ -254,6 +305,7 @@ pub fn create_index(
         skipped: files.len().saturating_sub(file_count),
         removed,
         rebuilt,
+        written: true,
     };
 
     let report = crate::commands::apply::ApplyReport {
@@ -292,6 +344,10 @@ struct CreateIndexResult<'a> {
     /// Whether the index was built from scratch (no reusable snapshot,
     /// a format/tokenizer/setting mismatch, or `--force`).
     rebuilt: bool,
+    /// Whether the snapshot file was actually (re)written. `false` only for a
+    /// no-op rerun — every entry reused, nothing removed, attachments
+    /// unchanged — which leaves the on-disk bytes untouched (iter-313).
+    written: bool,
 }
 
 /// The previous snapshot's entry for `rel` when it still describes the file:

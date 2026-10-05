@@ -290,6 +290,30 @@ fn reads_hints_under_jq(argv: &[String]) -> Option<&str> {
     reads_key.then_some(filter)
 }
 
+/// A documented `--jq` filter that iterates `.results[]` without any
+/// `--limit`/`-n` flag on the same recipe silently samples the default
+/// 50-item cap instead of the full result set it reads as (UX-5, iter-313):
+/// `find --broken-links --jq '.results[] as $f | …'` on a vault with more
+/// than 50 matches quietly reports a sample, 150 of 7 788 lines on one real
+/// corpus. A recipe that already names an explicit `--limit`/`-n` — even a
+/// small one, like a five-item preview — is not silently capped: the number
+/// is right there in the shipped text.
+fn reads_results_array_without_limit_flag(argv: &[String]) -> Option<&str> {
+    let filter = argv
+        .iter()
+        .position(|a| a == "--jq")
+        .and_then(|i| argv.get(i + 1))
+        .map(String::as_str)
+        .or_else(|| argv.iter().find_map(|a| a.strip_prefix("--jq=")))?;
+    if !filter.contains(".results[]") {
+        return None;
+    }
+    let has_limit_flag = argv
+        .iter()
+        .any(|a| a == "--limit" || a == "-n" || a.starts_with("--limit=") || a.starts_with("-n="));
+    (!has_limit_flag).then_some(filter)
+}
+
 /// The first token after `hyalo` that is not a flag or a flag value — the
 /// subcommand the recipe invokes.
 fn subcommand_of(argv: &[String]) -> Option<&str> {
@@ -347,6 +371,15 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
                     "{label}: a documented --jq filter reads `.hints`, which is always `[]` under \
                      --jq (DEC-313) — read hints from plain `--format json` piped to jq. \
                      Filter: {filter}\n    {recipe}"
+                ));
+                continue;
+            }
+            if let Some(filter) = reads_results_array_without_limit_flag(&argv) {
+                failures.push(format!(
+                    "{label}: a documented --jq filter walks `.results[]` with no --limit/-n \
+                     flag at all, so it silently samples the default-capped page instead of the \
+                     full result set it reads as (UX-5, iter-313). Add `--limit 0` (or another \
+                     explicit limit) to the shipped command. Filter: {filter}\n    {recipe}"
                 ));
                 continue;
             }
@@ -792,6 +825,29 @@ mod tests {
             reads_hints_under_jq(&argv),
             Some(".results.hintsX, .hints | length")
         );
+    }
+
+    #[test]
+    fn flags_a_results_array_walk_with_no_limit_flag() {
+        let argv = split_argv("hyalo find --broken-links --jq '.results[] as $f | $f.links[]'");
+        assert_eq!(
+            reads_results_array_without_limit_flag(&argv),
+            Some(".results[] as $f | $f.links[]")
+        );
+        // Any explicit --limit (even a small one) is a deliberate, visible
+        // cap, not a silent one.
+        let argv = split_argv("hyalo find --limit 5 --jq '[.results[] | .file]'");
+        assert_eq!(reads_results_array_without_limit_flag(&argv), None);
+        let argv = split_argv("hyalo find --limit 0 --jq '.results[].file'");
+        assert_eq!(reads_results_array_without_limit_flag(&argv), None);
+        let argv = split_argv("hyalo find -n 0 --jq '.results[].file'");
+        assert_eq!(reads_results_array_without_limit_flag(&argv), None);
+        let argv = split_argv("hyalo find --limit=0 --jq '.results[].file'");
+        assert_eq!(reads_results_array_without_limit_flag(&argv), None);
+        // A filter that never indexes `.results[]` at all (e.g. a scalar
+        // field or `.total`) is never flagged.
+        let argv = split_argv("hyalo find --property status=draft --jq '.total'");
+        assert_eq!(reads_results_array_without_limit_flag(&argv), None);
     }
 
     #[test]

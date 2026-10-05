@@ -33,4 +33,13 @@ results: T,
 /**
  * Total matching items before pagination, omitted for non-list commands.
  */
-total?: number, };
+total?: number,
+/**
+ * `true` when `--limit` (or the default cap) cut `results` short of
+ * `total`; omitted (never `false`) when nothing was cut, or when the
+ * command reports no `total` at all (iter-313, UX-5). A script piping
+ * `find --broken-links --format json` through `--limit 0`-less defaults
+ * used to have no way to tell a sampled answer from a complete one
+ * short of comparing `results | length` to `total` itself.
+ */
+truncated?: boolean, };

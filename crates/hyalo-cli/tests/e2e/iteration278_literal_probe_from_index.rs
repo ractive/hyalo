@@ -91,7 +91,20 @@ fn classify_verdicts_are_identical_on_disk_and_from_the_index() {
         let disk = json(&tmp, &args);
         let mut indexed_args = args.clone();
         indexed_args.push("--index");
-        let indexed = json(&tmp, &indexed_args);
+        let mut indexed = json(&tmp, &indexed_args);
+        // iter-313: `summary --index` now reports `source`/`code_blocks`/
+        // `index_format_version` whenever `--index` was requested at all —
+        // including this exact case, where the explicit `--site-prefix`
+        // means the snapshot's compatibility can't be confirmed cheaply
+        // (BUG-15) and the run falls back to disk. That bookkeeping is new
+        // honesty about *where the answer came from*, not a change to any
+        // `classify_link` verdict this test exists to pin, so it is
+        // stripped before the parity comparison.
+        if let Some(results) = indexed["results"].as_object_mut() {
+            for key in ["source", "code_blocks", "index_format_version"] {
+                results.remove(key);
+            }
+        }
         assert_eq!(
             disk["results"],
             indexed["results"],

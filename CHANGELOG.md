@@ -242,6 +242,31 @@ and this project adheres to
 - `find` marks a file it did not read because it exceeds the size limit with
   `skipped: "oversized"`, and a named oversized file is announced on stderr
   even under `-q` (DEC-301); `lint` reports such a file once instead of twice.
+- The "index format is older than this binary" refusal warning now survives
+  `-q`, like the missing-index fallback it sits beside (it used to go
+  through `warn::warn` instead of `warn::warn_always`).
+- A snapshot built under a different `[search] code_blocks` than the
+  current config is now refused outright — like an old-format snapshot —
+  with a `-q`-proof warning naming both settings, instead of silently
+  falling back to disk with no message at all (DEC-360).
+- `summary --index` reports `index_format_version`, `code_blocks` and
+  `source` ("index" or "disk") even when the snapshot it found was refused,
+  instead of `index_format_version: null` with no way to tell a disk
+  fallback had happened.
+- A no-op `create-index` rerun (every entry reused, nothing removed,
+  attachments unchanged) leaves the snapshot file untouched instead of
+  rewriting byte-for-byte identical content; `--force` already discarded
+  the previous snapshot by construction rather than loading and throwing it
+  away, confirmed and documented (DEC-361).
+- `find`'s JSON envelope carries `truncated: true` whenever `--limit` (or
+  the default cap) cut `results` short of `total`; the key is omitted
+  (never `false`) otherwise. Every shipped `--jq` recipe that walks
+  `.results[]` now passes `--limit 0`, and `check-jq-recipes` fails on one
+  that doesn't.
+- `summary` hints "refresh the stale index" instead of "create an index"
+  when a `.hyalo-index` already exists and a cheap mtime probe suggests it
+  is behind the vault; when it exists and looks current, the hint points at
+  `--index` instead of rebuilding what is already there.
 - A filename containing a literal backslash (`notes/back\slash.md`, legal on
   macOS and Linux) is reported, looked up by `--file`, matched by `--glob`,
   and moved/set in a batch under its real name, instead of being silently

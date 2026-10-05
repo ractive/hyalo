@@ -267,6 +267,15 @@ pub struct Envelope<'a, T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub(crate) total: Option<u64>,
+    /// `true` when `--limit` (or the default cap) cut `results` short of
+    /// `total`; omitted (never `false`) when nothing was cut, or when the
+    /// command reports no `total` at all (iter-313, UX-5). A script piping
+    /// `find --broken-links --format json` through `--limit 0`-less defaults
+    /// used to have no way to tell a sampled answer from a complete one
+    /// short of comparing `results | length` to `total` itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) truncated: Option<bool>,
 }
 
 impl<'a, T: Serialize> Envelope<'a, T> {
@@ -279,6 +288,7 @@ impl<'a, T: Serialize> Envelope<'a, T> {
             hints,
             results,
             total,
+            truncated: None,
         }
     }
 }
@@ -450,6 +460,15 @@ impl<'a> Envelope<'a, Cow<'a, serde_json::Value>> {
             envelope.files_missing = Some(c.files_missing);
             envelope.files_skipped_non_md = Some(c.files_skipped_non_md);
             envelope.files_skipped_outside_vault = Some(c.files_skipped_outside_vault);
+        }
+        // iter-313 (UX-5): only a list result (`results` is a JSON array) can
+        // be truncated by `--limit`/the default cap. `total` is the full
+        // match count computed before pagination, so a shorter `results`
+        // array under a `Some` total means the cap actually cut something.
+        if let (Some(total), serde_json::Value::Array(items)) = (total, value)
+            && u64::try_from(items.len()).unwrap_or(u64::MAX) < total
+        {
+            envelope.truncated = Some(true);
         }
         envelope
     }
