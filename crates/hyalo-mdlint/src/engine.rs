@@ -251,7 +251,7 @@ impl HyaloLintEngine {
             RuleCatalogEntry {
                 id: "HYALO008".to_owned(),
                 name: "broken-heading-anchor".to_owned(),
-                description: "A same-file or cross-file heading fragment does not match the existing target document. Uses the shared heading matcher; skips block references, templates and unreadable targets. Warns by default; promoted to error under --strict. Review numbered-heading repairs with links fix --dry-run.".to_owned(),
+                description: "A same-file or cross-file heading fragment does not match the existing target document. Uses the shared heading matcher; skips block references, templates and unreadable targets. A fragment also resolves against an explicit HTML anchor in the target -- <a id=\"x\">, <a name=\"x\">, <h1>-<h6> id=\"x\"> -- matched byte-for-byte against the id/name value (BUG-9, DEC-353). Warns by default; promoted to error under --strict. Review numbered-heading repairs with links fix --dry-run.".to_owned(),
                 default_severity: DiagSeverity::Warn,
                 default_enabled: true,
                 autofixable: false,

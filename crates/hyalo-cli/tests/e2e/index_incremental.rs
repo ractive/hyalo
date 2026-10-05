@@ -378,7 +378,7 @@ fn index_and_disk_agree_across_eight_query_shapes() {
 }
 
 #[test]
-fn summary_index_reports_format_version_four() {
+fn summary_index_reports_current_format_version() {
     let tmp = five_file_vault();
     let (_, output) = create_index(&tmp, &[]);
     assert!(output.status.success(), "{output:?}");
@@ -391,5 +391,112 @@ fn summary_index_reports_format_version_four() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"]["index_format_version"], 4, "{json}");
+    assert_eq!(
+        json["results"]["index_format_version"],
+        hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+        "{json}"
+    );
+}
+
+/// BUG-9 review follow-up (DEC-353): a v4 snapshot has no
+/// `explicit_anchor_ids` field at all, and incremental `create-index`
+/// reuses an unchanged entry verbatim (DEC-339) -- so if the format version
+/// had NOT bumped, a v4 index upgraded to this binary and re-run through
+/// plain `create-index` would keep serving a stale, anchor-blind entry
+/// forever. Simulate exactly that pre-existing-index upgrade path: write a
+/// real v5 snapshot, then roll its header back to 4 and strip
+/// `explicit_anchor_ids` from the one entry that has it, matching what an
+/// actual v4 binary would have written. Both a read (`find --broken-links
+/// --index`) and `create-index` itself must refuse it rather than trust it.
+#[test]
+fn v4_snapshot_without_explicit_anchor_ids_is_refused_not_silently_served() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "<a id=\"custom-x\"></a>\n\n# Target\n",
+    );
+    write_md(tmp.path(), "source.md", "[[target#custom-x]]\n");
+    backdate(&tmp.path().join("target.md"));
+    backdate(&tmp.path().join("source.md"));
+
+    let (_, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+
+    let index_path = tmp.path().join(".hyalo-index");
+    let mut snapshot = load_snapshot(&index_path);
+    snapshot["header"]["format_version"] = serde_json::json!(4);
+    if let Some(entries) = snapshot.get_mut("entries").and_then(Value::as_array_mut) {
+        for entry in entries {
+            if let Some(obj) = entry.as_object_mut() {
+                obj.remove("explicit_anchor_ids");
+            }
+        }
+    }
+    save_snapshot(&index_path, &snapshot);
+
+    // A disk-scanning read sees the real anchor and reports nothing broken.
+    let disk = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--broken-links", "--limit", "0", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(disk.status.success(), "{disk:?}");
+    let disk_json: Value = serde_json::from_slice(&disk.stdout).unwrap();
+    assert_eq!(disk_json["total"], 0, "{disk_json}");
+
+    // The downgraded-and-anchor-stripped v4 snapshot must be refused and
+    // fall back to disk -- never silently report `#custom-x` broken.
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "--broken-links",
+            "--limit",
+            "0",
+            "--index",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let indexed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        indexed["total"], 0,
+        "a v4-without-anchor-ids snapshot must fall back to disk, not report \
+         #custom-x broken: {indexed}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index format is older than this binary") && stderr.contains("v4"),
+        "{stderr}"
+    );
+
+    // create-index over it rebuilds from scratch rather than reusing entries.
+    let (json, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["results"]["rebuilt"], true, "{json}");
+    assert_eq!(json["results"]["reused"], 0, "{json}");
+
+    // And the freshly rebuilt index now agrees with disk under --index too.
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "--broken-links",
+            "--limit",
+            "0",
+            "--index",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let rebuilt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(rebuilt["total"], 0, "{rebuilt}");
 }

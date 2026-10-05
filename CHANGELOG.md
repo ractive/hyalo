@@ -84,6 +84,48 @@ and this project adheres to
 
 ### Fixed
 
+- `links fix` writes the fragment form a link's own syntax actually resolves
+  (DEC-351): a wikilink anchor fix gets the heading TEXT
+  (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug
+  (`note.md#3-deploy-steps`) — writing the slug into a wikilink turned a
+  hyalo-visible broken anchor into an Obsidian-visible one.
+- `summary.links.broken` now folds in `alias_fixes`, so it agrees with
+  `find --broken-links` and HYALO006 on a bare `[[alias]]` link (amends
+  DEC-318; Obsidian Hub: 154 → 162 everywhere).
+- `mv` rewrites a bare relative attachment/embed link (`[img](img.png)`,
+  `![embed](img.png)`, `[cfg](.gitignore)`) on a cross-directory move when it
+  resolves to a real file, exactly like its `.md` sibling (DEC-352); a
+  CommonMark image (`![alt](dest)`) is now captured by the span extractor
+  `mv` and `links fix` share, which used to drop it entirely.
+- A link fragment resolves against an explicit HTML anchor in the target —
+  `<a id="x">`, `<a name="x">`, `<h1 id="x">`…`<h6 id="x">` — matched
+  byte-for-byte against the id/name value, independent of any ATX heading
+  (DEC-353). `find --broken-links`, HYALO008 and `links fix` all take the
+  combined check.
+- Wikilink resolution folds Unicode composition, not just case (DEC-354):
+  `[[Café NFD]]` (precomposed) resolves a file named with decomposed accents
+  and vice versa, matching Obsidian; `mv`/`links fix` propose no rewrite for
+  a target differing only in composition.
+- A site-absolute bare `/` (or a target that is exactly the configured
+  `site_prefix`) resolves to the vault-root `index.md`, consistent with
+  `/dir` resolving to `dir/index.md`.
+- `links fix`'s case-mismatch/relocation/fuzzy/certain-fix text rendering
+  shows the byte-truthful `emitted_target` instead of the vault-relative
+  `new_target` a wikilink write never puts on disk verbatim (a wikilink
+  always drops `.md`).
+- `--apply-fuzzy` (or `--min-confidence`) without `--apply` no longer claims
+  a fix was written: `fuzzy_applied` is `false` on every dry run, and the
+  text/JSON distinguish "never opted in — pass --apply-fuzzy" from "opted in
+  but this is a dry run — pass --apply".
+- `find --broken-links` and `links fix` share one anchor-suggestion chooser;
+  a deferred anchor fix now carries that `suggested_fragment`, and the
+  `Fixable:` text line counts anchor fixes too, so it can no longer read `0`
+  next to an "Apply N fixes" hint.
+- An alias-only `links fix` dry run offers an `--apply` hint (previously
+  only case-mismatch/relocation fixes did); `lint --rule-prefix HYALO` (or
+  any HYALO006/HYALO008 violation) hints `find --broken-links`.
+- A `[[<placeholder>]]` angle-bracket target joins the `templated` bucket
+  with `{{…}}`/`{%…%}`/`${…}`, never offered as a fuzzy candidate.
 - A leading-dash PATTERN that clap reads as a short flag (`hyalo find
   '-snapshot'`) now gets a hint naming `hyalo find -- '-term'` on the
   resulting `--tag`/`--section` error or warning, keyed on the actual argv
@@ -234,6 +276,13 @@ and this project adheres to
   `"call get"~1`) while `"name here"` matches, and a quoted
   `"error-handling"` misses prose `error handling` while the bare term finds
   it. Ligatures such as `Œ` do not fold to `oe`.
+- **Breaking: snapshot format 5.** Indexes written by earlier versions
+  (including this release's own 4) are refused (the run falls back to a disk
+  scan with a warning); rebuild them with `hyalo create-index`. A v4 entry
+  reused as-is by incremental `create-index` (unchanged size/mtime) would
+  otherwise never gain the new `explicit_anchor_ids` field, so an upgraded
+  binary serving an un-rebuilt v4 index would silently under-report broken
+  heading anchors (DEC-353).
 - The Codex plugin manifest now carries the hyalo version (0.24.1, was 0.1.0)
   and is checked against the workspace version like the other manifests
   (DEC-340).

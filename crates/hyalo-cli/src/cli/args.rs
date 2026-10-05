@@ -1452,7 +1452,8 @@ pub(crate) enum Commands {
             status grouping (value + count, no file lists), \
             task counts (total/done), link health (total/broken count, plus a distinct \
             broken_anchors count — a link whose target resolves but whose #fragment names no \
-            heading there; omitted from JSON when zero, NEW-15), \
+            heading and no explicit HTML anchor (<a id>/<a name>/<hN id>) there; omitted from \
+            JSON when zero, NEW-15), \
             orphan count, dead-end count, and recently modified files. When a `[schema]` \
             block is configured it also carries `schema` with `errors`, `warnings` and \
             `files_with_violations` \u{2014} the same key `lint` uses for that quantity.\n\
@@ -2222,14 +2223,19 @@ Repeatable (AND).\n\
             resolved to a file in a different directory — a move, not a casing fix, so it is \
             reported apart from case_mismatches (both are written by plain --apply).\n\
             ANCHORS: broken_anchors counts broken heading fragments before applying repairs, \
-            including same-file anchors, within the selected scope and ignore-target policy. \
-            Missing targets never also count as broken anchors. anchor_fixable/anchor_fixes \
-            reports unique numbered-heading proposals with source line, old/new fragment and heading. \
+            including same-file anchors, within the selected scope and ignore-target policy. A \
+            fragment matching an explicit HTML anchor in the target (<a id>/<a name>/<hN id>, \
+            matched byte-for-byte) is not broken either. Missing targets never also count as \
+            broken anchors. anchor_fixable/anchor_fixes reports unique numbered-heading proposals \
+            with source line, old/new fragment and heading; new_fragment is the heading TEXT for \
+            a wikilink and the GFM slug for a markdown link, matching what --apply writes. \
             Plain --apply writes eligible numbered-heading repairs alongside file-target fixes. \
             anchors_applied/applied_anchor_fixes records published fragment edits separately from \
             file-target repairs. anchors_deferred/deferred_anchor_fixes explains ambiguous, \
-            unsupported or stale proposals. Use lint --rule HYALO008 --strict to gate anchors, \
-            or find --broken-links --strict to gate both targets and anchors.\n\
+            unsupported or stale proposals, and carries suggested_fragment when find \
+            --broken-links would offer one for the same fragment. Use lint --rule HYALO008 \
+            --strict to gate anchors, or find --broken-links --strict to gate both targets and \
+            anchors.\n\
             CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
             counts the proposals it suppresses — those have a candidate but are never written, \
@@ -2311,9 +2317,12 @@ Repeatable (AND).\n\
               - HYALO006: broken file targets (warning; strict promotes to error)\n\
               - HYALO008: broken heading anchors on resolved document targets, including\n\
                          same-file and configured frontmatter wikilinks (warning; strict\n\
-                         promotes unless severity is explicitly configured). Scoped lint\n\
-                         keeps vault-wide targets. Repair with links fix after reviewing\n\
-                         the preview and applying with --apply.\n\
+                         promotes unless severity is explicitly configured). An explicit\n\
+                         HTML anchor (<a id=\"x\">, <a name=\"x\">, <h2 id=\"x\">) is also a\n\
+                         valid target, matched byte-for-byte against the id/name value\u{2014}\n\
+                         not just an ATX heading. Scoped lint keeps vault-wide targets.\n\
+                         Repair with links fix after reviewing the preview and applying\n\
+                         with --apply.\n\
               - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
                          oversized scalar) — error by default; the file still counts in\n\
                          `files_checked` so a corrupt file can never leave a green lint.\n\
@@ -3356,7 +3365,9 @@ pub(crate) enum LinksAction {
         /// actions.md elsewhere in the vault. Both are reported in a separate
         /// bucket and are NOT written by plain --apply. Pass --apply-fuzzy to
         /// opt in — which still only writes proposals at or above the
-        /// confidence floor (0.8 by default; see --min-confidence).
+        /// confidence floor (0.8 by default; see --min-confidence). --apply
+        /// is still required to write anything: --apply-fuzzy alone (without
+        /// --apply) stays a dry run and reports "not written — pass --apply".
         #[arg(long)]
         apply_fuzzy: bool,
         /// Confidence floor for applying low-confidence fixes (0.0–1.0); implies --apply-fuzzy

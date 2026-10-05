@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use hyalo_core::types::OutlineSection;
 
-type CachedSections = Arc<OnceLock<Option<Vec<OutlineSection>>>>;
+/// A target's cached headings plus its explicit HTML anchor ids/names
+/// (BUG-9, iteration 311, DEC-353).
+type CachedSections = Arc<OnceLock<Option<(Vec<OutlineSection>, Vec<String>)>>>;
 
 use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::discovery;
@@ -69,7 +71,10 @@ impl LinkLintContext {
             for entry in snapshot.entries() {
                 cache.insert(
                     entry.rel_path.clone(),
-                    Arc::new(OnceLock::from(Some(entry.sections.clone()))),
+                    Arc::new(OnceLock::from(Some((
+                        entry.sections.clone(),
+                        entry.explicit_anchor_ids.clone(),
+                    )))),
                 );
             }
         }
@@ -302,18 +307,22 @@ pub fn check_broken_anchors(
         }
         let broken = if target == rel_path {
             source_sections
-                .get_or_init(|| hyalo_core::index::scan_slice_sections(content).ok())
-                .as_deref()
-                .is_some_and(|sections| {
-                    !hyalo_core::anchor::fragment_matches_headings(fragment, sections)
+                .get_or_init(|| hyalo_core::index::scan_slice_anchors(content).ok())
+                .as_ref()
+                .is_some_and(|(sections, ids)| {
+                    !hyalo_core::anchor::fragment_matches_headings_or_explicit_anchors(
+                        fragment, sections, ids,
+                    )
                 })
         } else if let Some(cell) = ctx.target_sections(target) {
             cell.get_or_init(|| {
-                hyalo_core::index::scan_file_sections(&ctx.canonical_dir.join(target)).ok()
+                hyalo_core::index::scan_file_anchors(&ctx.canonical_dir.join(target)).ok()
             })
-            .as_deref()
-            .is_some_and(|sections| {
-                !hyalo_core::anchor::fragment_matches_headings(fragment, sections)
+            .as_ref()
+            .is_some_and(|(sections, ids)| {
+                !hyalo_core::anchor::fragment_matches_headings_or_explicit_anchors(
+                    fragment, sections, ids,
+                )
             })
         } else {
             false

@@ -64,6 +64,14 @@ pub struct IndexEntry {
     /// by older hyalo versions keep loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub self_anchors: Vec<SelfAnchor>,
+    /// Explicit HTML anchor ids/names in this file's body --
+    /// `<a id="x">`/`<a name="x">`/`<h1>`-`<h6> id="x">` (BUG-9, iteration
+    /// 311, DEC-353). A link fragment matching one of these resolves even
+    /// with no ATX heading of that text in [`sections`](Self::sections).
+    /// Defaulted + skipped when empty so snapshots written by an older
+    /// hyalo keep loading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub explicit_anchor_ids: Vec<String>,
     /// Pre-tokenized, field-aware BM25 tokens (title + body stream, heading
     /// runs, tag tokens; DEC-337). Populated by `create-index` and by
     /// incremental re-scans of a snapshot that carries a BM25 index. Stripped
@@ -394,7 +402,11 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | older entries retain truncated link targets |
 /// | 4 | iter-304 | tokenizer v4 (folding, identifier parts, code-block
 /// |   |          | setting) and BM25F per-field postings (DEC-336/337) |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 4;
+/// | 5 | iter-311 | `IndexEntry.explicit_anchor_ids` (DEC-353) — a v4 entry
+/// |   |          | reused by an incremental `create-index` (unchanged
+/// |   |          | size/mtime) never gets anchor ids scanned, so a v4
+/// |   |          | snapshot must be rebuilt rather than silently trusted |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -2866,13 +2878,14 @@ pub(crate) fn scan_one_file(
     let mut body_collector = BodyCollector::new(bm25_tokenize);
 
     let stats;
-    let (sections, tasks, links, file_links) = if scan_body {
+    let (sections, tasks, links, file_links, explicit_anchor_ids) = if scan_body {
         let mut section_scanner = SectionScanner::new();
         let mut task_extractor = TaskExtractor::new();
         let mut link_visitor = LinkGraphVisitor::with_frontmatter_props(
             PathBuf::from(rel_path),
             frontmatter_link_props.map(<[String]>::to_vec),
         );
+        let mut anchor_scanner = crate::anchor::ExplicitAnchorScanner::new();
 
         stats = scanner::scan_file_multi_stats(
             full_path,
@@ -2882,6 +2895,7 @@ pub(crate) fn scan_one_file(
                 &mut task_extractor,
                 &mut link_visitor,
                 &mut body_collector,
+                &mut anchor_scanner,
             ],
             true,
         )?;
@@ -2889,17 +2903,30 @@ pub(crate) fn scan_one_file(
         let sections = section_scanner.into_sections();
         let tasks = task_extractor.into_tasks();
         let fl = link_visitor.into_file_links();
+        let explicit_anchor_ids = anchor_scanner.into_ids();
         let links_clone: Vec<(usize, Link)> = fl
             .links
             .iter()
             .map(|(line, link)| (*line, link.clone()))
             .collect();
         let self_anchors = fl.self_anchors.clone();
-        (sections, tasks, (links_clone, self_anchors), Some(fl))
+        (
+            sections,
+            tasks,
+            (links_clone, self_anchors),
+            Some(fl),
+            explicit_anchor_ids,
+        )
     } else {
         stats =
             scanner::scan_file_multi_stats(full_path, &mut [&mut fm, &mut body_collector], true)?;
-        (Vec::new(), Vec::new(), (Vec::new(), Vec::new()), None)
+        (
+            Vec::new(),
+            Vec::new(),
+            (Vec::new(), Vec::new()),
+            None,
+            Vec::new(),
+        )
     };
     let (links, self_anchors) = links;
 
@@ -2962,6 +2989,7 @@ pub(crate) fn scan_one_file(
         tasks,
         links,
         self_anchors,
+        explicit_anchor_ids,
         bm25_tokens,
         bm25_language,
         bm25_tokenizer_version,
@@ -3171,6 +3199,20 @@ pub fn scan_file_sections(full_path: &Path) -> Result<Vec<OutlineSection>> {
     Ok(scanner.into_sections())
 }
 
+/// Like [`scan_file_sections`] but also returns the file's explicit HTML
+/// anchor ids/names (BUG-9, iteration 311, DEC-353), for a caller that needs
+/// the same combined anchor-resolution answer the index path gets from
+/// `IndexEntry.{sections, explicit_anchor_ids}`.
+///
+/// # Errors
+/// Returns an error if the source cannot be scanned.
+pub fn scan_file_anchors(full_path: &Path) -> Result<(Vec<OutlineSection>, Vec<String>)> {
+    let mut section_scanner = SectionScanner::new();
+    let mut anchor_scanner = crate::anchor::ExplicitAnchorScanner::new();
+    crate::scanner::scan_file_multi(full_path, &mut [&mut section_scanner, &mut anchor_scanner])?;
+    Ok((section_scanner.into_sections(), anchor_scanner.into_ids()))
+}
+
 /// Parse heading outlines from already-read file bytes using the same scanner
 /// as the disk and snapshot index paths.
 ///
@@ -3180,6 +3222,19 @@ pub fn scan_slice_sections(content: &[u8]) -> Result<Vec<OutlineSection>> {
     let mut scanner = SectionScanner::new();
     crate::scanner::scan_slice_multi(content, &mut [&mut scanner])?;
     Ok(scanner.into_sections())
+}
+
+/// Like [`scan_slice_sections`] but also returns the content's explicit HTML
+/// anchor ids/names (BUG-9, iteration 311, DEC-353). See
+/// [`scan_file_anchors`] for the file-path form.
+///
+/// # Errors
+/// Returns an error if the source cannot be scanned.
+pub fn scan_slice_anchors(content: &[u8]) -> Result<(Vec<OutlineSection>, Vec<String>)> {
+    let mut section_scanner = SectionScanner::new();
+    let mut anchor_scanner = crate::anchor::ExplicitAnchorScanner::new();
+    crate::scanner::scan_slice_multi(content, &mut [&mut section_scanner, &mut anchor_scanner])?;
+    Ok((section_scanner.into_sections(), anchor_scanner.into_ids()))
 }
 
 /// Visitor that builds outline sections from body events.
@@ -3865,6 +3920,7 @@ Content.
             tasks: vec![],
             links: vec![],
             self_anchors: Vec::new(),
+            explicit_anchor_ids: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,

@@ -60,6 +60,10 @@
 //! references. hyalo does not index block ids, so these are **skipped** — never
 //! reported broken.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 use crate::types::OutlineSection;
 
 /// Return `true` when a fragment is an Obsidian block reference (`^block-id`)
@@ -67,6 +71,104 @@ use crate::types::OutlineSection;
 #[must_use]
 pub fn is_block_ref(fragment: &str) -> bool {
     fragment.starts_with('^')
+}
+
+// ---------------------------------------------------------------------------
+// Explicit HTML anchors (BUG-9, iteration 311, DEC-353)
+// ---------------------------------------------------------------------------
+
+/// Matches `<a id="x">`/`<a name="x">` and `<h1>`–`<h6> id="x">` tags and
+/// captures the id/name value — GitHub and MDN both let a fragment target an
+/// explicit HTML anchor this way, independent of any ATX heading. Double
+/// quotes only (the shape every real-world sample in the dogfood report
+/// used); a single-quoted attribute is a documented gap, not a crash.
+///
+/// Review follow-up (iteration 311): the attribute name must be preceded by
+/// whitespace, not merely a `\b` word boundary — `\b` sits on both sides of
+/// a hyphen, so `<a href="x" data-id="dz">` matched `id` inside `data-id`
+/// and resolved `#dz` from an attribute that was never an anchor id at all.
+static EXPLICIT_ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i:<a)\b[^>]*\s(?i:id|name)\s*=\s*"([^"]*)"|(?i:<h[1-6])\b[^>]*\sid\s*=\s*"([^"]*)""#,
+    )
+    .expect("EXPLICIT_ANCHOR_RE is a fixed, tested pattern")
+});
+
+/// Explicit HTML anchor ids/names named on one source line, in the order
+/// they appear. The id/name attribute VALUE is matched byte-for-byte
+/// (case-sensitive): unlike a heading slug, an HTML `id` is a literal
+/// identifier, not prose to be folded.
+pub fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &str> {
+    EXPLICIT_ANCHOR_RE
+        .captures_iter(line)
+        .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()))
+}
+
+/// Whether `fragment` names one of a target file's explicit HTML anchors
+/// (DEC-353). Compared byte-for-byte against the raw `id`/`name` attribute
+/// value stored in the index — no percent-decoding, no case fold, matching
+/// how a browser (and GitHub/MDN) resolves an explicit id.
+#[must_use]
+pub fn fragment_matches_explicit_anchor(fragment: &str, explicit_anchor_ids: &[String]) -> bool {
+    explicit_anchor_ids.iter().any(|id| id == fragment)
+}
+
+/// [`fragment_matches_headings`] extended with a target's explicit HTML
+/// anchors (DEC-353) -- the combined check every anchor-resolution call site
+/// (`find --broken-links`, HYALO008, `links fix`) should use instead of the
+/// heading-only function.
+#[must_use]
+pub fn fragment_matches_headings_or_explicit_anchors(
+    fragment: &str,
+    sections: &[OutlineSection],
+    explicit_anchor_ids: &[String],
+) -> bool {
+    fragment_matches_headings(fragment, sections)
+        || fragment_matches_explicit_anchor(fragment, explicit_anchor_ids)
+}
+
+/// A [`crate::scanner::FileVisitor`] that collects explicit HTML anchor
+/// ids/names (BUG-9, iteration 311, DEC-353) across a file's body, in
+/// document order. Run alongside `SectionScanner` during a scan; the
+/// scanner's fence tracking already keeps `on_body_line` from firing inside a
+/// fenced code block, so a `<a id="x">` shown as a *sample* in a fenced
+/// snippet is never collected as a real anchor.
+#[derive(Debug, Default)]
+pub struct ExplicitAnchorScanner {
+    ids: Vec<String>,
+}
+
+impl ExplicitAnchorScanner {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Consume and return the collected ids/names.
+    #[must_use]
+    pub fn into_ids(self) -> Vec<String> {
+        self.ids
+    }
+}
+
+impl crate::scanner::FileVisitor for ExplicitAnchorScanner {
+    fn on_body_line(
+        &mut self,
+        _raw: &str,
+        cleaned: &str,
+        _line_num: usize,
+    ) -> crate::scanner::ScanAction {
+        // Review follow-up (iteration 311): scan `cleaned`, not `raw` -- the
+        // shared scanner has already blanked inline code spans and both
+        // single- and multi-line HTML `<!-- … -->` comments there, so a
+        // `<a id="x">` shown as a *sample* inside either is never mistaken
+        // for a real anchor.
+        if cleaned.contains('<') {
+            self.ids
+                .extend(explicit_anchor_ids_in_line(cleaned).map(str::to_owned));
+        }
+        crate::scanner::ScanAction::Continue
+    }
 }
 
 /// Whether heading (or fragment) text carries a *template expression* rather
@@ -483,6 +585,59 @@ pub fn numbered_heading_repair(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- BUG-9 review follow-up: `data-id` is not an anchor `id` ---
+
+    #[test]
+    fn explicit_anchor_ids_in_line_ignores_data_id_attribute() {
+        let ids: Vec<&str> =
+            explicit_anchor_ids_in_line(r#"<a href="x" data-id="dz">text</a>"#).collect();
+        assert_eq!(ids, Vec::<&str>::new(), "data-id is not an anchor id");
+    }
+
+    #[test]
+    fn explicit_anchor_ids_in_line_finds_id_and_name() {
+        let ids: Vec<&str> = explicit_anchor_ids_in_line(
+            r#"<a id="legacy-anchor"></a> and <a name="named-anchor"></a>"#,
+        )
+        .collect();
+        assert_eq!(ids, vec!["legacy-anchor", "named-anchor"]);
+    }
+
+    #[test]
+    fn explicit_anchor_ids_in_line_finds_heading_id() {
+        let ids: Vec<&str> =
+            explicit_anchor_ids_in_line(r#"<h2 id="html-heading">A heading</h2>"#).collect();
+        assert_eq!(ids, vec!["html-heading"]);
+    }
+
+    // --- BUG-9 review follow-up: a *sample* anchor inside a comment or code
+    //     span is not a real one. `ExplicitAnchorScanner` must scan `cleaned`
+    //     (comments and code spans already blanked), not `raw`.
+
+    fn scanned_ids(content: &str) -> Vec<String> {
+        let mut scanner = ExplicitAnchorScanner::new();
+        crate::scanner::scan_slice_multi(content.as_bytes(), &mut [&mut scanner]).unwrap();
+        scanner.into_ids()
+    }
+
+    #[test]
+    fn explicit_anchor_scanner_ignores_a_multiline_html_comment() {
+        let content = "<!--\n<a id=\"commented\"></a>\n-->\n<a id=\"real\"></a>\n";
+        assert_eq!(scanned_ids(content), vec!["real".to_owned()]);
+    }
+
+    #[test]
+    fn explicit_anchor_scanner_ignores_a_single_line_html_comment() {
+        let content = "a <!-- <a id=\"commented\"></a> --> b <a id=\"real\"></a>\n";
+        assert_eq!(scanned_ids(content), vec!["real".to_owned()]);
+    }
+
+    #[test]
+    fn explicit_anchor_scanner_ignores_a_backtick_code_span() {
+        let content = "Write `<a id=\"inline\">` in your markup. <a id=\"real\"></a>\n";
+        assert_eq!(scanned_ids(content), vec!["real".to_owned()]);
+    }
 
     fn sec(heading: Option<&str>) -> OutlineSection {
         OutlineSection {

@@ -440,10 +440,16 @@ pub fn summary(
             hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index);
         // Ambiguous short-form links are unresolvable without manual
         // intervention, so include them in the broken count so the summary
-        // reflects the total number of links that need attention.
+        // reflects the total number of links that need attention. A bare
+        // `[[alias]]` link (DEC-308: broken by default, `aliases = false`)
+        // lands in `report.alias_fixes`, not `report.broken` -- `links fix`
+        // plans an exact rewrite for it, but Obsidian still renders it
+        // unresolved, so `find --broken-links` and HYALO006 both count it.
+        // BUG-2 (iteration 311): fold it in here too so all three
+        // surfaces agree (162 on the Obsidian Hub, previously 154 vs. 162).
         LinkHealthSummary {
             total: report.total_links,
-            broken: report.broken.len() + report.ambiguous.len(),
+            broken: report.broken.len() + report.ambiguous.len() + report.alias_fixes.len(),
             // Targets above the vault root are out of scope, not broken.
             out_of_vault: report.out_of_vault.len(),
             broken_anchors,

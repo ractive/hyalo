@@ -246,7 +246,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Diff-aware lint (CI)**: `git diff --name-only origin/main...HEAD | hyalo lint --files-from -` — scope any command to a caller-supplied file list; non-.md paths and deleted files are silently skipped (counters in JSON envelope). Three-dot `origin/main...HEAD` (merge-base) keeps a stale branch scoped to files it changed. A path named explicitly — positionally, with `--file`, or through `--files-from` — is linted **even when `[lint] ignore` matches it** (DEC-284, iter-267), which is what a diff gate wants; `--glob` and the bare vault sweep still honour the ignore list, so select paths with `--glob` when you want it applied
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.
-- **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone.
+- **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone. A fragment also resolves against an explicit HTML anchor in the target — `<a id="x">`, `<a name="x">`, `<h1 id="x">`…`<h6 id="x">` — matched byte-for-byte (case-sensitive) against the id/name value, not just an ATX heading (DEC-353); HYALO008 and `links fix` take the same combined check.
 - **Link kinds (iter-261/262)**: every entry in `find --fields links` carries `kind` —
   `wikilink` | `embed` (`![[…]]`) | `markdown` | `frontmatter` (a `[[wikilink]]` in a YAML
   frontmatter value) | `external` (any `scheme:` URI: `https:`, `obsidian://`, `mailto:`,
@@ -479,6 +479,27 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `attachment`), and
   `hyalo find --fields links --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
   lists every image or embed that resolves to nothing, as `file:line target`.
+- **Anchor fix writes the right fragment form** (DEC-351, iter-311): a wikilink anchor fix gets
+  the heading TEXT (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug
+  (`note.md#3-deploy-steps`) — Obsidian only matches a wikilink fragment against heading text.
+  `links fix` and `find --broken-links` share one anchor-suggestion chooser, a deferred anchor
+  fix carries that `suggested_fragment`, and the `Fixable:` text line counts anchor fixes too.
+- **`mv` rewrites bare attachment/embed links too** (DEC-352, iter-311): `[img](img.png)`,
+  `![embed](img.png)` and `[cfg](.gitignore)` are rebased on a cross-directory move exactly
+  like the `.md` sibling, when they resolve to a real file. The vault-wide bare-attachment
+  read-side fallback (`find`, `links fix`) is unchanged — that is genuine Obsidian semantics.
+- **Wikilink resolution folds Unicode composition** (DEC-354, iter-311): `[[Café NFD]]`
+  (precomposed) resolves a file named with decomposed accents and vice versa, matching
+  Obsidian; `mv`/`links fix` propose no rewrite for a target differing only in composition.
+- **A site-absolute bare `/` resolves to the vault root** (iter-311): `[x](/)` resolves to
+  `index.md` when it exists, consistent with `/dir` resolving to `dir/index.md`.
+- **`links fix`'s text rendering shows the truthful write** (BUG-17, iter-311): case-mismatch,
+  relocation, fuzzy and certain-fix text lines show `emitted_target`, not the vault-relative
+  `new_target` a wikilink write never puts on disk verbatim (a wikilink always drops `.md`).
+- **`--apply-fuzzy` without `--apply` never claims a write** (iter-311): `fuzzy_applied` is
+  `false` on every dry run; the text distinguishes "never opted in — pass --apply-fuzzy" from
+  "opted in but this is a dry run — pass --apply". A `[[<placeholder>]]` angle-bracket target
+  joins the `templated` bucket, never offered as a fuzzy candidate.
 
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).

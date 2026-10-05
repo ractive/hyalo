@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use unicode_normalization::UnicodeNormalization as _;
 
 /// Mode for case-insensitive link resolution fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -97,17 +98,29 @@ const MAX_EXPLICIT_PATH_PROBES: usize = 4096;
 
 /// The map key for `s`, borrowed when `s` is already the key (iter-278).
 ///
-/// Every lookup in this index is keyed by the ASCII-lowercased path, and the
-/// three probes `resolve_target` runs per link used to build that key three
-/// times over. A path that carries no ASCII uppercase byte — every on-disk
-/// path in a lowercase static-site corpus, and every candidate derived from
-/// one — already *is* its own key, so the common case allocates nothing.
+/// Every lookup in this index is keyed by the ASCII-lowercased, NFC-normalised
+/// path, and the three probes `resolve_target` runs per link used to build
+/// that key three times over. A path that carries no ASCII uppercase byte and
+/// no non-ASCII byte — every on-disk path in a lowercase, Latin-only static-
+/// site corpus, and every candidate derived from one — already *is* its own
+/// key, so the common case allocates nothing.
+///
+/// BUG-13 (iteration 311, DEC-354): a path with any non-ASCII byte is first
+/// NFC-normalised (Obsidian's own convention) before ASCII-lowercasing, so a
+/// file named with decomposed accents (`Café NFD.md`, common on a vault
+/// synced from HFS+ or typed on certain input methods) and a wikilink target
+/// typed in precomposed form (`[[Café NFD]]`) key identically. Only the
+/// *composition* form changes here — non-ASCII case is deliberately left
+/// alone, exactly as before (`É` and `é` still key apart).
 pub(crate) fn fold_key(s: &str) -> std::borrow::Cow<'_, str> {
-    if s.bytes().any(|b| b.is_ascii_uppercase()) {
-        std::borrow::Cow::Owned(s.to_ascii_lowercase())
-    } else {
-        std::borrow::Cow::Borrowed(s)
+    if s.is_ascii() {
+        return if s.bytes().any(|b| b.is_ascii_uppercase()) {
+            std::borrow::Cow::Owned(s.to_ascii_lowercase())
+        } else {
+            std::borrow::Cow::Borrowed(s)
+        };
     }
+    std::borrow::Cow::Owned(s.nfc().collect::<String>().to_ascii_lowercase())
 }
 
 impl CaseInsensitiveIndex {
@@ -255,7 +268,7 @@ impl CaseInsensitiveIndex {
     /// string comparison, which was the entire measured cost of
     /// `find --fields links` on an indexed vault.
     pub fn insert(&mut self, rel_path: &str) {
-        let key = rel_path.to_ascii_lowercase();
+        let key = fold_key(rel_path).into_owned();
         let candidates = self.map.entry(key).or_default();
         if candidates.iter().any(|c| c == rel_path) {
             return;
@@ -272,7 +285,7 @@ impl CaseInsensitiveIndex {
         } else {
             fname
         };
-        let stem_key = stem.to_ascii_lowercase();
+        let stem_key = fold_key(stem).into_owned();
         self.stem_map
             .entry(stem_key)
             .or_default()
@@ -330,8 +343,8 @@ impl CaseInsensitiveIndex {
     /// Example: `lookup_stem("note")` matches `sub/note.md` if it's the only
     /// file named `note.md` in the vault.
     pub fn lookup_stem(&self, stem: &str) -> Option<&str> {
-        let key = stem.to_ascii_lowercase();
-        let candidates = self.stem_map.get(&key)?;
+        let key = fold_key(stem);
+        let candidates = self.stem_map.get(key.as_ref())?;
         if candidates.len() == 1 {
             Some(&candidates[0])
         } else {
@@ -346,8 +359,8 @@ impl CaseInsensitiveIndex {
         if !self.case_insensitive_paths {
             return &[];
         }
-        let key = rel_path.to_ascii_lowercase();
-        self.map.get(&key).map_or(&[], Vec::as_slice)
+        let key = fold_key(rel_path);
+        self.map.get(key.as_ref()).map_or(&[], Vec::as_slice)
     }
 
     /// Record a note's declared frontmatter `aliases:` (iter-272 Part B).
@@ -368,7 +381,7 @@ impl CaseInsensitiveIndex {
             if alias.is_empty() {
                 continue;
             }
-            let key = alias.to_ascii_lowercase();
+            let key = fold_key(alias).into_owned();
             let paths = self.alias_map.entry(key).or_default();
             if paths.iter().any(|p| p == rel_path) {
                 continue;
@@ -384,7 +397,7 @@ impl CaseInsensitiveIndex {
     /// notes — the alias equivalent of an ambiguous bare stem.
     #[must_use]
     pub fn lookup_alias(&self, alias: &str) -> Option<&str> {
-        match self.alias_map.get(&alias.to_ascii_lowercase())?.as_slice() {
+        match self.alias_map.get(fold_key(alias).as_ref())?.as_slice() {
             [only] => Some(only.as_str()),
             _ => None,
         }
@@ -396,7 +409,7 @@ impl CaseInsensitiveIndex {
     #[must_use]
     pub fn lookup_alias_all(&self, alias: &str) -> &[String] {
         self.alias_map
-            .get(&alias.to_ascii_lowercase())
+            .get(fold_key(alias).as_ref())
             .map_or(&[], Vec::as_slice)
     }
 
@@ -418,8 +431,8 @@ impl CaseInsensitiveIndex {
     /// this method always returns all candidates — useful for detecting when a
     /// short-form link is ambiguous rather than simply unresolvable.
     pub fn lookup_stem_all(&self, stem: &str) -> &[String] {
-        let key = stem.to_ascii_lowercase();
-        self.stem_map.get(&key).map_or(&[], Vec::as_slice)
+        let key = fold_key(stem);
+        self.stem_map.get(key.as_ref()).map_or(&[], Vec::as_slice)
     }
 
     /// Returns `true` if the index contains no entries.

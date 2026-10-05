@@ -2038,6 +2038,7 @@ mod tests {
                 tasks: Vec::new(),
                 links: Vec::new(),
                 self_anchors: Vec::new(),
+                explicit_anchor_ids: Vec::new(),
                 bm25_tokens: Some(vec!["rust".to_owned(), "program".to_owned()].into()),
                 bm25_language: Some("english".to_owned()),
                 bm25_tokenizer_version: Some(TOKENIZER_VERSION),
@@ -2053,6 +2054,7 @@ mod tests {
                 tasks: Vec::new(),
                 links: Vec::new(),
                 self_anchors: Vec::new(),
+                explicit_anchor_ids: Vec::new(),
                 bm25_tokens: None, // No tokens — should be skipped
                 bm25_language: None,
                 bm25_tokenizer_version: None,
@@ -2084,6 +2086,7 @@ mod tests {
             tasks: Vec::new(),
             links: Vec::new(),
             self_anchors: Vec::new(),
+            explicit_anchor_ids: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,

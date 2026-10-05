@@ -225,7 +225,20 @@ fn resolve_path(
     } else {
         [".md", "/index.md"]
     } {
-        let result = literal(index, &format!("{target}{suffix}"));
+        // BUG-15 (iteration 311): a bare site-absolute `/` (or an absolute
+        // target that is exactly the configured `site_prefix`) strips down to
+        // an empty `target` here. `format!("{target}{suffix}")` would then
+        // build `/index.md` -- a leading slash glued onto nothing -- which
+        // the index never contains, even when the vault-root `index.md` the
+        // directory-index rule means to find does exist. Drop the suffix's
+        // own leading slash for the empty case so `/` reaches the same
+        // vault-root `index.md` that `/dir` reaches via `dir/index.md`.
+        let candidate = if target.is_empty() {
+            suffix.trim_start_matches('/').to_owned()
+        } else {
+            format!("{target}{suffix}")
+        };
+        let result = literal(index, &candidate);
         if !matches!(result, Resolution::Missing) {
             return result;
         }

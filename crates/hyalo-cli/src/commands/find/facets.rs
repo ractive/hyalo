@@ -293,6 +293,7 @@ mod tests {
             tasks: Vec::new(),
             links: Vec::new(),
             self_anchors: Vec::new(),
+            explicit_anchor_ids: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,

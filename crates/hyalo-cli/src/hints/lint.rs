@@ -313,6 +313,21 @@ pub(super) fn hints_for_lint(
         }
     }
 
+    // Iteration 311 (Hints task): HYALO006 (broken target) and HYALO008
+    // (broken anchor) violations are each half of what `find --broken-links`
+    // reports in one place -- target AND anchor, with `suggested_fragment`
+    // and `via: "alias"` labelling the lint row never carries. Point there
+    // whenever either fired, including under `--rule-prefix HYALO`.
+    if hints.len() < MAX_HINTS
+        && (rule_totals.get("HYALO006").is_some_and(|&c| c > 0)
+            || rule_totals.get("HYALO008").is_some_and(|&c| c > 0))
+    {
+        hints.push(Hint::new(
+            "See every broken link and anchor, with repair suggestions",
+            build_command_no_glob(ctx, &["find", "--broken-links"]),
+        ));
+    }
+
     // -----------------------------------------------------------------------
     // UX-2: rule dominance hint.
     // -----------------------------------------------------------------------

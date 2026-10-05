@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
+use unicode_normalization::UnicodeNormalization as _;
+
 use crate::case_index::CaseInsensitiveIndex;
 use crate::util::levenshtein;
 
@@ -2165,13 +2167,23 @@ fn classify_short_form_wikilink(
                 .strip_suffix(".md")
                 .unwrap_or(canonical_fname);
 
-            if target == canonical_stem {
+            if target == canonical_stem || nfc_equal(target, canonical_stem) {
+                // BUG-13 (iteration 311, DEC-354): a stem that is already
+                // byte-identical once both sides are NFC-normalised is not a
+                // casing difference at all — it is the *same* text in a
+                // different composition (`Café NFD` precomposed vs. the
+                // on-disk `Café NFD.md` written with decomposed accents).
+                // `links fix` must not propose a "fix" that rewrites a
+                // correct wikilink into decomposed Unicode.
                 Some(LinkResolution::ShortFormValid)
             } else {
-                // Stem casing differs — propose the canonical stem (not a full path).
-                Some(LinkResolution::ShortFormStemMismatch(
-                    canonical_stem.to_string(),
-                ))
+                // Stem casing differs — propose the canonical stem (not a
+                // full path), NFC-normalised so a case-AND-composition
+                // difference never proposes decomposed Unicode (BUG-13
+                // review follow-up, DEC-354).
+                Some(LinkResolution::ShortFormStemMismatch(nfc_normalize(
+                    canonical_stem,
+                )))
             }
         }
         _ => Some(LinkResolution::ShortFormAmbiguous),
@@ -2209,8 +2221,20 @@ fn classify_link(
         {
             let canonical_fwd = canonical_path.replace('\\', "/");
             let exact_fwd = exact_str.replace('\\', "/");
-            if exact_fwd != canonical_fwd {
-                return LinkResolution::Resolved(Some(canonical_fwd));
+            // BUG-13 (iteration 311, DEC-354): on a normalisation-insensitive
+            // filesystem (APFS, HFS+) the literal probe above already
+            // succeeded for a precomposed target against a decomposed
+            // on-disk name, so `exact_fwd` and `canonical_fwd` differ only in
+            // Unicode composition, not in any way a user would call a
+            // "mismatch". Reporting that as `Resolved(Some(..))` would make
+            // `links fix` propose rewriting a clean wikilink into decomposed
+            // Unicode for no reason.
+            if exact_fwd != canonical_fwd && !nfc_equal(&exact_fwd, &canonical_fwd) {
+                // The genuine mismatch (case, or case-and-composition
+                // together) still gets reported, but the proposed text is
+                // NFC-normalised so the write is never decomposed Unicode
+                // (BUG-13 review follow-up, DEC-354).
+                return LinkResolution::Resolved(Some(nfc_normalize(&canonical_fwd)));
             }
         }
         return LinkResolution::Resolved(None);
@@ -2227,7 +2251,11 @@ fn classify_link(
         && let Some(canonical_path) =
             resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
     {
-        let canonical = canonical_path.replace('\\', "/");
+        // NFC-normalise before returning: this canonical text may become a
+        // written target, and the filesystem may have stored it decomposed
+        // (BUG-13 review follow-up, DEC-354) regardless of whether the
+        // mismatch that brought us here was case, a relocation, or both.
+        let canonical = nfc_normalize(&canonical_path.replace('\\', "/"));
         if is_case_only_variant(resolved_target, &canonical) {
             return LinkResolution::CaseMismatch(canonical);
         }
@@ -2235,6 +2263,42 @@ fn classify_link(
     }
 
     LinkResolution::Broken
+}
+
+/// NFC-normalise `s` when it carries any non-ASCII byte, otherwise return it
+/// unchanged (BUG-13 review follow-up, iteration 311, DEC-354).
+///
+/// Used wherever a canonical on-disk path or stem — which may be stored in
+/// decomposed (NFD) form, exactly as the filesystem wrote it — is about to
+/// become the text a fix *writes*. Without this, a link differing from the
+/// file in BOTH case and composition (`[[sub/café]]` against an on-disk
+/// `sub/Café.md` written with decomposed accents) would still correctly
+/// detect the case difference and propose a rewrite, but the proposed text
+/// would carry the file's raw decomposed bytes — the exact "rewrite a clean
+/// wikilink into decomposed Unicode" outcome DEC-354 exists to prevent, just
+/// reached from the case-mismatch path instead of the pure-composition one.
+fn nfc_normalize(s: &str) -> String {
+    if s.is_ascii() {
+        s.to_owned()
+    } else {
+        s.nfc().collect()
+    }
+}
+
+/// Whether `a` and `b` are the same text once both are NFC-normalised
+/// (BUG-13, iteration 311, DEC-354) — a pure Unicode *composition* difference
+/// (`Café NFD` precomposed vs. decomposed), never a case difference: both
+/// sides are compared byte-for-byte after normalisation, with no ASCII
+/// lowercasing. `a.is_ascii() && b.is_ascii()` short-circuits the common case
+/// without importing the normalisation machinery at all.
+fn nfc_equal(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.is_ascii() && b.is_ascii() {
+        return false;
+    }
+    a.nfc().eq(b.nfc())
 }
 
 /// Whether `canonical` is the same path as `written` up to ASCII case and the
@@ -2846,6 +2910,22 @@ fn resolve_target_inner(
         }
         &normalized
     };
+
+    // BUG-15 (iteration 311): a bare site-absolute `/` -- or a site-absolute
+    // target that is *exactly* the configured `site_prefix` with nothing
+    // after it -- strips down to the empty string here. `/dir` already
+    // resolves to `dir/index.md` below; the empty remainder is the same rule
+    // one level up, at the vault root, and deserves the same answer instead
+    // of falling through to a malformed `/index.md` candidate (a literal
+    // leading slash joined onto an empty target).
+    if site_absolute && target.is_empty() {
+        return resolve_candidate_path(
+            canonical_dir,
+            DIRECTORY_INDEX_FILE,
+            case_index,
+            existence_index,
+        );
+    }
 
     // iter-277 (BUG-13): when the case index covers the whole vault it *is*
     // the file set, so existence is a hash lookup rather than a `stat` plus a

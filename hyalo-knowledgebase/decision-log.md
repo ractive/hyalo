@@ -7205,6 +7205,240 @@ budgets, silent last-wins on duplicate keys, and it accepts kepano-obsidian's
 unmaintained pin that keeps the `NaN` corruption. Always parsing through
 `Spanned`: 2.1× the parse cost for a rule that almost no block needs.
 
+## DEC-351: a wikilink anchor fix writes the heading text; a markdown anchor fix keeps the GFM slug (2026-10-04)
+
+**Decision.** `links fix`'s fragment-only repair (`anchor_fix::plan_anchor_fixes_filtered`)
+chooses what to write by the link's own syntax, not by one shared slug:
+
+- A **wikilink** fragment (`[[note#frag]]`, including a same-file
+  `[[#frag]]`) is rewritten to the matching heading's exact text —
+  `[[note#Deploy Steps]]` with a numbered heading `## 3. Deploy Steps` becomes
+  `[[note#3. Deploy Steps]]`.
+- A **markdown** fragment (`[t](note.md#frag)`, including `(#frag)`) keeps
+  the GFM slug, as before — `3-deploy-steps`.
+
+Both are computed by one shared function, `fragment_for_kind(kind, heading,
+slug)`, called from both the planning pass and the publication pass's
+pre-write revalidation, so the two can never choose differently for the same
+candidate. `AnchorFixPlan` carries the link's `kind` (internal, not
+serialized) to make this possible; the JSON `new_fragment` field is whichever
+of the two the kind selected, and `heading` keeps the full heading text
+either way, for display.
+
+**Why.** Obsidian resolves a wikilink fragment by matching it against a
+heading's literal text — never a GitHub-flavoured slug. The anchor repair
+wrote the slug for every fragment regardless of syntax, so `links fix --apply`
+turned a hyalo-visible broken anchor into an Obsidian-visible one in every
+vault where it ran (dogfood BUG-1, HIGH). Fixing only the planner and not the
+publication pass's revalidation surfaced a second, latent bug: that pass
+re-ran `numbered_heading_repair` and compared its raw slug against
+`plan.new_fragment` — which is heading text for a wikilink — so every
+wikilink anchor fix would have deferred as "target headings changed" even
+when nothing had. Routing both passes through the same `fragment_for_kind`
+closes that gap structurally rather than by inspection.
+
+**Where:** `anchor_fix::{AnchorFixPlan, fragment_for_kind, plan_anchor_fixes_filtered,
+apply_anchor_fixes_with_executor}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+### DEC-351 addendum: a heading containing `#` or `^` defers the wikilink fix (2026-10-05)
+
+A numbered heading can itself contain a literal `#` (`## 1. C# basics`) or
+`^` (`## 7. Caret ^ thing`). Writing either verbatim into a wikilink
+fragment produces `[[note#1. C# basics]]` or `[[note#7. Caret ^ thing]]`:
+hyalo's own matcher resolves both (the fragment text equals the heading
+text), but Obsidian's *parser* gives both characters special meaning inside
+a wikilink — `#` separates a nested-heading path (`[[note#H1#H2]]`,
+DEC-311) and `^` introduces a block reference (`[[note^block-id]]`) — so
+Obsidian would not read either fragment as the single heading string hyalo
+intended. The fix now defers such a heading rather than writing it,
+naming the offending character in the reason
+(`anchor_fix::plan_anchor_fixes_filtered`); the markdown form is unaffected
+because a GFM slug never contains `#` or `^` (punctuation is stripped
+before slugification). Rejected: stripping the character the way Obsidian's
+suggester might — there is no single, unambiguous rewrite (does `C#`
+become `C` or `C-sharp`?), and a silent rewrite of the author's own heading
+text is a bigger surprise than leaving the link to be fixed by hand.
+
+## DEC-352: `mv` rewrites a bare attachment/embed link that resolves to a real file, and the vault-wide fallback stays (2026-10-04)
+
+**Decision.** `mv`'s outbound rewriter (`link_rewrite::plan_outbound_rewrites`
+/ `plan_outbound_rewrites_batch`) now rebases a bare relative attachment or
+embed target — `[img](img.png)`, `![embed](img.png)`, `[cfg](.gitignore)` —
+on a cross-directory move, exactly like it already did for a `.md` sibling.
+The classifier (`classify_outbound_target`, renamed from
+`should_rewrite_outbound_target`) still treats a bare token with no path
+separator and no `.md` suffix as text-ambiguous (`OutboundTargetKind::BareUnknown`,
+formerly a flat `false`) — it genuinely cannot tell `img.png` apart from a
+plain wikilink-style label on the target string alone — but the caller now
+resolves a `BareUnknown` target against the **filesystem**, relative to the
+moving file's own directory, and only proceeds when a real file is there.
+A separate, pre-existing bug blocked even this: the span extractor
+(`links::extract_link_spans_with_original`) dropped CommonMark image syntax
+(`![alt](dest)`) entirely, so `mv` never saw an embed's destination at all,
+regardless of this fix. Images are now captured (`span.link.embed = true`,
+`span.full_start` restored to the `!`), read-only resolution (`find`, `links
+fix`) is unaffected since it already used a separate extractor.
+
+This is the single-file move's *own outbound* rewrite only. It does not touch
+how a bare attachment target is **resolved on read** — `find`,
+`backlinks`, and `links fix`'s own classification still resolve a bare
+attachment name vault-wide via the existing fallback (`resolve_attachment_from_source`),
+unchanged.
+
+**Rejected: narrowing the vault-wide attachment-resolution fallback itself.**
+The dogfood report's second half asked whether `find --file sub/e.md --fields
+links` reporting `img.png -> img.png attachment` (resolving the bare name
+from any directory) should be narrowed so a stale, unrewritten relative
+reference would show up broken instead of silently working. Rejected: this
+*is* how Obsidian resolves `![[img.png]]`-style attachment references — a
+bare name matches uniquely across the vault when the relative path does not
+first resolve. Narrowing it would make hyalo disagree with the editor the
+vault is written for, trading one kind of silent wrongness (a stale
+relative path happens to still "work") for another (a live relative
+reference the editor opens fine is reported broken by hyalo). The actual
+bug was that `mv` never *wrote* the rebased relative path in the first
+place; fixing that removes the scenario the narrowing would have been
+compensating for. The fallback itself is correct Obsidian semantics and
+stays exactly as it was.
+
+**Where:** `link_rewrite::{classify_outbound_target, OutboundTargetKind,
+plan_outbound_rewrites, plan_outbound_rewrites_batch}`,
+`links::extract_link_spans_with_original`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+### DEC-318 addendum: `summary.links.broken` folds in `alias_fixes` too (2026-10-04)
+
+`summary`'s link-health count (`LinkHealthSummary.broken`) was
+`report.broken.len() + report.ambiguous.len()`, omitting
+`report.alias_fixes` — the bucket a bare `[[alias]]` link lands in under
+DEC-308's default `aliases = false` (broken as Obsidian renders it, but with
+an exact rewrite `links fix` can plan). `find --broken-links` and HYALO006
+already counted it (both classify directly from `LinkResolution::Broken`,
+which alias resolution never escapes in that mode), so on the Obsidian Hub
+`summary` reported `154` while the other two reported `162` — the same eight
+alias links, present everywhere except the one place DEC-318 was supposed to
+guarantee parity. `summary.links.broken` now adds `report.alias_fixes.len()`,
+restoring the "one answer" DEC-318 promised: all three surfaces report `162`
+on the Obsidian Hub. `summary.orphans`/`dead_ends` are unaffected — a bare
+alias link was never a graph edge in either count, consistent with every
+other broken link.
+
+**Where:** `commands::summary` (the `link_health` block). See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+## DEC-353: an explicit HTML anchor (`<a id>`, `<a name>`, `<hN id>`) is a valid fragment target (2026-10-04)
+
+**Decision.** A link fragment now resolves against two things in the target
+document, not just its ATX headings: `anchor::fragment_matches_headings_or_explicit_anchors`
+also checks the file's explicit HTML anchor ids/names — `<a id="x"></a>`,
+`<a name="x"></a>`, `<h1 id="x">`…`<h6 id="x">` — matched **byte-for-byte**
+against the `id`/`name` attribute value. This is deliberately not the
+heading matcher's case-insensitive, slug-folding comparison: an HTML `id` is
+a literal identifier a browser resolves exactly, not prose. Every
+anchor-resolution surface takes the combined check: `find --broken-links`
+(including same-file anchors), HYALO008, and `links fix`'s broken-anchor
+count and deferral planning (an explicit anchor is never offered a numbered-
+heading "repair" — it already resolves, so it is simply not broken).
+
+An `IndexEntry` grows one field, `explicit_anchor_ids: Vec<String>`,
+collected by a new `ExplicitAnchorScanner` visitor run alongside the
+existing `SectionScanner` during `create-index` and every disk scan.
+**Snapshot format bumps to v5** (`SNAPSHOT_FORMAT_VERSION`): a v4 snapshot
+is refused and rebuilt from scratch, exactly like iteration 304's v4 bump
+for tokenizer v4. A defaulted, skipped-when-empty field was considered and
+rejected — `create-index` is *incremental* (DEC-339): an entry whose
+on-disk `(size, mtime)` has not changed since the last snapshot is reused
+verbatim, never re-scanned, so a v4-snapshot entry would keep reporting
+`explicit_anchor_ids: []` forever even after upgrading the binary, no
+matter how many times `create-index` ran afterward. That is exactly the
+silent staleness DEC-339 and DEC-302 exist to rule out: `summary --index`
+would under-report `broken_anchors` and `find --broken-links --index`
+would call a real `<a id="x">` target broken, with no warning that the
+index was ever wrong. `hyalo config` reports the new `snapshot_format_version`
+(5); `summary --index` reports the snapshot's own `index_format_version`.
+
+**Why.** GitHub and MDN both let a document name an anchor explicitly,
+independent of the heading that happens to render there — `id=` is the
+HTML/DOM anchor primitive underneath every rendered heading's own slug.
+Three of GitHub Docs' 374 broken anchors in the dogfood sweep were exactly
+this: a real, working anchor hyalo reported dead because no heading's slug
+matched it. The attribute match stays case-sensitive and un-decoded on
+purpose, mirroring how a browser's own fragment navigation behaves (and
+unlike the heading matcher, which already has its own, separate
+Obsidian-compatible case-folding and slug-equivalence rules — DEC-060/075).
+A single-quoted attribute (`<a id='x'>`) is a known, documented gap: every
+real-world sample in the dogfood report used double quotes, and the
+extraction regex only matches those.
+
+**Rejected: folding the id comparison the way heading slugs are folded.**
+HTML's `id`/`name` attributes are case-sensitive identifiers under the spec
+and in every browser's fragment-navigation behavior; silently accepting
+`#Legacy-Anchor` for an id written `legacy-anchor` would resolve a link
+hyalo should report broken, since the browser itself would not scroll there.
+
+**Where:** `anchor::{ExplicitAnchorScanner, explicit_anchor_ids_in_line,
+fragment_matches_explicit_anchor, fragment_matches_headings_or_explicit_anchors}`,
+`index::{IndexEntry::explicit_anchor_ids, scan_file_anchors, scan_slice_anchors}`,
+`hyalo_mdlint::profiles::link::{LinkLintContext, check_broken_anchors}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
+## DEC-354: wikilink resolution folds Unicode normalisation, not just case (2026-10-04)
+
+**Decision.** `CaseInsensitiveIndex::fold_key` — the one function every path,
+stem and alias lookup in the index keys through — now NFC-normalises a
+target with any non-ASCII byte before ASCII-lowercasing it, so `[[Café
+NFD]]` (precomposed, typed on an ordinary keyboard) resolves a file named
+`Café NFD.md` with decomposed accents (the form HFS+/APFS, and some input
+methods, actually write to disk), and vice versa. Every caller that keys
+through `fold_key` — `insert`, `lookup_unique`, `lookup_stem(_all)`,
+`lookup_all`, `insert_aliases`, `lookup_alias(_all)` — gets this for free;
+several of those previously bypassed `fold_key` entirely with their own
+inline `.to_ascii_lowercase()` and are now routed through it, which is
+itself a consistency fix (nothing in this iteration depended on the
+divergence).
+
+Two further spots needed the same equivalence so `mv` and `links fix` stay
+**unaffected** — no new rewrite proposed, no rename — for a target that
+already resolves once normalisation is accounted for:
+
+- `classify_short_form_wikilink`'s bare-stem casing check (`target ==
+  canonical_stem`) gained an `|| nfc_equal(target, canonical_stem)` escape,
+  so a pure composition difference is `ShortFormValid`, never
+  `ShortFormStemMismatch`.
+- `classify_link`'s "exact resolution succeeded, check for a casing
+  mismatch against the canonical index entry" branch gained the same
+  escape. This one matters even where `fold_key` is not consulted at all:
+  on a normalisation-insensitive filesystem (APFS, HFS+) the *literal*,
+  no-index probe already resolves a precomposed target against a decomposed
+  on-disk name — the OS does the folding, not hyalo — so without this
+  second escape the case-index cross-check compared the literal probe's
+  spelling against the canonical (decomposed) one and reported a spurious
+  mismatch, which `links fix` would have "fixed" by rewriting a clean
+  wikilink into decomposed Unicode.
+
+`nfc_equal(a, b)` normalises only when either side carries a non-ASCII
+byte, does no case-folding of its own, and is shared by both call sites.
+
+**Why.** Obsidian normalises wikilink targets to NFC before resolving them
+— consistent with how every modern editor and the DOM itself treat
+Unicode text as composition-independent. hyalo's own comparisons were
+byte-exact, so a vault with any file carrying decomposed accents (common
+after an HFS+ → APFS migration, or when a note was typed on an input
+method that composes differently) reported phantom broken links for text
+that renders identically and that Obsidian opens without complaint.
+
+**Rejected: folding non-ASCII case too, while touching this code.** Out of
+scope for this bug, and a materially bigger change — Unicode case-folding
+needs a real case-folding table (`é`/`É` are not an ASCII-range relationship),
+not the three-line composition fix this one line of the decision covers.
+`É` and `é` still key apart, exactly as before.
+
+**Where:** `case_index::{fold_key, CaseInsensitiveIndex::{insert, lookup_stem,
+lookup_stem_all, lookup_all, insert_aliases, lookup_alias, lookup_alias_all}}`,
+`discovery::{nfc_equal, classify_short_form_wikilink, classify_link}`. See
+[[iterations/iteration-311-link-repair-and-graph-parity]].
+
 ## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
 
 **Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the

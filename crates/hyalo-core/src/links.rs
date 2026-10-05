@@ -723,13 +723,20 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
             continue;
         }
 
-        // [text](target) — skip if preceded by `!` (image)
+        // [text](target), or ![text](target) (a CommonMark image, BUG-3,
+        // iteration 311, DEC-352). An image's destination is a vault
+        // reference exactly like a plain link's -- `mv`'s outbound rewriter
+        // needs its span to rebase it on a cross-directory move, which it
+        // could not do while this extractor dropped images entirely.
         // L-16: skip when the `[` is backslash-escaped.
         if bytes[i] == b'['
-            && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
-            && let Some((span, end)) = try_parse_markdown_link_span_at(cleaned, original, i)
+            && let Some((mut span, end)) = try_parse_markdown_link_span_at(cleaned, original, i)
         {
+            if i > 0 && bytes[i - 1] == b'!' && !is_escaped(bytes, i - 1) {
+                span.full_start = i - 1;
+                span.link.embed = true;
+            }
             out.push(span);
             i = end;
             continue;
@@ -3067,11 +3074,19 @@ mod tests {
     }
 
     #[test]
-    fn span_image_skipped() {
+    fn span_image_is_captured_as_a_markdown_embed() {
+        // BUG-3 (iteration 311, DEC-352): an image's destination is a vault
+        // reference exactly like a plain link's, and `mv`'s outbound
+        // rewriter needs its span to rebase it on a cross-directory move --
+        // this extractor used to drop images entirely.
         let text = "![alt](image.png) and [[real]]";
         let spans = extract_link_spans(text);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].link.target, "real");
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].link.target, "image.png");
+        assert!(spans[0].link.embed);
+        assert_eq!(spans[0].kind, LinkKind::Markdown);
+        assert_eq!(spans[1].link.target, "real");
+        assert!(!spans[1].link.embed);
     }
 
     #[test]

@@ -168,15 +168,32 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
         .get("relocations")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let case_and_relocation_fixes = case_mismatches + relocations;
-    if is_dry_run && case_and_relocation_fixes > 0 && applicable == 0 && hints.len() < MAX_HINTS {
-        let label = if case_mismatches > 0 && relocations > 0 {
-            format!("Apply {case_mismatches} case-mismatch and {relocations} relocation fixes")
-        } else if relocations > 0 {
-            format!("Apply {relocations} relocation fixes")
-        } else {
-            format!("Apply {case_mismatches} case-mismatch fixes")
-        };
+    // ALIAS-2 / DEC-308: a bare `[[alias]]` fix is written by plain `--apply`
+    // exactly like a case-mismatch or relocation fix, but was missing from
+    // this fallback entirely -- a vault whose only proposals were alias
+    // fixes got no "Apply" hint at all (iteration 311 Hints task, a sibling
+    // of UX-8's case/relocation gap).
+    let alias_fixes = data
+        .get("alias_fixes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let plain_apply_fixes = case_mismatches + relocations + alias_fixes;
+    if is_dry_run && plain_apply_fixes > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+        let mut parts = Vec::new();
+        if case_mismatches > 0 {
+            parts.push(format!("{case_mismatches} case-mismatch"));
+        }
+        if relocations > 0 {
+            parts.push(format!("{relocations} relocation"));
+        }
+        if alias_fixes > 0 {
+            parts.push(format!("{alias_fixes} alias"));
+        }
+        let label = format!(
+            "Apply {} fix{}",
+            parts.join(" and "),
+            if plain_apply_fixes == 1 { "" } else { "es" }
+        );
         hints.push(links_fix_apply_hint(ctx, label, None));
     }
 
