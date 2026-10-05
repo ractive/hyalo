@@ -8403,10 +8403,19 @@ that teach the features when they are needed, with no new subcommand or flag.
   (`hyalo find --granularity section -- Tasks`). Both are withheld when the
   query carries a flag that section mode refuses (`-e`, `--sort`, `--reverse`,
   `--fields`), so they never exit 1. A zero-result AND query whose words all
-  occur in the vault keeps the existing OR rewrite, and its description now
-  says why: every word occurs, but no file holds all of them. The many-results
-  phrase hint now offers `"a b"~5` and says that dropping `~5` gives the exact
-  phrase. Did-you-mean and the DEC-366 migration hint are unchanged.
+  occur in the vault, with no other filter, keeps the existing OR rewrite.
+  Its description now says why: every word occurs, but no file holds all of
+  them. That claim is decided in hyalo-core from the compiled query
+  (`every_required_part_occurs`: a prefix by its expansion, an identifier or a
+  dotted/hyphenated word by its tokens), never from whitespace tokens. For a
+  plain AND of 2+ words matching 10+ files, a hint now offers `"a b"~5` and
+  says that dropping `~5` gives the exact phrase. It is withheld for `OR`, a
+  negation, a group, a phrase or a `prefix*`, keeps the query's scope, and is
+  ranked ahead of the generic drill-downs; otherwise those fill the five
+  hint slots first on a real vault. The `--section` hint is withheld when the
+  heading has no significant word (every word is a stopword, a number or
+  under 3 characters), and its description says the `--section` scope is
+  dropped. Did-you-mean and the DEC-366 migration hint are unchanged.
 - *Runnable help pointers.* An error envelope whose `hint` says "see SECTION
   in" a command's `--help` also carries `hyalo <cmd> --help` (description:
   SECTION) in a new `hints` array: `-> hyalo find --help  # FACETS` in text, a
@@ -8443,15 +8452,17 @@ is taught on the many-results path instead, where it narrows the answer.
 OPERATOR TABLE and COMMON MISTAKES out of `find --help`, if agents read the
 42 KB page and got lost in it. Neither experiment showed that: the baseline
 subject never opened the page. The re-run subject (recorded in the research note)
-read its head and ran `grep` on it once, solved all four tasks in 12 commands, and
-named FIND 101 as the most useful text. Long help is reference text, and an agent that reaches it
+read its head and ran `grep` on it once, and it named FIND 101 as the most useful
+text. On the three shared tasks it used 7 commands against the baseline's 5, and it
+solved the added grammar task on the first try. Long help is reference text, and an agent that reaches it
 now meets FIND 101 first. Revisit when an experiment or dogfood transcript
 shows an agent reading past FIND 101 and choosing a wrong operator or flag
 because of what it read further down. Moving those sections then would bring
 `find --help` under ~15 KB.
 
 **Consequences.** No flag, subcommand, config key or snapshot change. The new
-`hints` key on error envelopes is additive (omitted when empty) and appears
-under `--no-hints` too, like the singular `hint` it complements. A grammar change
+`hints` key on error envelopes is additive and omitted when empty. Like every
+other `hints` array, it is empty under `--no-hints` and `--jq` (DEC-313). The
+prose `hint` stays in both cases. A grammar change
 now has to update `find_101.txt`, and gate 3h forces the skill and rule copies
 to follow.

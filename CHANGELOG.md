@@ -88,12 +88,13 @@ and this project adheres to
     `--granularity section`;
   - a PATTERN-less `--section` matching 10+ files hints section mode with
     the heading's words;
-  - a zero-result AND of words that all exist says no file holds them all;
-  - the phrase hint on a large result set offers `"a b"~5`.
+  - an unfiltered zero-result AND of words that all exist says no file holds
+    them all;
+  - a plain AND of 2+ words matching 10+ files is offered `"a b"~5`.
 
   An error envelope whose `hint` points at a `--help` section also carries a
   runnable `hyalo <cmd> --help` entry in a new `hints` array, in text and
-  JSON.
+  JSON. Like every `hints` array, it is empty under `--no-hints` and `--jq`.
 
 ### Fixed
 

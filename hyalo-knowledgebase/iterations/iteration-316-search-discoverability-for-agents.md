@@ -56,5 +56,6 @@ reserved: **DEC-367**.
 - The section-filter hint starts at 10 files, does not depend on the
   "matched more than one heading" warning, and emits
   `hyalo find --granularity section -- <heading words>`.
-- Error-envelope help pointers appear in a new `hints` array, including under
-  `--no-hints`, like the singular `hint`.
+- Error-envelope help pointers appear in a new `hints` array. After the PR #381
+  review, that array is empty under `--no-hints` and `--jq` (DEC-313); the prose
+  `hint` stays.

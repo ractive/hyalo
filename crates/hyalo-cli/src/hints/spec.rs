@@ -117,6 +117,26 @@ impl FindHintSpec {
         if self.regexp.is_some() || self.sort.is_some() || self.reverse || !self.fields.is_empty() {
             return None;
         }
+        Some(self.rewrite(ctx, pattern, keep_sections, true))
+    }
+
+    /// The same query, same scope and answer shape, with `pattern` as
+    /// PATTERN (DEC-367's `"a b"~N` hint).
+    pub(crate) fn pattern_rewrite(
+        &self,
+        ctx: &HintContext,
+        pattern: &str,
+    ) -> Result<HintBuilder, String> {
+        self.rewrite(ctx, pattern, true, self.is_section_granularity())
+    }
+
+    fn rewrite(
+        &self,
+        ctx: &HintContext,
+        pattern: &str,
+        keep_sections: bool,
+        section_mode: bool,
+    ) -> Result<HintBuilder, String> {
         let mut builder = HintBuilder::cmd("find");
         for property in &self.properties {
             builder = builder.flag_value("--property", property);
@@ -132,12 +152,20 @@ impl FindHintSpec {
                 builder = builder.flag_value("--section", section);
             }
         }
-        builder = match self.files.push(builder) {
-            Ok(builder) => builder,
-            Err(reason) => return Some(Err(reason.to_owned())),
-        };
+        builder = self.files.push(builder).map_err(str::to_owned)?;
         for glob in &self.globs {
             builder = builder.flag_value("--glob", glob);
+        }
+        if !section_mode {
+            if !self.fields.is_empty() {
+                builder = builder.flag_value("--fields", &self.fields.join(","));
+            }
+            if let Some(sort) = &self.sort {
+                builder = builder.flag_value("--sort", sort);
+                if self.reverse {
+                    builder = builder.flag("--reverse");
+                }
+            }
         }
         if let Some(limit) = self.limit {
             builder = builder.flag_value("--limit", &limit.to_string());
@@ -160,11 +188,13 @@ impl FindHintSpec {
         if self.strict {
             builder = builder.flag("--strict");
         }
-        builder = builder.flag_value("--granularity", "section");
+        if section_mode {
+            builder = builder.flag_value("--granularity", "section");
+        }
         for facet in &self.facets {
             builder = builder.flag_value("--facet", facet);
         }
-        Some(Ok(builder.with_globals(ctx).raw("--").arg(pattern)))
+        Ok(builder.with_globals(ctx).raw("--").arg(pattern))
     }
 
     /// `true` when the query asked for `--granularity section`.

@@ -28,6 +28,10 @@ pub(crate) struct OutputPipeline<'a> {
     pub jq_filter: Option<&'a str>,
     /// Optional hint context for drill-down commands.
     pub hint_ctx: Option<&'a HintContext>,
+    /// Whether an error envelope may carry runnable `hints` (DEC-367):
+    /// `false` under `--no-hints` and under `--jq`, like every other
+    /// `hints` array.
+    pub error_hints: bool,
     /// Print only the total count as a bare integer.
     pub count: bool,
     pub projection: crate::prepared::Projection,
@@ -54,6 +58,7 @@ impl OutputPipeline<'_> {
             error_format: crate::error::transport_error_format(format),
             jq_filter: jq,
             hint_ctx: None,
+            error_hints: false,
             count: false,
             projection: crate::prepared::Projection::Standard,
             internal_report: false,
@@ -153,10 +158,18 @@ impl OutputPipeline<'_> {
 
     fn write_report(
         &self,
-        report: ExecutionReport,
+        mut report: ExecutionReport,
         stdout: &mut dyn std::io::Write,
         stderr: &mut dyn std::io::Write,
     ) -> i32 {
+        // DEC-367 / DEC-313: an error's runnable pointer hints obey the same
+        // switch as every other `hints` array -- none under `--no-hints` or
+        // `--jq`. The prose `hint` stays.
+        if !self.error_hints {
+            for diagnostic in &mut report.diagnostics {
+                diagnostic.hints.clear();
+            }
+        }
         // Drain warnings before rendering: even a renderer failure must leave
         // the typed error envelope as the final framed stderr object.
         let _ = stderr.write_all(crate::warn::take_summary().as_bytes());
@@ -561,6 +574,7 @@ mod tests {
             error_format: Format::Text,
             jq_filter: None,
             hint_ctx: None,
+            error_hints: false,
             count: false,
             projection: crate::prepared::Projection::Standard,
             internal_report: false,
@@ -617,6 +631,7 @@ mod tests {
             error_format: Format::Text,
             jq_filter: None,
             hint_ctx: None,
+            error_hints: false,
             count: false,
             projection: crate::prepared::Projection::Standard,
             internal_report: false,

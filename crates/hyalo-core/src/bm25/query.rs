@@ -1727,6 +1727,30 @@ impl Bm25InvertedIndex {
     /// either, so a caller using `suggest()`'s output as a stand-in for
     /// "this word has no postings" (the "Try OR" hint did) wrongly treated
     /// a hopeless word like `qqqzzz` as if it had matches.
+    /// Whether every required part of `query` -- each operand of its
+    /// top-level AND, negations aside -- occurs somewhere in this corpus on
+    /// its own (DEC-367). `true` on a zero-result query means the parts
+    /// exist but no single document holds them all; `false` when some part
+    /// has no match at all, judged from the compiled leaves (a prefix by its
+    /// expansion, a phrase -- an identifier, a dotted or hyphenated word --
+    /// by all of its tokens), never from the raw whitespace tokens.
+    #[must_use]
+    pub fn every_required_part_occurs(&self, query: &CompiledQuery) -> bool {
+        fn occurs(index: &Bm25InvertedIndex, node: &Node) -> bool {
+            match node {
+                Node::And(c) => c.iter().all(|n| occurs(index, n)),
+                Node::Or(c) => c.iter().any(|n| occurs(index, n)),
+                Node::Not(_) => true,
+                Node::Term(stems) => stems.iter().any(|s| index.postings.contains_key(s)),
+                Node::Prefix(candidates) => !index.expand_prefix(candidates).is_empty(),
+                Node::Phrase(alternatives, _) => alternatives
+                    .iter()
+                    .any(|seq| seq.iter().all(|t| index.postings.contains_key(t))),
+            }
+        }
+        query.has_positive_leaf() && query.root.as_ref().is_some_and(|root| occurs(self, root))
+    }
+
     #[must_use]
     pub fn words_without_postings(&self, query: &CompiledQuery) -> Vec<String> {
         query
@@ -2271,6 +2295,32 @@ mod tests {
         let got = index.suggest(&compile("zzzzqqq"));
         assert!(got.is_empty(), "expected empty, got {got:?}");
         assert!(corrected_query(&compile("x"), &[]).is_none());
+    }
+
+    #[test]
+    fn every_required_part_occurs_reads_compiled_leaves() {
+        let index = corpus(&[
+            ("a.md", "snapshot here"),
+            ("b.md", "gardening tomato getUserName foo bar"),
+        ]);
+        assert!(index.every_required_part_occurs(&compile("snapshot gardening")));
+        assert!(index.every_required_part_occurs(&compile("snapshot gard*")));
+        assert!(index.every_required_part_occurs(&compile("snapshot getUserName")));
+        assert!(index.every_required_part_occurs(&compile("snapshot gardening-tomato")));
+        assert!(index.every_required_part_occurs(&compile("snapshot -tomato")));
+        for missing in [
+            "snapshot zzqx*",
+            "snapshot foo.zzqx",
+            "snapshot getZzqxName",
+            "snapshot gardening-zzqx",
+            "snapshot zzqx",
+        ] {
+            assert!(
+                !index.every_required_part_occurs(&compile(missing)),
+                "{missing}"
+            );
+        }
+        assert!(!index.every_required_part_occurs(&compile("-snapshot")));
     }
 
     #[test]

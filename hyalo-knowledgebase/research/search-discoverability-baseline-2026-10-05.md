@@ -64,15 +64,23 @@ task that needs the grammar.
 | Stems that `config*` expands to | 2 | `terms --help`; `terms config --limit 5` | config 185, configur 122, configexclud 9, configpath 9, configfil 7 |
 | Mentions snapshot and (incremental or refresh) but not MDN | 1 (+1 to verify) | Grammar from the FIND 101 block: `find "snapshot (incremental OR refresh) -mdn" --count` | 24 |
 
-12 commands in total. All four tasks were solved, including the one that needs
-the grammar.
+All four tasks were solved, including the one that needs the grammar. The rows
+add up to 9 commands: 8 attributed to tasks plus one verification run. The
+subject reported 12 in total. The other 3 were help lookups it did not assign to
+any task.
+
+**Plain comparison:** on the three tasks both runs shared, the re-run used 7
+attributed commands against the baseline's 5. That is more, not fewer: one extra
+`--help` and one zero-result filter detour. What it gained is the fourth task,
+which needs the grammar and which it solved on the first try from the FIND 101
+block.
 
 ### Comparison with the baseline
 
 | | Baseline (old binary) | Re-run (iteration 316) |
 | --- | --- | --- |
 | Tasks / solved | 3 / 3 | 4 / 4 (adds the grammar task) |
-| Commands | 5 | 12 (8 for the three shared tasks: one extra `--help`, one zero-result filter detour) |
+| Commands | 5 | 9 attributed (7 on the three shared tasks, 1 + 1 verify on the grammar task); 12 reported, counting unattributed help lookups |
 | Where the features were found | top-level help only; `find --help` never opened | top-level help, then the FIND 101 block at the top of `find --help`; zero-result hints for the filter detour |
 | Operators used | none (no task needed them) | implicit AND, `OR` inside `( )`, `-term`, all on the first try |
 | Dead ends | none | `--property status=planned --property type=iteration` (no overlap); `--fields` rejected in section mode |

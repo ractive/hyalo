@@ -312,6 +312,10 @@ pub(crate) struct SearchReport {
     /// can tell a truly hopeless word (`qqqzzz`) from one `suggest()` simply
     /// chose not to propose a correction for.
     pub(crate) zero_posting_terms: Vec<String>,
+    /// Every operand of the query's top-level AND occurs somewhere on its
+    /// own (DEC-367), decided from the compiled leaves; recorded only for a
+    /// zero-result ranked query.
+    pub(crate) every_part_occurs: bool,
     /// Positive words shaped like a removed field term (`title:x`; DEC-366)
     /// as `(field, value)`, recorded only for a zero-result ranked query so
     /// the hint layer can name the flag that replaced it.
@@ -347,6 +351,7 @@ fn score_corpus(
         report.suggestions = corpus.suggest(query);
         report.corrected_query = hyalo_core::bm25::corrected_query(query, &report.suggestions);
         report.zero_posting_terms = corpus.words_without_postings(query);
+        report.every_part_occurs = corpus.every_required_part_occurs(query);
         report.legacy_field_terms = query
             .legacy_field_terms()
             .iter()

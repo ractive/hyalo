@@ -26,6 +26,8 @@ const SECTION_FILTER_HINT_MIN_FILES: u64 = 10;
 /// Extra words the many-results proximity hint allows between the query
 /// words (`"a b"~5`, DEC-338 / DEC-367).
 const PROXIMITY_HINT_SLOP: usize = 5;
+/// The proximity hint needs more matching files than this (DEC-367).
+const PROXIMITY_HINT_MIN_FILES: u64 = 10;
 
 /// The positive words of an unquoted, ungrouped ranked PATTERN, without
 /// `-negations` and the `OR`/`AND` keywords. `None` for a pattern holding a
@@ -46,9 +48,25 @@ fn positive_bare_words(pattern: &str) -> Option<Vec<&str>> {
     )
 }
 
+/// Words too common or too short to search a heading by: a `--section The`
+/// or `--section '1.'` filter has nothing a ranked query could use.
+const HEADING_STOPWORDS: &[&str] = &[
+    "the", "and", "for", "with", "from", "into", "this", "that", "are", "was", "not", "but",
+];
+
+/// Whether a heading word is worth searching: 3+ characters, not a number,
+/// not a stopword.
+fn significant_heading_word(word: &str) -> bool {
+    word.chars().count() >= 3
+        && !word.chars().all(char::is_numeric)
+        && !HEADING_STOPWORDS
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(word))
+}
+
 /// The words of a `--section` filter, as a ranked PATTERN: `## Open
 /// questions` gives `Open questions`. `None` for a `/regex/` filter or one
-/// with no word in it.
+/// with no significant word (see [`significant_heading_word`]).
 fn heading_words(filter: &str) -> Option<String> {
     let text = filter.trim().trim_start_matches('#').trim();
     if text.len() >= 2 && text.starts_with('/') && text.ends_with('/') {
@@ -60,7 +78,10 @@ fn heading_words(filter: &str) -> Option<String> {
             !w.is_empty() && !w.eq_ignore_ascii_case("or") && !w.eq_ignore_ascii_case("and")
         })
         .collect();
-    (!words.is_empty()).then(|| words.join(" "))
+    words
+        .iter()
+        .any(|w| significant_heading_word(w))
+        .then(|| words.join(" "))
 }
 
 /// The "paragraph, not the file" teaching hint (iteration 316, DEC-367):
@@ -93,8 +114,9 @@ fn section_mode_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
         let words = heading_words(filter)?;
         (
             format!(
-                "--section matched headings in {total} files -- rank the sections that \
-                 mention '{words}' instead (the paragraph, not the file)"
+                "--section matched headings in {total} files -- rank every section that \
+                 mentions '{words}' instead; the --section scope is dropped (the paragraph, \
+                 not the file)"
             ),
             spec.section_mode_rewrite(ctx, &words, false)?,
         )
@@ -102,6 +124,40 @@ fn section_mode_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
     rewrite
         .ok()
         .map(|builder| Hint::from_builder(description, builder))
+}
+
+/// The `"a b"~5` hint (DEC-367): on a large result for a plain AND of 2+
+/// words, the same query requiring the words in order and close together.
+/// Withheld for a query holding a phrase, a group, `OR`, a negation or a
+/// `prefix*` -- none of those survive being joined into one phrase.
+fn proximity_phrase_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
+    let pattern = ctx.body_pattern.as_deref()?;
+    if total <= PROXIMITY_HINT_MIN_FILES || ctx.has_regex_search {
+        return None;
+    }
+    if pattern
+        .split_whitespace()
+        .any(|t| t.starts_with('-') || t.eq_ignore_ascii_case("or") || t.contains('*'))
+    {
+        return None;
+    }
+    let words = positive_bare_words(pattern)?;
+    if words.len() < 2 {
+        return None;
+    }
+    let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved else {
+        return None;
+    };
+    let phrase = format!("\"{}\"~{PROXIMITY_HINT_SLOP}", words.join(" "));
+    spec.pattern_rewrite(ctx, &phrase).ok().map(|builder| {
+        Hint::from_builder(
+            format!(
+                "Require the words in order, at most {PROXIMITY_HINT_SLOP} words apart (drop \
+                 ~{PROXIMITY_HINT_SLOP} for the exact phrase)"
+            ),
+            builder,
+        )
+    })
 }
 
 /// A bucket value that can be written back as `--property K=V` and mean
@@ -403,12 +459,9 @@ pub(super) fn hints_for_find(
                     && !ctx.broken_links_filter
                     && !ctx.orphan_filter
                     && !ctx.dead_end_filter;
-                let every_word_has_docs = unfiltered
-                    && words.iter().all(|w| {
-                        !ctx.zero_posting_terms
-                            .iter()
-                            .any(|t| t.eq_ignore_ascii_case(w))
-                    });
+                // Decided in core from the compiled query: a prefix, an
+                // identifier or a dotted word is not a whitespace token.
+                let every_word_has_docs = unfiltered && ctx.every_query_part_occurs;
                 let description = if every_word_has_docs {
                     "Try OR instead of AND (match any word) -- every word occurs, but no \
                      file holds them all"
@@ -452,7 +505,11 @@ pub(super) fn hints_for_find(
 
     // iteration 316 (DEC-367): teach section mode first, so the budget
     // never truncates it away.
-    hints.extend(section_mode_hint(ctx, total.unwrap_or(result_count as u64)));
+    // The proximity phrase ranks ahead of the generic drill-downs too: on a
+    // real vault those fill MAX_HINTS before it could ever appear.
+    let match_total = total.unwrap_or(result_count as u64);
+    hints.extend(section_mode_hint(ctx, match_total));
+    hints.extend(proximity_phrase_hint(ctx, match_total));
 
     // iter-267 (UX-3, reverse direction): the PATTERN was itself an existing
     // `.md` path, so this ran as a body search for that literal text. The
@@ -719,34 +776,6 @@ pub(super) fn hints_for_find(
     // Body search → regex suggestion is intentionally omitted.
     // We cannot produce a concrete regex without knowing the user's intent,
     // and a placeholder like `'pattern'` would violate our no-templates contract.
-
-    // Suggest phrase search when body search has multiple words and many results.
-    if let Some(pat) = &ctx.body_pattern {
-        let has_quotes = pat.contains('"');
-        let words: Vec<&str> = pat
-            .split_whitespace()
-            .filter(|w| {
-                !w.starts_with('-')
-                    && !w.eq_ignore_ascii_case("or")
-                    && !w.eq_ignore_ascii_case("and")
-            })
-            .collect();
-        if !has_quotes && words.len() >= 2 && result_count > 10 {
-            let remaining = MAX_HINTS.saturating_sub(hints.len());
-            if remaining > 0 {
-                // DEC-367: the slop form teaches `"…"~N`; without `~N` the
-                // quotes alone are the exact phrase.
-                let phrase = format!("\"{}\"~{PROXIMITY_HINT_SLOP}", words.join(" "));
-                hints.push(Hint::new(
-                    format!(
-                        "Require the words in order, at most {PROXIMITY_HINT_SLOP} words apart \
-                         (drop ~{PROXIMITY_HINT_SLOP} for the exact phrase)"
-                    ),
-                    build_find_command_with_pattern(ctx, &phrase),
-                ));
-            }
-        }
-    }
 
     // Suggest `links fix` when results contain broken links (e.g. from --broken-links).
     // Broken links are serialised with `"path": null` (never omitted) by find's output.
