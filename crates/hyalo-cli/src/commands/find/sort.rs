@@ -230,6 +230,7 @@ mod tests {
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
+            valid_utf8: true,
         }
     }
 

@@ -85,7 +85,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `[schema] exempt`) still apply within what survives. An explicitly named excluded file
   (`--file Templates/x.md`) is **refused**, naming the glob, rather than silently skipped.
   `hyalo config` reports the effective list as `results.scan.exclude`.
-- **Ignore files are honoured like Git** (DEC-342: `.gitignore`, `.ignore`, `.git/info/exclude`, global excludes): an ignored note is absent from every
+- **Ignore files are honoured like Git** (DEC-342, amended iter-314: `.gitignore`, `.ignore`, `.git/info/exclude`, global excludes) —
+  `.gitignore` only inside a git repository (a `.git` directory at or above the vault), like
+  ripgrep; `.ignore` applies either way: an ignored note is absent from every
   unscoped read and counted under `summary`'s `results.files.excluded`; a path you name
   (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 - **Unusable files are summarised, not spelled out** (DEC-278, iter-265): a file whose YAML
@@ -98,7 +100,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **A broken `.hyalo.toml` fails a gate** (DEC-279, iter-265): `lint`, `find --strict` and
   `views run` exit 1 when the config does not parse, because a caller acts on their exit code
   and a verdict computed without the config's `[lint] ignore` and schemas is not the vault's.
-  Every other read still answers, with the `-q`-proof warning.
+  An unloadable `[schema]` alone refuses the same three gates, plain `lint` included (DEC-362,
+  iter-314). Every other read, and a plain write without `--validate`, still answers/proceeds,
+  with the `-q`-proof warning.
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
   `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`

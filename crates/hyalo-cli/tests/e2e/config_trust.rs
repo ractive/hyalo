@@ -1057,3 +1057,120 @@ fn an_unloadable_schema_leaves_plain_writes_and_reads_alone() {
         .unwrap();
     assert_eq!(output.status.code().unwrap(), 0, "reads still answer");
 }
+
+/// UX-2 (dogfood-v0250, DEC-362): `hyalo config` already reported an `enum`
+/// without `values` as `malformed: true` alongside a `schema_error`, but
+/// `lint` (no `--strict`), `views run` and a plain `find` did not refuse —
+/// only `lint --strict` and `find --strict` did, an inconsistency the config
+/// report's own `malformed: true` did not advertise. Per DEC-279/DEC-290, the
+/// gate commands' exit code is the thing a caller trusts, so an unloadable
+/// `[schema]` must refuse them exactly like a TOML syntax error does,
+/// regardless of `--strict`; a plain, non-gate write is untouched (pinned
+/// above by `an_unloadable_schema_leaves_plain_writes_and_reads_alone`).
+fn build_unloadable_schema_project_with_view(tmp: &TempDir) {
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        md!(r#"
+dir = "."
+
+[schema.types.note.properties.status]
+type = "enum"
+
+[views.open]
+properties = ["type=note"]
+"#),
+    )
+    .unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: note\n---\n\nBody.\n",
+    );
+}
+
+#[test]
+fn lint_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project_with_view(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "lint's exit code is a gate even without --strict"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to run")
+            && stderr.contains("whose exit code is a gate")
+            && stderr.contains("enum"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn lint_strict_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project_with_view(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1);
+}
+
+#[test]
+fn find_strict_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project_with_view(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1);
+}
+
+#[test]
+fn views_run_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project_with_view(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "open", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "views run must not quietly run the view on an unusable schema"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("whose exit code is a gate"),
+        "must not be mistaken for 'unknown view': {stderr}"
+    );
+}
+
+/// A plain `find` (no `--strict`) is not a gate, so it keeps answering on the
+/// empty fallback schema — the carve-out this whole feature depends on.
+#[test]
+fn plain_find_still_answers_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project_with_view(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0);
+}

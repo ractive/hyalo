@@ -360,7 +360,8 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
                     "failed to parse YAML frontmatter: {}",
                     crate::frontmatter::friendly_parse_error(
                         &e,
-                        crate::frontmatter::MAX_FRONTMATTER_BYTES
+                        crate::frontmatter::MAX_FRONTMATTER_BYTES,
+                        yaml
                     )
                 )))
             })?
@@ -567,7 +568,8 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
                         "failed to parse YAML frontmatter: {}",
                         crate::frontmatter::friendly_parse_error(
                             &e,
-                            crate::frontmatter::MAX_FRONTMATTER_BYTES
+                            crate::frontmatter::MAX_FRONTMATTER_BYTES,
+                            y
                         )
                     )))
                 })?

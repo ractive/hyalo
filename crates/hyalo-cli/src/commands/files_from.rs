@@ -24,7 +24,9 @@ use indexmap::IndexSet;
 /// - Leading/trailing whitespace trimmed from each line (NEW-4).
 /// - Empty / whitespace-only lines (skipped silently).
 /// - Leading `./` stripped from each path.
-/// - Backslashes normalized to forward slashes (Windows-friendly).
+/// - Backslashes normalized to forward slashes **on Windows only** — off
+///   Windows a `\` is a literal filename byte, not a separator, matching
+///   `--file`'s own treatment (BUG-11 follow-up, PR #378 review).
 ///
 /// Returns an error if the source is not valid UTF-8.
 pub fn load(source: &str) -> Result<Vec<String>> {
@@ -59,8 +61,13 @@ pub fn load(source: &str) -> Result<Vec<String>> {
         .map(|line| {
             // Trim leading/trailing whitespace (spaces, tabs, etc.).
             let line = line.trim();
-            // Normalize backslashes → forward slashes.
-            let line = line.replace('\\', "/");
+            // Normalize backslashes → forward slashes — Windows-only
+            // (BUG-11 follow-up, PR #378 review): off Windows `\` is a
+            // literal filename byte, not a separator, exactly like
+            // `discovery::normalize_path` already treats a `--file`
+            // argument. `--files-from` must agree with `--file` on the same
+            // line of text (DEC-301: every selection form answers alike).
+            let line = hyalo_core::discovery::native_separator_to_forward_slash(line).into_owned();
             // Strip leading `./`.
             if let Some(rest) = line.strip_prefix("./") {
                 rest.to_owned()
@@ -358,11 +365,25 @@ mod tests {
     }
 
     #[test]
-    fn load_normalizes_backslashes() {
+    #[cfg(windows)]
+    fn load_normalizes_backslashes_on_windows() {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
         writeln!(tmp, r"sub\nested.md").unwrap();
         let result = load(tmp.path().to_str().unwrap()).unwrap();
         assert_eq!(result, vec!["sub/nested.md"]);
+    }
+
+    /// BUG-11 follow-up (PR #378 review, DEC-363): off Windows a `\` in a
+    /// `--files-from` line is a literal filename byte, like `--file`
+    /// already treats it (`discovery::normalize_path`) — not a separator to
+    /// normalize away.
+    #[test]
+    #[cfg(not(windows))]
+    fn load_keeps_a_literal_backslash_off_windows() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, r"sub\nested.md").unwrap();
+        let result = load(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, vec![r"sub\nested.md"]);
     }
 
     #[test]

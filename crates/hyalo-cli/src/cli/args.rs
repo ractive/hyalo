@@ -1263,7 +1263,9 @@ pub(crate) enum Commands {
             named path the snapshot has never seen is read from disk for that run (a note added \
             since the last create-index is never invisible); a path in neither the snapshot nor \
             the vault is still `file not found`, exit 1.\n\
-            GITIGNORE: every scan honours `.gitignore` the same way `git` does, in addition to \
+            GITIGNORE: every scan honours `.gitignore` the same way `git` does — which, like \
+            ripgrep, means only inside a git repository (a `.git` directory at or above the \
+            vault); `.ignore` is hyalo's own and applies either way (iter-314). In addition to \
             `[scan] exclude` in .hyalo.toml — a gitignored .md file never appears in an unscoped \
             `find`, is not a graph edge for --orphan/--dead-end, and is counted under \
             `hyalo summary`'s `results.files.excluded` (iteration 306). A path you NAME (--file, \
@@ -1733,12 +1735,18 @@ element matches. Repeatable (AND).\n\
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             COERCION (K=V): the value's YAML type is inferred from the text, in this order — \
-integer (`3`), float (`3.5`; scientific notation counts, so `1e3` is written as `1000.0`), \
+integer (`3`; **decimal only** — `0x1F`, `0o17`, `0b101` and `1_000` are not recognized as \
+integer input and are coerced to the string as typed, quoted on write so they round-trip as \
+that string rather than misreading as a number on the next parse), float (`3.5`; scientific \
+notation counts, so `1e3` is written as `1000.0`), \
 boolean (exactly `true` / `false`), `[[wikilink]]`, bracket list (`[a, b]`, `[]`), else string. \
 Everything else stays a string, including `null` and `~` (the four-character and one-character \
 *strings*, not a YAML null) and `K=` (the empty string). A date is a string too — \
-`due=2026-12-31` is written unquoted and re-reads as a YAML date, but hyalo only parses it as one \
-when the schema declares the property `date`/`datetime`. YAML-1.1 keys that would otherwise read \
+`due=2026-12-31` is written unquoted and re-reads as a YAML date: `--fields properties-typed` \
+already reports it as `date` from the value's own shape (an ISO 8601 date/datetime string), with \
+no `[schema]` involved. A `type = \"date\"`/`\"datetime\"` declaration on the property adds \
+*validation* on top (coercion and range checks under `--validate`) — it does not create the type \
+detection, which runs unconditionally. YAML-1.1 keys that would otherwise read \
 as booleans (`y`, `n`, `yes`, `no`, `on`, `off`) are quoted on output. There is no form that \
 writes a YAML null (DEC-314): `hyalo remove --property K` takes the key out instead.\n\
             FORMATTING: only the lines of the keys you change are rewritten. Every other \

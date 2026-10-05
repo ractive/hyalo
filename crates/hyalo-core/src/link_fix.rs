@@ -1380,7 +1380,12 @@ pub fn apply_fixes_with_catalog(
     let mut fixes_by_plan: HashMap<String, Vec<FixPlan>> = HashMap::new();
 
     for (source_rel, file_fixes) in &by_source {
-        let abs_path = dir.join(source_rel.replace('\\', "/"));
+        // BUG-11 follow-up (PR #378 review): `source_rel` is a real
+        // vault-relative OS path from the link graph, not user-typed text —
+        // a literal backslash in it (legal on macOS/Linux) must survive, not
+        // be corrupted into a path that does not exist on disk.
+        let abs_path =
+            dir.join(crate::discovery::native_separator_to_forward_slash(source_rel).as_ref());
         let (content, file_mtime) = match read_source_file(&abs_path) {
             SourceRead::Ok { content, mtime } => (content, mtime),
             SourceRead::TooLarge { size } => {
@@ -1563,7 +1568,10 @@ pub fn plan_fixes_dry_run_with_catalog(
     let mut emitted: EmittedTargets = HashMap::new();
 
     for (source_rel, file_fixes) in &by_source {
-        let abs_path = dir.join(source_rel.replace('\\', "/"));
+        // BUG-11 follow-up (PR #378 review): see the matching comment in
+        // `apply_fixes` above.
+        let abs_path =
+            dir.join(crate::discovery::native_separator_to_forward_slash(source_rel).as_ref());
         // File vanished/unreadable since detection, or exceeds the size
         // limit — every fix for it is stale/unapplied. Dry-run treats a
         // genuine I/O failure the same as a stale file (unlike `apply_fixes`,
@@ -2120,6 +2128,7 @@ mod tests {
                     bm25_tokens: None,
                     bm25_language: None,
                     bm25_tokenizer_version: None,
+                    valid_utf8: true,
                 })
                 .collect();
             entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -3819,6 +3828,7 @@ See [broken](old-name.md) here.
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
+            valid_utf8: true,
         };
 
         let mut target = make_entry("target.md", Vec::new());
@@ -3873,6 +3883,7 @@ See [broken](old-name.md) here.
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
+            valid_utf8: true,
         };
 
         let index = HeadingsMockIndex(vec![entry]);

@@ -1,8 +1,8 @@
 //! Project Codex installation. Plugin and embedded assets are checked for drift by xtask.
 use super::{
-    Report, active_profiles_from_config, capture_installation, ensure_installation_dir,
-    publish_captured_installation, relative_within, remove_captured_installation_artifact,
-    remove_dir_if_empty,
+    Report, active_profiles_from_config, capture_installation, dominant_line_ending,
+    ensure_installation_dir, publish_captured_installation, relative_within,
+    remove_captured_installation_artifact, remove_dir_if_empty, with_line_ending,
 };
 use anyhow::{Context, Result, bail};
 use std::fmt::Write as _;
@@ -275,6 +275,12 @@ pub(super) fn install(root: &Path, mode: CodexMode, report: &mut Report) -> Resu
         .transpose()
         .context("AGENTS.md is not UTF-8")?
         .unwrap_or_default();
+    // `block` is always built in memory with plain `\n`; convert it to the
+    // host file's own line ending before splicing so a CRLF AGENTS.md (BUG-12)
+    // doesn't end up with a mix of terminators, mirroring how `init --claude`
+    // already treats `.claude/CLAUDE.md` (`upsert_managed_section`).
+    let line_ending = dominant_line_ending(&old);
+    let block = with_line_ending(&block, line_ending).into_owned();
     let updated = if let Some(range) = managed_range(&old)? {
         format!("{}{}{}", &old[..range.start], block, &old[range.end..])
     } else if old.is_empty() || old.ends_with('\n') {

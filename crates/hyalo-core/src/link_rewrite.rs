@@ -218,10 +218,12 @@ pub fn plan_mv(
     if old_basename_stem != old_stem {
         backlinks.extend(graph.backlinks_ci(old_basename_stem));
     }
-    let old_rel_norm = old_rel.replace('\\', "/");
+    let old_rel_norm = crate::discovery::native_separator_to_forward_slash(old_rel).into_owned();
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
-        let source_norm = entry.source.to_string_lossy().replace('\\', "/");
+        let source_norm =
+            crate::discovery::native_separator_to_forward_slash(&entry.source.to_string_lossy())
+                .into_owned();
         if source_norm == old_rel_norm {
             continue;
         }
@@ -238,7 +240,9 @@ pub fn plan_mv(
 
     for source_rel in by_source.keys() {
         let abs_path = dir.join(source_rel);
-        let source_rel_str = source_rel.to_string_lossy().replace('\\', "/");
+        let source_rel_str =
+            crate::discovery::native_separator_to_forward_slash(&source_rel.to_string_lossy())
+                .into_owned();
         let meta = std::fs::metadata(&abs_path)
             .with_context(|| format!("failed to stat {}", abs_path.display()))?;
         let file_size = meta.len();
@@ -358,7 +362,9 @@ pub fn plan_mv(
     all_skipped_ambiguous.extend(outbound_skipped);
 
     if !outbound_replacements.is_empty() {
-        let moved_key = PathBuf::from(old_rel.replace('\\', "/"));
+        let moved_key = PathBuf::from(
+            crate::discovery::native_separator_to_forward_slash(old_rel).into_owned(),
+        );
         // The path targets the NEW location — after fs::rename, that's where
         // the file lives and where the rewritten content must be written by
         // execute_plans.
@@ -1577,9 +1583,13 @@ pub fn plan_batch_mv(
 
     for (old_rel, old_stem, new_rel, new_stem, _, _) in &rename_info {
         let backlinks = graph.backlinks_ci(old_rel);
-        let old_rel_norm = old_rel.replace('\\', "/");
+        let old_rel_norm =
+            crate::discovery::native_separator_to_forward_slash(old_rel).into_owned();
         for entry in backlinks {
-            let source_norm = entry.source.to_string_lossy().replace('\\', "/");
+            let source_norm = crate::discovery::native_separator_to_forward_slash(
+                &entry.source.to_string_lossy(),
+            )
+            .into_owned();
             if source_norm == old_rel_norm {
                 continue; // skip self
             }
@@ -1798,7 +1808,11 @@ pub fn plan_batch_mv(
     let skipped_frontmatter = scan_split_frontmatter_links_batch(
         dir,
         &split_candidates,
-        &|p: &Path| source_to_renames.contains_key(&p.to_string_lossy().replace('\\', "/")),
+        &|p: &Path| {
+            source_to_renames.contains_key(
+                crate::discovery::native_separator_to_forward_slash(&p.to_string_lossy()).as_ref(),
+            )
+        },
         &rename_info
             .iter()
             .map(|(old_rel, old_stem, ..)| (old_rel.clone(), old_stem.clone()))
@@ -2033,7 +2047,9 @@ fn scan_split_frontmatter_links_batch(
         if already_scanned(rel_path) {
             continue;
         }
-        let rel_norm = rel_path.to_string_lossy().replace('\\', "/");
+        let rel_norm =
+            crate::discovery::native_separator_to_forward_slash(&rel_path.to_string_lossy())
+                .into_owned();
         let Ok(Some(raw)) = crate::frontmatter::read_frontmatter_raw(&dir.join(rel_path)) else {
             continue;
         };
@@ -2041,7 +2057,8 @@ fn scan_split_frontmatter_links_batch(
             for (old_rel, old_stem) in moves {
                 // A moved file's own frontmatter is rewritten by the outbound
                 // pass, not reported as an unrewritable inbound link.
-                if rel_norm == old_rel.replace('\\', "/") {
+                if rel_norm == crate::discovery::native_separator_to_forward_slash(old_rel).as_ref()
+                {
                     continue;
                 }
                 if let Some(target) =

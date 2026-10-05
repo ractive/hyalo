@@ -10,7 +10,6 @@
 //! in `lint.rs` pins for the sibling regex shape error).
 
 use super::common::{hyalo_no_hints, write_md};
-use hyalo_cli::commands::lint::ExtLintOutput;
 use tempfile::TempDir;
 
 fn write_schema_toml(dir: &std::path::Path, content: &str) {
@@ -63,6 +62,27 @@ fn config_reports_malformed_and_schema_error_for_enum_without_values() {
     );
 }
 
+/// Pull the `{"error": ...}` refusal envelope out of stderr: DEC-307 renders
+/// every user-error refusal there, pretty-printed, often after a `warning:`
+/// preamble line on the same stream, so stdout stays empty for a script to
+/// tell "refused" from "answered".
+fn refusal_message(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let start = text
+        .find('{')
+        .unwrap_or_else(|| panic!("no JSON envelope in stderr: {text}"));
+    let envelope: serde_json::Value = serde_json::from_str(&text[start..])
+        .unwrap_or_else(|e| panic!("refusal must be a JSON envelope: {e}\n{text}"));
+    envelope["error"].as_str().unwrap_or_default().to_owned()
+}
+
+/// UX-2 (DEC-362, iter-314): `hyalo config` already reported this shape as
+/// `malformed: true`, but only `lint --strict` and `find --strict` refused
+/// the gate — plain `lint` exited 0 with a warn-level `SCHEMA` row, and
+/// `views run <view>` ran the view anyway. All four now behave identically
+/// to the unclosed-`[lint` (TOML syntax error) case: exit 1 with the
+/// DEC-290 "unusable .hyalo.toml" envelope naming the enum/values diagnostic,
+/// never a per-violation lint report.
 #[test]
 fn lint_strict_refuses_for_enum_without_values() {
     let tmp = vault_with_valueless_enum();
@@ -75,30 +95,101 @@ fn lint_strict_refuses_for_enum_without_values() {
     assert_eq!(
         output.status.code().unwrap(),
         1,
-        "an unloadable [schema] (enum without values) must fail --strict lint: stdout={}\nstderr={}",
+        "an unloadable [schema] (enum without values) must refuse --strict lint: stdout={}\nstderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let results: ExtLintOutput = serde_json::from_slice::<serde_json::Value>(&output.stdout)
-        .ok()
-        .and_then(|v| v.get("results").cloned())
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_else(|| panic!("stdout should parse as lint results"));
-    let malformed_messages: Vec<&str> = results
-        .files
-        .iter()
-        .flat_map(|f| f.rule_groups.iter())
-        .flat_map(|g| g.violations.iter())
-        .filter(|v| v.severity == "error")
-        .map(|v| v.message.as_str())
-        .collect();
-    assert_eq!(malformed_messages.len(), 1, "{malformed_messages:?}");
+    assert_eq!(
+        output.stdout, b"",
+        "the refusal is an error, not a result set: stdout must stay empty"
+    );
+    let message = refusal_message(&output.stderr);
     assert!(
-        malformed_messages[0].contains("invalid [schema] in .hyalo.toml"),
-        "{malformed_messages:?}"
+        message.contains("invalid [schema] in .hyalo.toml"),
+        "{message}"
     );
     assert!(
-        malformed_messages[0].contains("enum") && malformed_messages[0].contains("values"),
-        "{malformed_messages:?}"
+        message.contains("enum") && message.contains("values"),
+        "{message}"
+    );
+}
+
+/// Before iter-314, plain `lint` (no `--strict`) exited 0 here with a
+/// warn-level `SCHEMA` row — `malformed: true` meant refusal only under
+/// `--strict`. `lint`'s exit code is a gate unconditionally (DEC-279); this
+/// is the "before" bug this iteration's AC names.
+#[test]
+fn plain_lint_also_refuses_for_enum_without_values() {
+    let tmp = vault_with_valueless_enum();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "plain lint must refuse too, not just --strict: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let message = refusal_message(&output.stderr);
+    assert!(
+        message.contains("enum") && message.contains("values"),
+        "{message}"
+    );
+}
+
+/// `find --strict` already refused before this iteration; pinned here next
+/// to its three siblings so all four gate commands are asserted from one
+/// shared repro.
+#[test]
+fn find_strict_refuses_for_enum_without_values() {
+    let tmp = vault_with_valueless_enum();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1);
+    let message = refusal_message(&output.stderr);
+    assert!(
+        message.contains("enum") && message.contains("values"),
+        "{message}"
+    );
+}
+
+/// Before iter-314, `views run <view>` answered "unknown view" with the
+/// schema diagnostic only on stderr when the view name wasn't found, and ran
+/// the view to completion (exit 0) when it was — never refusing the gate.
+#[test]
+fn views_run_refuses_for_enum_without_values() {
+    let tmp = vault_with_valueless_enum();
+    // Extend the same config with a saved view so `views run` has a real
+    // target to (not) run.
+    let mut toml = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    toml.push_str("\n[views.open]\nproperties = [\"status=planned\"]\n");
+    write_schema_toml(tmp.path(), &toml);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "open", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "views run must refuse, not quietly run the view on the empty fallback schema"
+    );
+    let message = refusal_message(&output.stderr);
+    assert!(
+        message.contains("whose exit code is a gate"),
+        "must not be mistaken for 'unknown view': {message}"
+    );
+    assert!(
+        message.contains("enum") && message.contains("values"),
+        "{message}"
     );
 }

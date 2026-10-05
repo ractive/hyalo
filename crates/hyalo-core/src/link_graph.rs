@@ -137,7 +137,9 @@ impl LinkGraph {
         // DEC-308 (iter-275): the map is built regardless of `[links]
         // aliases`; the flag decides whether it *resolves* a link.
         for (full_path, rel) in files {
-            let rel_fwd = rel.to_string_lossy().replace('\\', "/");
+            let rel_fwd =
+                crate::discovery::native_separator_to_forward_slash(&rel.to_string_lossy())
+                    .into_owned();
             let declared = crate::discovery::read_aliases(full_path);
             if !declared.is_empty() {
                 case_index.insert_aliases(&rel_fwd, declared);
@@ -206,7 +208,9 @@ impl LinkGraph {
         case_index.set_aliases_enabled(discovery::link_aliases_enabled());
         case_index.set_case_insensitive_paths(case_insensitive);
         for fl in &file_links {
-            let rel_fwd = fl.source.to_string_lossy().replace('\\', "/");
+            let rel_fwd =
+                crate::discovery::native_separator_to_forward_slash(&fl.source.to_string_lossy())
+                    .into_owned();
             case_index.insert(&rel_fwd);
         }
         // iter-272 Part B: the caller already parsed every file's frontmatter
@@ -283,7 +287,8 @@ impl LinkGraph {
             .map(|entry| {
                 // Normalize to forward slashes for consistent cross-platform comparison
                 // with vault-relative paths from discovery.
-                entry.source.to_string_lossy().replace('\\', "/")
+                crate::discovery::native_separator_to_forward_slash(&entry.source.to_string_lossy())
+                    .into_owned()
             })
             .collect()
     }
@@ -481,7 +486,11 @@ impl LinkGraph {
         // full rebuild cost repeatedly.
         let mut dropped_keys: Vec<String> = Vec::new();
         self.index.retain(|key, entries| {
-            entries.retain(|e| e.source.to_string_lossy().replace('\\', "/") != rel_path);
+            entries.retain(|e| {
+                crate::discovery::native_separator_to_forward_slash(&e.source.to_string_lossy())
+                    .into_owned()
+                    != rel_path
+            });
             let keep = !entries.is_empty();
             if !keep {
                 dropped_keys.push(key.clone());
@@ -551,8 +560,9 @@ pub fn is_self_link(entry: &BacklinkEntry, target: &str) -> bool {
     } else {
         format!("{target}.md")
     };
-    let source = entry.source.to_string_lossy().replace('\\', "/");
-    source == target || source == alt
+    let source_lossy = entry.source.to_string_lossy();
+    let source = crate::discovery::native_separator_to_forward_slash(&source_lossy);
+    source.as_ref() == target || source.as_ref() == alt
 }
 
 /// Per-file link data produced by scanning a single file.

@@ -14,7 +14,10 @@ impl NormalizedTarget {
     fn resolved(relative: &str) -> Result<Self> {
         let name = RelativeName::new(relative)
             .map_err(|error| crate::error::user_error(error.to_string()))?;
-        let relative = name.as_path().to_string_lossy().replace('\\', "/");
+        let relative = hyalo_core::discovery::native_separator_to_forward_slash(
+            &name.as_path().to_string_lossy(),
+        )
+        .into_owned();
         Ok(Self { name, relative })
     }
     pub(crate) fn relative(&self) -> &str {

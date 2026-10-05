@@ -382,6 +382,154 @@ fn non_utf8_wording_does_not_leak_onto_other_read_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// BUG-19 (dogfood-v0250, iter-314, DEC-365): `find`, `summary` and `lint`
+// agree a non-UTF-8 note is a problem worth reporting, instead of `find`'s
+// plain listing and `summary` treating it as an ordinary file with nothing
+// to say while `lint` refused it outright.
+//
+// The entry itself still stays in `find`'s listing and answers `--file`
+// (DEC-301: a named path is a promise; iter-265/DEC-350's disk/index BM25
+// parity also depends on it) — only the *reporting* is unified: every scan
+// now records the same skip warning and count that only a BM25-tokenizing
+// scan recorded before, so `summary`'s `files.skipped` stops under-counting
+// and the collapsed skip line prints on a plain listing too.
+// ---------------------------------------------------------------------------
+
+/// `bad.md`'s *frontmatter* parses fine (`title: Bad`); only the body has
+/// invalid bytes, so it still appears in a plain listing — but the skip is
+/// now reported there too, not just on a search that happens to tokenize.
+///
+/// Uses the default fields (which need an exact line count, so the whole
+/// body is read) rather than `--fields file` — a pure filename listing never
+/// touches the body at all, and deliberately never flags UTF-8 validity from
+/// a prefix read that could end mid-character (see `ScanStats::valid_utf8`).
+#[test]
+fn plain_find_listing_reports_the_non_utf8_file_as_skipped() {
+    let tmp = utf8_vault();
+    let found = run_json(&tmp, &["find"]);
+    let files: Vec<&str> = found["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"bad.md") && files.contains(&"good.md"),
+        "both files are still listed as notes: {files:?}"
+    );
+
+    let quiet = run(&tmp, &["find"]);
+    let err = String::from_utf8_lossy(&quiet.stderr);
+    assert!(
+        err.contains("skipped 1 unreadable file"),
+        "a plain listing must now report the skip too: {err}"
+    );
+}
+
+#[test]
+fn summary_counts_the_non_utf8_file_as_skipped() {
+    let tmp = utf8_vault();
+    let summary = run_json(&tmp, &["summary"]);
+    assert_eq!(
+        summary["results"]["files"]["skipped"].as_u64(),
+        Some(1),
+        "summary must agree with lint that bad.md is a problem: {summary}"
+    );
+    assert_eq!(
+        summary["results"]["files"]["total"].as_u64(),
+        Some(2),
+        "both files are still counted as notes: {summary}"
+    );
+}
+
+/// A file named explicitly is still a promise (DEC-301): `--file bad.md`
+/// keeps answering with whatever metadata could be read.
+#[test]
+fn named_access_to_the_non_utf8_file_still_answers() {
+    let tmp = utf8_vault();
+    let found = run_json(
+        &tmp,
+        &["find", "--file", "bad.md", "--fields", "file,title"],
+    );
+    let results = found["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{found}");
+    assert_eq!(results[0]["file"], "bad.md");
+}
+
+/// PR #378 review (MUST-2): the non-UTF-8 skip warning follows the same
+/// convention HYALO005's unparsable-frontmatter skip already does (DEC-316) —
+/// `-q` silences it. DEC-365 is worded to say "silenced by `-q`", not
+/// "`-q`-proof"; this pins the actual behaviour.
+#[test]
+fn non_utf8_skip_warning_is_silenced_by_quiet() {
+    let tmp = utf8_vault();
+    let output = hyalo(&tmp)
+        .args(["find", "-q", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.is_empty(),
+        "-q must silence the non-UTF-8 skip warning: {stderr:?}"
+    );
+
+    // The loud (non -q) form still names it, for contrast.
+    let loud = hyalo(&tmp)
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+    let loud_stderr = String::from_utf8_lossy(&loud.stderr);
+    assert!(
+        loud_stderr.contains("skipped 1 unreadable file"),
+        "without -q the warning must still print: {loud_stderr}"
+    );
+}
+
+/// PR #378 review (MUST-2): `summary --index` and `find --index` must agree
+/// with a disk scan on a non-UTF-8 file — `IndexEntry.valid_utf8` (DEC-365,
+/// snapshot format v6) is replayed from the snapshot on load, the same way
+/// the unparsable-frontmatter skip already was (BUG-24).
+#[test]
+fn index_mode_agrees_with_disk_on_the_non_utf8_file() {
+    let tmp = utf8_vault();
+    run(&tmp, &["create-index"]);
+
+    let disk_summary = run_json(&tmp, &["summary"]);
+    let index_summary = run_json(&tmp, &["summary", "--index"]);
+    assert_eq!(
+        index_summary["results"]["files"]["skipped"], disk_summary["results"]["files"]["skipped"],
+        "summary --index must report the same `skipped` as disk: \
+         disk={disk_summary}\nindex={index_summary}"
+    );
+    assert_eq!(
+        index_summary["results"]["files"]["skipped"].as_u64(),
+        Some(1),
+        "{index_summary}"
+    );
+
+    // `find --index` warns, same as disk, and `-q` silences it the same way.
+    let loud = hyalo(&tmp)
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&loud.stderr).contains("skipped 1 unreadable file"),
+        "find --index must warn like disk does: {}",
+        String::from_utf8_lossy(&loud.stderr)
+    );
+    let quiet = hyalo(&tmp)
+        .args(["find", "--index", "-q", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&quiet.stderr).is_empty(),
+        "-q must silence it under --index too: {}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // UX-5: `new` has no --property, and now says where properties are set
 // ---------------------------------------------------------------------------
 

@@ -94,6 +94,26 @@ pub struct IndexEntry {
     /// stale tokens that can never match a since-fixed query shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bm25_tokenizer_version: Option<u32>,
+    /// Whether this file's body is valid UTF-8 (BUG-19, DEC-365, PR #378
+    /// review). Populated from [`crate::scanner::ScanStats::valid_utf8`] at
+    /// scan time; defaults to `true` for an entry written before this field
+    /// existed — exactly why a pre-v6 snapshot is refused and rebuilt
+    /// (`SNAPSHOT_FORMAT_VERSION`), rather than trusted to carry a correct
+    /// default for a file that was actually invalid. `summary --index` and
+    /// `find --index` read this directly instead of re-deriving it from
+    /// "no BM25 tokens", so they agree with a disk scan without re-reading
+    /// the file.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub valid_utf8: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires the by-ref shape
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 // ---------------------------------------------------------------------------
@@ -193,13 +213,23 @@ pub struct ScannedIndexBuild {
     pub warnings: Vec<IndexWarning>,
 }
 
-/// Why an invalid-UTF-8 file is reported by `create-index` (iter-265, BUG-14).
+/// Why an invalid-UTF-8 file is reported, by `create-index` (iter-265,
+/// BUG-14) and now by every other scan too (BUG-19, iter-314): the entry is
+/// still indexed as a note — its frontmatter, tags, links and headings are
+/// all readable — but it is excluded from full-text search, both the BM25
+/// corpus (so `--index` scores match the disk scan's, which drops the file
+/// outright) and `find <text>`'s own read.
 ///
-/// It is still indexed as a note — its frontmatter, tags, links and headings
-/// are all readable — but it is excluded from the BM25 corpus so `--index`
-/// scores match the disk scan's, which drops the file outright.
-pub const INVALID_UTF8_INDEX_MESSAGE: &str = "invalid UTF-8 — indexed as a note but excluded from full-text search, \
-     matching the disk scan (`find -e` still matches it lossily)";
+/// Byte-identical to `hyalo_cli::commands::INVALID_UTF8_CONSEQUENCE` on
+/// purpose (that crate cannot be a dependency here, so the text is
+/// duplicated rather than shared) — `record_skip`'s one-report-per-path dedup
+/// means only one of the two call sites' message survives for a given file
+/// within a single command run, and UX-3 (iter-255) already established
+/// that the two surfaces must say the same thing regardless of which one
+/// gets there first. `invalid_utf8_wording_is_shared_by_read_and_find` in
+/// `tests/e2e/iteration255_followups.rs` pins the hyalo-cli side; keep both
+/// in sync.
+pub const INVALID_UTF8_INDEX_MESSAGE: &str = "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
 
 impl ScannedIndex {
     /// Build an index by scanning a list of files from disk.
@@ -232,6 +262,7 @@ impl ScannedIndex {
     /// `reuse` when it returns one instead of scanning the file (incremental
     /// `create-index`, DEC-339). A reused entry contributes its stored links
     /// to the graph exactly as a fresh scan would.
+    #[allow(clippy::type_complexity)]
     pub fn build_reusing(
         files: &[(PathBuf, String)],
         site_prefix: Option<&str>,
@@ -248,6 +279,9 @@ impl ScannedIndex {
         // list is the opt-out that narrows the scan back to named properties.
         let fm_link_props: Option<Vec<String>> =
             options.frontmatter_link_props.map(<[String]>::to_vec);
+        // `None` means "reused, no fresh `ScanStats` available" (the
+        // incremental path trusts the entry it was handed); `Some(valid)` is
+        // this scan's own [`scanner::ScanStats::valid_utf8`] (BUG-19, iter-314).
         let scan = |(full_path, rel_path): &(std::path::PathBuf, String)| {
             if let Some(entry) = reuse(full_path, rel_path) {
                 let links = options.scan_body.then(|| FileLinks {
@@ -255,36 +289,55 @@ impl ScannedIndex {
                     links: entry.links.clone(),
                     self_anchors: entry.self_anchors.clone(),
                 });
-                return Ok((entry, links));
+                return Ok((entry, links, None));
             }
-            scan_one_file(
+            let (entry, links, valid_utf8) = scan_one_file(
                 full_path,
                 rel_path,
                 options.scan_body,
                 options.bm25_tokenize,
                 default_language,
                 fm_link_props.as_deref(),
-            )
+            )?;
+            Ok((entry, links, Some(valid_utf8)))
         };
+        // `Option<bool>` is this scan's own `ScanStats::valid_utf8` (BUG-19,
+        // iter-314) when freshly scanned, or `None` when the entry was
+        // reused and no fresh value exists to report.
         #[cfg(not(miri))]
-        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> =
+        let results: Vec<Result<(IndexEntry, Option<FileLinks>, Option<bool>)>> =
             files.par_iter().map(scan).collect();
         #[cfg(miri)]
-        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> =
+        let results: Vec<Result<(IndexEntry, Option<FileLinks>, Option<bool>)>> =
             files.iter().map(scan).collect();
 
         for (i, result) in results.into_iter().enumerate() {
             match result {
-                Ok((entry, file_links)) => {
-                    // A BM25 build that produced no tokens for a file means the
-                    // file was not valid UTF-8 (iter-265, BUG-14) — it stays in
-                    // the index as a note but out of the search corpus, exactly
-                    // as the disk scan has it. Report it so `create-index`
-                    // `warnings` accounts for the difference.
-                    if options.bm25_tokenize
-                        && entry.bm25_tokens.is_none()
-                        && entry.bm25_tokenizer_version.is_none()
-                    {
+                Ok((entry, file_links, valid_utf8)) => {
+                    // A file whose bytes are not valid UTF-8 (BUG-19,
+                    // iter-314, amends iter-265's BM25-only reporting): every
+                    // caller of `ScannedIndex::build*` now gets the warning,
+                    // not just a BM25-tokenizing one, so `find`'s plain
+                    // listing and `summary` record and count the same skip
+                    // `lint` already refuses the file over, instead of
+                    // treating it as perfectly readable with nothing to
+                    // report. DEC-301 ("a named path is a promise") and
+                    // iter-265's disk/index BM25 parity both depend on the
+                    // entry itself staying in `entries` exactly as before —
+                    // only the *reporting* is unified here, not what is
+                    // readable. A reused entry (`valid_utf8: None`, the
+                    // incremental `create-index` refresh path, which has no
+                    // fresh `ScanStats` to consult) falls back to the
+                    // original BM25-only signal.
+                    let invalid_utf8 = match valid_utf8 {
+                        Some(valid) => !valid,
+                        None => {
+                            options.bm25_tokenize
+                                && entry.bm25_tokens.is_none()
+                                && entry.bm25_tokenizer_version.is_none()
+                        }
+                    };
+                    if invalid_utf8 {
                         warnings.push(IndexWarning {
                             rel_path: entry.rel_path.clone(),
                             message: INVALID_UTF8_INDEX_MESSAGE.to_owned(),
@@ -406,7 +459,12 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | reused by an incremental `create-index` (unchanged
 /// |   |          | size/mtime) never gets anchor ids scanned, so a v4
 /// |   |          | snapshot must be rebuilt rather than silently trusted |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
+/// | 6 | iter-314 | `IndexEntry.valid_utf8` (DEC-365, PR #378 review) — a v5
+/// |   |          | entry reused by an incremental `create-index` would
+/// |   |          | default to `true` (assumed valid) forever, so
+/// |   |          | `summary --index`/`find --index` would permanently miss
+/// |   |          | a non-UTF-8 file a disk scan already reports |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 6;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -1130,7 +1188,7 @@ impl SnapshotIndex {
         };
         let fm_props = self.effective_frontmatter_link_props();
         let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
-        let (entry, file_links) = scan_one_file(
+        let (entry, file_links, _) = scan_one_file(
             full_path,
             rel_path,
             true,
@@ -1280,7 +1338,7 @@ impl SnapshotIndex {
             }
             let _opened = root.open(&name)?;
             let (tokenize, language) = self.bm25_scan_args(rel);
-            let (entry, _) = scan_one_file(
+            let (entry, _, _) = scan_one_file(
                 &dir.join(rel),
                 rel,
                 true,
@@ -1353,7 +1411,7 @@ impl SnapshotIndex {
                     )
                 });
             match scanned {
-                Ok((entry, _)) => replacements.push(entry),
+                Ok((entry, _, _)) => replacements.push(entry),
                 Err(error) => {
                     let unparsable = frontmatter::is_parse_error(&error);
                     removals.push(rel.clone());
@@ -1442,7 +1500,7 @@ impl SnapshotIndex {
     ) -> Result<Option<FileLinks>> {
         let fm_props = self.effective_frontmatter_link_props();
         let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
-        let (entry, file_links) = scan_one_file(
+        let (entry, file_links, _) = scan_one_file(
             full_path,
             rel_path,
             true,
@@ -1521,7 +1579,7 @@ impl SnapshotIndex {
         let full_path = dir.join(new_rel);
         let fm_props = self.effective_frontmatter_link_props();
         let (bm25_tokenize, default_language) = self.bm25_scan_args(old_rel);
-        let (entry, _file_links) = scan_one_file(
+        let (entry, _file_links, _) = scan_one_file(
             &full_path,
             new_rel,
             true,
@@ -1817,6 +1875,24 @@ impl SnapshotIndex {
                  run `hyalo lint --rule HYALO005` for the diagnostic)",
                 crate::warn::SkipKind::Frontmatter,
             );
+        }
+        // BUG-19 follow-up (DEC-365, PR #378 review): replay each entry's own
+        // `valid_utf8` the same way, so `summary --index` and `find --index`
+        // agree with a disk scan on a non-UTF-8 file instead of reporting
+        // `skipped: 0` for one the disk `warning:` line already counts. No
+        // header-level list is needed — `valid_utf8` already lives on the
+        // entry itself (unlike the frontmatter diagnostic, which would
+        // bloat every index for a message `lint` already prints better).
+        if replay {
+            for entry in &entries {
+                if !entry.valid_utf8 {
+                    crate::warn::record_skip(
+                        entry.rel_path.clone(),
+                        "invalid UTF-8 (recorded when the index was built)",
+                        crate::warn::SkipKind::Other,
+                    );
+                }
+            }
         }
         // DEC-342 (iteration 306 review): replay the build-time gitignore-drop
         // count so `summary --index` reports the same `excluded` figure as a
@@ -2873,7 +2949,7 @@ pub(crate) fn scan_one_file(
     bm25_tokenize: bool,
     default_language: Option<&str>,
     frontmatter_link_props: Option<&[String]>,
-) -> Result<(IndexEntry, Option<FileLinks>)> {
+) -> Result<(IndexEntry, Option<FileLinks>, bool)> {
     let mut fm = FrontmatterCollector::new(scan_body);
     let mut body_collector = BodyCollector::new(bm25_tokenize);
 
@@ -2993,9 +3069,10 @@ pub(crate) fn scan_one_file(
         bm25_tokens,
         bm25_language,
         bm25_tokenizer_version,
+        valid_utf8: stats.valid_utf8,
     };
 
-    Ok((entry, file_links))
+    Ok((entry, file_links, stats.valid_utf8))
 }
 
 /// Format a file's last-modified time as ISO 8601 UTC.
@@ -3454,7 +3531,7 @@ Plain prose ends here.
         let full = tmp.path().join(rel);
         fs::write(&full, content).unwrap();
 
-        let (entry, _) = scan_one_file(&full, rel, true, true, None, None).unwrap();
+        let (entry, _, _) = scan_one_file(&full, rel, true, true, None, None).unwrap();
         let indexed = entry.bm25_tokens.clone().unwrap();
 
         let title = entry
@@ -3924,6 +4001,7 @@ Content.
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
+            valid_utf8: true,
         }
     }
 

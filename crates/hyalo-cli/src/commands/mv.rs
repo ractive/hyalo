@@ -484,7 +484,12 @@ fn resolve_batch_sources(
 
     for abs_path in glob_filtered {
         let rel = match abs_path.strip_prefix(dir) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+            // BUG-11 (iter-314): `r` is a real OS path from the filesystem
+            // walk, not user-typed glob text — a literal backslash in it
+            // (legal on macOS/Linux) must survive, not be corrupted into a
+            // bogus extra path segment that then fails to open.
+            Ok(r) => hyalo_core::discovery::native_separator_to_forward_slash(&r.to_string_lossy())
+                .into_owned(),
             Err(_) => continue,
         };
 
@@ -1747,7 +1752,11 @@ fn strip_vault_prefix_from_destination(dir: &Path, to_arg: &str) -> String {
         crate::warn::warn_llm_misuse(dir);
         return rel;
     }
-    let normalized = to_arg.replace('\\', "/");
+    // BUG-11 follow-up (PR #378 review): `to_arg` is user-typed destination
+    // text, exactly like `--file` — a `\` off Windows is a literal filename
+    // byte, not a separator, so `--to 'notes/x\y.md'` must keep its real
+    // name (DEC-363).
+    let normalized = hyalo_core::discovery::native_separator_to_forward_slash(to_arg).into_owned();
     let mut trimmed = normalized.as_str();
     while let Some(rest) = trimmed.strip_prefix("./") {
         trimmed = rest;
@@ -1785,7 +1794,8 @@ fn destination_names_vault_root(dir: &Path, bare: &str) -> bool {
     if bare.is_empty() {
         return false;
     }
-    let dir_str = dir.to_string_lossy().replace('\\', "/");
+    let dir_str = hyalo_core::discovery::native_separator_to_forward_slash(&dir.to_string_lossy())
+        .into_owned();
     if bare == dir_str.trim_end_matches('/') {
         return true;
     }
@@ -1813,7 +1823,9 @@ fn validate_target_single(
     format: Format,
     on_conflict: ConflictPolicy,
 ) -> std::result::Result<TargetSingle, Box<CommandOutcome>> {
-    let normalized = to_arg.replace('\\', "/");
+    // BUG-11 follow-up (PR #378 review): `to_arg` is user-typed text, same
+    // treatment as `strip_vault_prefix_from_destination` above.
+    let normalized = hyalo_core::discovery::native_separator_to_forward_slash(to_arg).into_owned();
     // MV-4 (iter-275): strip *every* leading `./`, and read a bare `.` as the
     // vault root. `--to ./` used to normalise to the empty string and then be
     // rebuilt as `/a.md`, which the traversal guard below rejected as
@@ -1999,7 +2011,9 @@ fn validate_batch_target(
     to_arg: &str,
     format: Format,
 ) -> std::result::Result<String, Box<CommandOutcome>> {
-    let replaced = to_arg.replace('\\', "/");
+    // BUG-11 follow-up (PR #378 review): `to_arg` is user-typed text, same
+    // treatment as the single-file destination validators above.
+    let replaced = hyalo_core::discovery::native_separator_to_forward_slash(to_arg).into_owned();
     let mut trimmed = replaced.as_str();
     while let Some(rest) = trimmed.strip_prefix("./") {
         trimmed = rest;
