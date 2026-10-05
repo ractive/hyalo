@@ -40,7 +40,7 @@ claims drifts. DEC numbers reserved for this iteration: **DEC-362 to DEC-365**.
 - [x] `notes/back\\slash.md` in a batch `mv --dry-run` exits 0 or 1, never 2
 - [x] A CRLF `AGENTS.md` stays pure CRLF through `init --codex`, re-init and `deinit`
 - [x] `d: 1_000` reads as `{"type": "text"}`; `hyalo set f.md --property x=1_000` round-trips unchanged
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, `check-jq-recipes` and `hyalo lint --strict` green; CI green on three platforms
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, `check-jq-recipes` and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
