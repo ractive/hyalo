@@ -5,11 +5,6 @@ date: 2026-10-05
 status: planned
 priority: low
 origin: "iter-313 PR #379 review follow-up, 2026-10-05"
-tags: [backlog, index, snapshot]
-related:
-  - "[[iterations/iteration-313-index-honesty-and-result-caps]]"
-  - "[[decision-log#DEC-361]]"
-  - "[[decision-log#DEC-339]]"
 ---
 
 # Snapshot created_at is stamped before the serialize-and-rename tail
@@ -39,3 +34,8 @@ Stamp `created_at` after the rename, or compare directory mtimes against
 `max(created_at, mtime of the index file itself)`. Add a test that fakes a slow
 tail (set the index file's mtime two seconds after `created_at`) and asserts
 the next `create-index` is still a no-op and `tree_moved` stays false.
+
+## Related
+
+- [[iterations/iteration-313-index-honesty-and-result-caps]] (DEC-361, the no-op guard this interacts with)
+- [[decision-log]] — DEC-339 (racily-clean rescan) and DEC-361
