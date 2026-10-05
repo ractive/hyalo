@@ -187,9 +187,13 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
     // negating the whole vocabulary is not a typo or a missing filter, so
     // say that instead of sending the reader to `properties summary`.
     if ctx.pure_negative_query {
-        notice.push_str(
-            "\na query needs at least one positive term — negating every word excludes everything",
-        );
+        notice.push_str(if query_has_negation(ctx) {
+            "\na query needs at least one positive term — negating every word excludes everything"
+        } else {
+            // `find -- 'OR'`, `find -- '-'`: nothing was negated; there was
+            // simply no word left to search for (iteration 318).
+            "\nthe query is empty — it holds no word to search for"
+        });
     }
     if let Some(files) = ctx.section_file_matches.filter(|n| *n > 0) {
         let _ = write!(
@@ -258,6 +262,18 @@ fn slop_phrase_parts(pattern: &str) -> Option<(Vec<String>, usize)> {
     let words: Vec<String> = inner.split_whitespace().map(str::to_owned).collect();
     (words.len() >= 2 && words.iter().all(|w| w.chars().all(char::is_alphanumeric)))
         .then_some((words, slop))
+}
+
+/// Whether the PATTERN negates an actual word (`-draft`, `-"a b"`,
+/// `-(x)`), as opposed to holding only operators or a bare `-`.
+fn query_has_negation(ctx: &HintContext) -> bool {
+    ctx.body_pattern.as_deref().is_some_and(|pattern| {
+        pattern.split_whitespace().any(|token| {
+            token
+                .strip_prefix('-')
+                .is_some_and(|rest| rest.chars().any(char::is_alphanumeric))
+        })
+    })
 }
 
 /// Prefix for the zero-result `hyalo terms` hint: the first three letters of
@@ -809,7 +825,11 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         // everything by construction -- the notice above already says what
         // will (zero_result_notice).
         hints.push(Hint::new(
-            "Add a positive word or phrase to search for alongside the exclusion",
+            if query_has_negation(ctx) {
+                "Add a positive word or phrase to search for alongside the exclusion"
+            } else {
+                "Add a word or phrase to search for"
+            },
             HintBuilder::cmd("find --help").build(),
         ));
     } else if hints.is_empty() {
@@ -989,6 +1009,7 @@ mod tests {
         // replaced with the real explanation.
         let mut ctx = ctx_with(&[], &[]);
         ctx.pure_negative_query = true;
+        ctx.body_pattern = Some("-snapshot".to_owned());
         let notice = zero_result_notice(&ctx);
         assert!(
             notice.contains("needs at least one positive term"),

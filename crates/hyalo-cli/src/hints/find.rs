@@ -720,6 +720,11 @@ pub(super) fn hints_for_find(
     let facet_hints = facet_drilldown_hints(ctx);
     if !facet_hints.is_empty() {
         hints.truncate(MAX_HINTS);
+        // A facet drill-down can be the very command a generic "Narrow by
+        // tag" hint already offers; keep the facet's (it names the bucket's
+        // count from the facet the user asked for) and drop the duplicate
+        // (iteration 318).
+        hints.retain(|h| h.cmd.is_empty() || !facet_hints.iter().any(|f| f.cmd == h.cmd));
         hints.extend(facet_hints);
         return hints;
     }

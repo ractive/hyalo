@@ -494,3 +494,108 @@ fn zero_result_slop_phrase_hints_the_and_form_and_the_reversed_order() {
     );
     assert_eq!(reversed.1, "1");
 }
+
+// ---------------------------------------------------------------------------
+// Small correctness fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dry_run_refuses_under_an_unusable_config_like_the_real_run() {
+    let tmp = vault();
+    std::fs::write(tmp.path().join(".hyalo.toml"), "[views.open\n").unwrap();
+    for args in [
+        &["set", "a.md", "--property", "x=1", "--dry-run"][..],
+        &["remove", "a.md", "--property", "title", "--dry-run"][..],
+    ] {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unusable .hyalo.toml"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn set_keeps_an_integer_past_i64_exact() {
+    let tmp = vault();
+    let (code, _, err) = run_text(
+        tmp.path(),
+        &["set", "a.md", "--property", "p=9223372036854775808"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(text.contains("p: 9223372036854775808\n"), "{text}");
+}
+
+#[test]
+fn existing_dot_path_gets_no_did_you_mean_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "m.md", "---\nmap:\n  b: 0x1F\n---\nx\n");
+    let (code, _, err) = run_text(
+        tmp.path(),
+        &["find", "--property", "map.b=99", "--format", "text"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did you mean"), "{err}");
+}
+
+#[test]
+fn operator_only_or_dash_only_query_says_the_query_is_empty() {
+    let tmp = vault();
+    let text = |pattern: &str| {
+        let out = super::common::hyalo()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["find", "--format", "text", "--", pattern])
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    for pattern in ["OR", "-"] {
+        let out = text(pattern);
+        assert!(out.contains("the query is empty"), "{pattern}: {out}");
+        assert!(!out.contains("negating every word"), "{pattern}: {out}");
+    }
+    let out = text("-snapshot");
+    assert!(out.contains("negating every word"), "{out}");
+}
+
+#[test]
+fn facet_drilldown_and_narrow_by_tag_hint_are_not_duplicated() {
+    let tmp = TempDir::new().unwrap();
+    for i in 0..4 {
+        write_md(
+            tmp.path(),
+            &format!("n{i}.md"),
+            "---\ntags: [search, iteration]\n---\nx\n",
+        );
+    }
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find", "--tag", "search", "--facet", "tags", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    let before = cmds.len();
+    cmds.sort_unstable();
+    cmds.dedup();
+    assert_eq!(cmds.len(), before, "{json}");
+}

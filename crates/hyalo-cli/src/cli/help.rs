@@ -191,7 +191,9 @@ pub(crate) fn global_pointer(hide_dir: bool, hide_format: bool) -> String {
 /// bare listing form, never for `show`/`set`/`remove`, so the group page says
 /// so instead of advertising it for every subcommand listed above it.
 pub(crate) fn applicable_global_pointer(command: &clap::Command, pointer: &str) -> String {
-    let group = command.get_subcommands().any(|sub| sub.get_name() != "help");
+    let group = command
+        .get_subcommands()
+        .any(|sub| sub.get_name() != "help");
     pointer
         .split_whitespace()
         .map(|word| {

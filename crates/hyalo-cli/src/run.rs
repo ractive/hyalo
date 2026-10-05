@@ -1327,10 +1327,11 @@ fn run_inner() -> Result<(), AppError> {
             .then_some(config.schema_invalid.as_deref())
             .flatten()
     });
+    let previews_write = config.malformed.is_some() && cli.command.previews_write();
     if let Some(diagnostic) = gate_diagnostic
-        && (cli.command.writes() || cli.command.gates())
+        && (cli.command.writes() || cli.command.gates() || previews_write)
     {
-        let kind = if cli.command.writes() {
+        let kind = if cli.command.writes() || previews_write {
             "a mutating command"
         } else {
             "a command whose exit code is a gate"

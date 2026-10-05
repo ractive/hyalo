@@ -573,7 +573,9 @@ fn malformed_config_still_warns_on_a_read_under_quiet() {
 }
 
 #[test]
-fn malformed_config_allows_a_dry_run() {
+/// Iteration 318 reverses iter-201's carve-out: a dry run predicts the real
+/// run, so it refuses exactly like the write it previews.
+fn malformed_config_refuses_a_dry_run_like_the_real_run() {
     let tmp = TempDir::new().unwrap();
     build_malformed_project(&tmp);
 
@@ -593,8 +595,8 @@ fn malformed_config_allows_a_dry_run() {
         .unwrap();
     assert_eq!(
         output.status.code(),
-        Some(0),
-        "--dry-run writes nothing, so it is not gated; stderr: {}",
+        Some(1),
+        "a dry run predicts the real run; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

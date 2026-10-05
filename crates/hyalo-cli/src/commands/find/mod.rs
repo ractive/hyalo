@@ -2297,8 +2297,15 @@ fn fuzzy_suggest_property_keys(index: &dyn VaultIndex, property_filters: &[Prope
         let Some(queried_key) = filter.key() else {
             continue;
         };
-        // Skip if there's an exact key match (value mismatch, not a key typo).
-        if all_keys.iter().any(|k| k == queried_key) {
+        // Skip if there's an exact key match (value mismatch, not a key typo),
+        // including a dot-path that resolves in some file (`map.b`), which
+        // is no typo of the top-level key `map` (iteration 318).
+        if all_keys.iter().any(|k| k == queried_key)
+            || (queried_key.contains('.')
+                && index.entries().iter().any(|e| {
+                    hyalo_core::filter::resolve_prop(&e.properties, queried_key).is_some()
+                }))
+        {
             continue;
         }
         let mut ranked: Vec<(usize, &str)> = all_keys
