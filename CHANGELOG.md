@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-05
+
 ### Added
 
 - Explicitly opt-in Jev classification in the `hyalo-tidy` skill for Codex,
@@ -424,8 +426,9 @@ and this project adheres to
   envelope naming the schema diagnostic (DEC-362, dogfood-v0250 UX-2). A
   plain write (`set` without `--validate`, `mv`, `task toggle`, …) is
   unaffected and keeps writing on the empty fallback schema.
-- **Breaking: snapshot format 4.** Indexes written by earlier versions are
-  refused (the run falls back to a disk scan with a warning); rebuild them with
+- **Breaking: snapshot format 7** (0.24.1 wrote format 3). Indexes written by
+  earlier versions are refused — the run falls back to a disk scan with a
+  warning that `-q` does not silence — so rebuild them with
   `hyalo create-index`. Ranked scores and result order change: title, heading
   and tag hits now outweigh body hits, close terms get a bonus, hyphenated and
   camelCase/snake_case words add their parts as tokens, and a term found only
@@ -433,28 +436,12 @@ and this project adheres to
   identifiers are asymmetric: `"call get"` misses `call getUserName` (use
   `"call get"~1`) while `"name here"` matches, and a quoted
   `"error-handling"` misses prose `error handling` while the bare term finds
-  it. Ligatures such as `Œ` do not fold to `oe`.
-- **Breaking: snapshot format 5.** Indexes written by earlier versions
-  (including this release's own 4) are refused (the run falls back to a disk
-  scan with a warning); rebuild them with `hyalo create-index`. A v4 entry
-  reused as-is by incremental `create-index` (unchanged size/mtime) would
-  otherwise never gain the new `explicit_anchor_ids` field, so an upgraded
-  binary serving an un-rebuilt v4 index would silently under-report broken
-  heading anchors (DEC-353).
-- **Breaking: snapshot format 6.** Indexes written by earlier versions
-  (including this release's own 5) are refused and rebuilt, for the same
-  reason as the v5 bump above: a v5 entry reused as-is by incremental
-  `create-index` would never gain the new `IndexEntry.valid_utf8` field, so
-  `summary --index`/`find --index` would permanently miss a non-UTF-8 file
-  a disk scan already reports (DEC-365).
-- **Breaking: snapshot format 7.** Indexes written by earlier versions
-  (including this release's own 6) are refused and rebuilt. The header now
-  carries its own `[search] code_blocks` setting so the mismatch check
-  above can read it directly instead of forcing the BM25 section's lazy
-  decode — that decode alone was roughly doubling the cost of every
-  `--index` read on MDN (`summary` 0.46 s → 0.85 s, `tags` 0.35 s → 0.72 s,
-  `properties` 0.36 s → 0.73 s, a plain `find --property` 0.35 s → 0.73 s),
-  for commands that otherwise never touch BM25 at all (DEC-360 amended).
+  it. Ligatures such as `Œ` do not fold to `oe`. The snapshot also records
+  what later fixes need to answer from the index exactly as from disk: each
+  note's explicit HTML anchor ids (DEC-353), whether its bytes are valid
+  UTF-8 (DEC-365), and, in the header, the `[search] code_blocks` setting it
+  was built under, so a mismatch is detected without decoding the search
+  section (DEC-360).
 - `create-index`'s no-op short-circuit (`written: false`) closes three
   more cases that used to slip through: a file dropped by its own broken
   frontmatter (still "discovered" on disk, so not `removed`, but no longer
@@ -3226,7 +3213,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/ractive/hyalo/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/ractive/hyalo/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/ractive/hyalo/compare/v0.21.0...v0.24.0
 [0.23.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.23.0
