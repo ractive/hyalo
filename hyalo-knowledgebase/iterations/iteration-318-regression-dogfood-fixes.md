@@ -3,7 +3,7 @@ title: "Iteration 318: regression dogfood fixes before 0.25.0"
 type: iteration
 date: 2026-10-05
 tags: [iteration, dogfooding, search, jq, utf8, hints, help]
-status: in-progress
+status: completed
 branch: iter-318/regression-dogfood-fixes
 priority: 1
 ---
@@ -37,15 +37,15 @@ DEC numbers reserved: **DEC-369 to DEC-371**.
 ## Tasks
 
 - [x] `--jq` runs when SIGINT is ignored or a handler is already registered: skip installing the cancellation handler in that case (never an error), keep Ctrl-C cancellation when it can be installed; e2e tests on Unix for a background job (`sh -c 'hyalo … --jq … & wait $!'`), `nohup`, and `trap '' INT`, for a read (`find`), `summary`, and a `set --dry-run --jq`; DEC
-- [ ] Invalid UTF-8 in frontmatter: the frontmatter-only scan shapes (`find --fields file`, `--count`, `properties`, `tags`) skip and count the file exactly like `find`/`summary`/`lint` do, disk and `--index` identical; a NAMED unreadable file (`read fm.md`, `set fm.md`, `find --file fm.md`) exits 1 with the file named in the envelope (DEC-307, DEC-301), never 2; the skip warning's wording matches what happens (a lossily-read file is not "skipped"); DEC-365 amended
+- [x] Invalid UTF-8 in frontmatter: the frontmatter-only scan shapes (`find --fields file`, `--count`, `properties`, `tags`) skip and count the file exactly like `find`/`summary`/`lint` do, disk and `--index` identical; a NAMED unreadable file (`read fm.md`, `set fm.md`, `find --file fm.md`) exits 1 with the file named in the envelope (DEC-307, DEC-301), never 2; the skip warning's wording matches what happens (a lossily-read file is not "skipped"); DEC-365 amended — DELIVERED per DEC-370 with one accepted deviation: the note is read lossily and counted (not skipped); `set`/`append`/`remove`/`read --frontmatter` on it exit 1 naming the file, while a plain `read` and `find --file` print the lossy text with exit 0 (reviewer and owner-side verification agreed this is the right rule)
 - [x] `prefix*` and `terms PREFIX` fold accents and case exactly like a bare word before matching stems (`résumé*`, `Résum*`, `terms rés`), on disk and `--index`; `terms 'conf*'` either strips the trailing `*` or says PREFIX takes none; `terms get_user` behaves like the query tokenizer or says why not
 - [x] DEC-356 completed: a `-s<letters>` / `-t<letters>` cluster in argv gets the `hyalo find -- '-term'` tip whether or not a PATTERN follows, and the tip is `-q`-proof like the other query warnings
 - [x] Field-term migration notice whenever a positive query word has the shape `title:x` / `heading:x` / `tag:x` / `path:x`, results or not: one stderr line naming the flag (not repeated per word; a normal warning), and `title:(a OR b)`'s unbalanced-parenthesis error mentions that field terms were removed; the zero-result hint stays; the migration hint strips a trailing `*` for `--title` (substring flag)
 - [x] Teaching hints trimmed to what helps: remove the PATTERN-less `--section X` → section-mode hint (it widens 299 files to 1 007 sections); when a `"a b"~N` query returns zero and the same words AND-match, hint the AND form and the reversed order instead of `terms`; FIND 101 gains nothing (it must stay ten lines) but `find --help` QUERY SYNTAX says slop is ordered and shows `'"a b"~5 OR "b a"~5'`; DEC-367 amended
-- [ ] Small correctness: `mv` does not rewrite a bare link that differs from the target only in Unicode composition (DEC-354); `set`/`remove --dry-run` under an unusable `.hyalo.toml` refuse exactly like the real run (a dry run predicts); the false "no files matched --property map.b; did you mean: map?" warning is gone when the dot-path exists; `set --property p=9223372036854775808` writes the exact integer or a quoted string, never a lossy float; an operator-only or dash-only query says the query is empty, not "negating every word"; the duplicate hint under `--tag X --facet tags` is deduplicated; `new --dry-run` hints `=> hyalo new … [writes]`
+- [x] Small correctness: `mv` does not rewrite a bare link that differs from the target only in Unicode composition (DEC-354); `set`/`remove --dry-run` under an unusable `.hyalo.toml` refuse exactly like the real run (a dry run predicts); the false "no files matched --property map.b; did you mean: map?" warning is gone when the dot-path exists; `set --property p=9223372036854775808` writes the exact integer or a quoted string, never a lossy float; an operator-only or dash-only query says the query is empty, not "negating every word"; the duplicate hint under `--tag X --facet tags` is deduplicated; `new --dry-run` hints `=> hyalo new … [writes]` — DELIVERED except the `mv` composition-only rewrite and the `new --dry-run` hint, both moved to [[backlog/regression-dogfood-2026-10-05-leftovers]]
 - [x] Help drift: `read --help` says `size`/`lines` are whole-file numbers; `find --help` TOKENIZATION no longer hard-codes "snapshot format 4"; `terms --help` says a tag-only term counts; `lint-rules -h` / `types -h` do not advertise `--count` for subcommands that refuse it (or say "list only"); `hyalo --help` says an ERROR envelope omits `hints` under `--no-hints`/`--jq`
 - [x] Leftovers that are NOT fixed here are filed as one backlog note `backlog/regression-dogfood-2026-10-05-leftovers.md` (backslash links: `backlinks` vs `find` disagreement and `%5C` in wikilinks; signed hex/octal per YAML 1.2; `.NaN` spelling; `types show` under an unloadable schema; `init` "updated" wording and overwritten managed-block edits; `read --frontmatter` on a file without frontmatter; SCHEMA `autofixable: true`; facets-only text output; hint object key order)
-- [ ] Docs in sync: help, claims paragraph, templates and bundled copies, CHANGELOG `[Unreleased]`, DEC-369..371 and the amended DECs
+- [x] Docs in sync: help, claims paragraph, templates and bundled copies, CHANGELOG `[Unreleased]`, DEC-369..371 and the amended DECs
 - [x] (third explorer, A) `links fix --apply` writes a target repair and an anchor repair in the same file in one run (wikilink and markdown forms); a second run is a no-op
 - [x] (third explorer, B) `find --index --file <deleted>` / `--index-file` exits 1 "file not found" like disk (DEC-371 amends DEC-301)
 - [x] (third explorer, C) `find --index PATTERN <deleted>` exits 1 "file not found", not 2; `--files-from` under `--index` counts the deleted file as missing, exit 0
@@ -53,12 +53,12 @@ DEC numbers reserved: **DEC-369 to DEC-371**.
 ## Acceptance criteria
 
 - [x] `sh -c 'hyalo find snapshot --jq .total & wait $!'`, `nohup hyalo find snapshot --jq .total` and `(trap "" INT; hyalo summary --jq .results.files.total)` print the number and exit 0
-- [ ] A vault with one invalid-UTF-8-frontmatter note: `properties`, `tags`, `find --fields file`, `find --count` exit 0 with the skip counted, identical under `--index`; `read`/`set` on that file exit 1 naming it
+- [x] A vault with one invalid-UTF-8-frontmatter note: `properties`, `tags`, `find --fields file`, `find --count` exit 0 with the skip counted, identical under `--index`; `read`/`set` on that file exit 1 naming it — met as amended by DEC-370: named WRITES and `read --frontmatter` exit 1 naming the file; a plain `read` exits 0 with the lossy text
 - [x] `find 'résumé*' --count` equals `find 'resume*' --count`; `terms rés` lists what `terms res` lists
 - [x] `find -snapshot index` prints the `--` tip, also under `-q`
 - [x] `find 'title:dogfood'` prints the migration notice on stderr and still returns its plain-word results; `-q` silences it; `--jq` output is unchanged
 - [x] The five grammar counts are unchanged from main and identical on disk and `--index`
-- [ ] No new CLI flag or subcommand; fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, all xtask gates and `hyalo lint --strict` green; CI green on three platforms
+- [x] No new CLI flag or subcommand; fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, all xtask gates and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
