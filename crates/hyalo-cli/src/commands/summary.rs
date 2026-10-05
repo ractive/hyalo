@@ -140,6 +140,28 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
     }
 }
 
+/// What `summary --index` should say about the snapshot this run attempted
+/// to use, independent of whether `index` (below) ended up being that
+/// snapshot or a disk scan (iter-313, BUG-7/BUG-8).
+///
+/// `Default` is the right value whenever no `--index`/`--index-file` was
+/// given at all: every field stays `None` and `VaultSummary` omits them, the
+/// pre-iter-313 shape.
+#[derive(Debug, Default, Clone)]
+pub struct IndexReport {
+    /// The snapshot's own format version — populated whether it was used or
+    /// refused, so a refused snapshot no longer reports `null` here.
+    pub format_version: Option<u32>,
+    /// The snapshot's own effective `[search] code_blocks` setting
+    /// (`"index"` or `"skip"`), when known. `None` for a format-version
+    /// refusal — an old snapshot's BM25 section may not decode under the
+    /// current types at all.
+    pub code_blocks: Option<String>,
+    /// `"index"` when a snapshot answered this summary, `"disk"` when a scan
+    /// did (including every refusal case).
+    pub source: Option<String>,
+}
+
 /// Show a high-level vault summary using pre-scanned index data.
 ///
 /// The rendered text report no longer opens with a `kb dir: <path>` banner
@@ -167,6 +189,7 @@ pub fn summary(
     schema: &SchemaConfig,
     lint_ignore: &[String],
     case_index: Option<&CaseInsensitiveIndex>,
+    index_report: IndexReport,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
     let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
@@ -500,7 +523,11 @@ pub fn summary(
         tasks,
         recent_files,
         schema: lint_summary,
-        index_format_version: index.snapshot_format_version(),
+        index_format_version: index_report
+            .format_version
+            .or_else(|| index.snapshot_format_version()),
+        code_blocks: index_report.code_blocks,
+        source: index_report.source,
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
@@ -578,6 +605,7 @@ mod tests {
             &schema,
             &[],  // lint_ignore
             None, // case_index
+            IndexReport::default(),
         )
     }
 
@@ -1051,6 +1079,7 @@ Body.
                 &schema,
                 &[],
                 None,
+                IndexReport::default(),
             )
             .unwrap(),
         );
@@ -1154,6 +1183,7 @@ Body.
                 &schema,
                 &[],
                 None,
+                IndexReport::default(),
             )
             .unwrap(),
         );
@@ -1385,6 +1415,45 @@ pub(crate) fn run(
             // Summary always reports orphan/dead-end counts which rely on
             // wikilink resolution, so the stem map is always needed.
             let ci = maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
+            // iter-313 (BUG-7/BUG-8): tell `summary --index` where its data
+            // actually came from. A snapshot in active use reports its own
+            // code_blocks; a refused one (too old, or a code_blocks
+            // mismatch) still reports its format version and whichever of
+            // its own settings `run.rs` managed to read before discarding
+            // it; `--index`/`--index-file` with nothing to refuse (no
+            // snapshot file) still names the disk fallback.
+            let index_report = if let Some(snap) = snapshot_index.as_ref() {
+                IndexReport {
+                    format_version: Some(snap.format_version()),
+                    // Read from the header (DEC-360 amended, PR #379
+                    // review), never `bm25_index()`: that forces the lazy
+                    // BM25 section's full decode just to read this one bool,
+                    // which `summary --index` otherwise never touches.
+                    code_blocks: Some(
+                        if snap.skip_code_blocks() {
+                            "skip"
+                        } else {
+                            "index"
+                        }
+                        .to_owned(),
+                    ),
+                    source: Some("index".to_owned()),
+                }
+            } else if let Some(refused) = ctx.refused_index.clone() {
+                IndexReport {
+                    format_version: Some(refused.format_version),
+                    code_blocks: refused.code_blocks,
+                    source: Some("disk".to_owned()),
+                }
+            } else if ctx.index_path.is_some() {
+                IndexReport {
+                    format_version: None,
+                    code_blocks: None,
+                    source: Some("disk".to_owned()),
+                }
+            } else {
+                IndexReport::default()
+            };
             summary(
                 dir,
                 resolved.as_index(),
@@ -1396,6 +1465,7 @@ pub(crate) fn run(
                 ctx.schema,
                 ctx.lint_ignore,
                 ci.as_ref(),
+                index_report,
             )
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),

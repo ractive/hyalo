@@ -1386,6 +1386,85 @@ fn vault_summary_filter_handles_schema_and_index_format_version_combinations() {
 }
 
 #[test]
+fn vault_summary_filter_handles_code_blocks_and_source_combinations() {
+    // iter-313 (PR #379 review): `code_blocks`/`source` joined `schema`/
+    // `index_format_version` as independently-optional VaultSummary keys.
+    // `is_vault_summary_signature` replaced the old enumerated-signature
+    // match for exactly this reason (it was already at 4 arms and about to
+    // need 8) — pin that every real on-disk shape still routes to the
+    // compact renderer.
+    let base = json!({
+        "dir": ".",
+        "files": {"total": 1, "skipped": 0, "excluded": 0, "directories": []},
+        "orphans": 0,
+        "dead_ends": 0,
+        "links": {"total": 0, "broken": 0},
+        "properties": [],
+        "tags": {"tags": [], "total": 0},
+        "status": [],
+        "tasks": {"done": 0, "total": 0},
+        "recent_files": [],
+    });
+    // source alone (--index named nothing to refuse: no snapshot file at all).
+    let mut source_only = base.clone();
+    source_only["source"] = json!("disk");
+    // format_version + source (an old-format snapshot refused before its
+    // code_blocks could be read).
+    let mut format_and_source = base.clone();
+    format_and_source["index_format_version"] = json!(3);
+    format_and_source["source"] = json!("disk");
+    // all three (a successful --index run, or one refused specifically for
+    // a code_blocks mismatch).
+    let mut all_three = format_and_source.clone();
+    all_three["code_blocks"] = json!("index");
+    // all three plus schema.
+    let mut everything = all_three.clone();
+    everything["schema"] = json!({"errors": 0, "warnings": 0});
+
+    for val in [&source_only, &format_and_source, &all_three, &everything] {
+        let sig = {
+            let map = val.as_object().unwrap();
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(",")
+        };
+        assert!(
+            lookup_filter(&sig).is_some(),
+            "lookup_filter has no entry for VaultSummary signature {sig:?}"
+        );
+        let formatted = fmt(val);
+        assert!(
+            formatted.starts_with("Files: 1"),
+            "signature {sig:?} fell back to the generic dump: {formatted:?}"
+        );
+        assert!(
+            !formatted.contains("source") && !formatted.contains("code_blocks"),
+            "signature {sig:?} rendered via the generic fallback: {formatted:?}"
+        );
+    }
+}
+
+#[test]
+fn vault_summary_filter_rejects_missing_or_unknown_keys() {
+    // `is_vault_summary_signature` must still refuse: missing one of the
+    // ten always-present keys (even though every optional key it wants is
+    // there), and an extra key that is not on its allowed-optionals list —
+    // neither is a real `VaultSummary`, and both must fall through to the
+    // generic key:value dump rather than silently matching.
+    let missing_one = "dir,files,links,orphans,properties,recent_files,source,status,tags,tasks"; // no dead_ends
+    assert!(
+        lookup_filter(missing_one).is_none(),
+        "a signature missing a required key must not match VaultSummary"
+    );
+    let unknown_extra =
+        "dead_ends,dir,files,links,orphans,properties,recent_files,status,tags,tasks,unknown_field";
+    assert!(
+        lookup_filter(unknown_extra).is_none(),
+        "a signature with an unrecognized extra key must not match VaultSummary"
+    );
+}
+
+#[test]
 fn format_value_as_text_array_of_typed_objects() {
     let val = json!([
         {"path": "a.md", "tags": ["rust"]},

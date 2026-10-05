@@ -260,6 +260,18 @@ pub struct HintContext {
     /// on a vault that had been indexed minutes earlier — telling the reader
     /// to rebuild what they already had instead of to pass `--index`.
     pub snapshot_on_disk: bool,
+    /// `true` when [`Self::snapshot_on_disk`] is also true and a cheap mtime
+    /// probe — the on-disk index file's own mtime against the vault's newest
+    /// directory mtime (DEC-280's class of cheap check, never a full decode)
+    /// — suggests the snapshot is behind the vault (iter-313). Catches an
+    /// added, removed or renamed file (any of which move a directory's own
+    /// mtime); misses an in-place content edit that leaves every directory
+    /// mtime untouched — exactly the gap DEC-302's per-entry comparison
+    /// closes, at the cost of one `stat` per indexed file, too much to pay
+    /// just to word a hint on a vault the size this hint exists for. Hint
+    /// wording only: never a correctness gate, and `--index` itself still
+    /// runs DEC-302's authoritative check regardless of what this says.
+    pub snapshot_stale: bool,
     /// Vault-relative path the `find` PATTERN itself names, when the pattern
     /// is a `.md` path that exists in the vault.
     ///
@@ -414,6 +426,7 @@ impl HintContext {
             quiet: false,
             has_index: false,
             snapshot_on_disk: false,
+            snapshot_stale: false,
             pattern_names_a_file: None,
             fields: vec![],
             sort: None,
@@ -622,6 +635,20 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     // `find`, `lint` and `summary` get a runnable command with their scope
     // preserved; the remaining eligible commands get advice only, because
     // they take no `--index` flag of their own.
+    if ctx.snapshot_on_disk && ctx.snapshot_stale {
+        // iter-313: the cheap mtime probe thinks the on-disk snapshot is
+        // behind the vault — pointing at `--index` here would serve a stale
+        // answer with no warning until the authoritative per-entry check in
+        // `run.rs` catches up. Point at refreshing it instead.
+        let description = format!(
+            "Command took {elapsed} ms — the on-disk `.hyalo-index` snapshot looks stale; \
+             refresh it"
+        );
+        return Some(Hint::new(
+            description,
+            build_command_no_glob(ctx, &["create-index"]),
+        ));
+    }
     if ctx.snapshot_on_disk {
         let description = format!(
             "Command took {elapsed} ms — a `.hyalo-index` snapshot exists in the vault; \

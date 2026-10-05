@@ -56,6 +56,31 @@ type Envelope<T> = {
      * Total matching items before pagination, omitted for non-list commands.
      */
     total?: number;
+    /**
+     * `true` when `--limit` (or the default cap) cut `results` short of
+     * `total`; omitted (never `false`) when nothing was cut, when the
+     * command reports no `total` at all, or when `results` is not itself a
+     * bare JSON array (iter-313, UX-5; scope narrowed in the PR #379
+     * review).
+     *
+     * Computed generically from the envelope shape — any command whose
+     * `results` is a bare JSON array is eligible: `find`, `properties`,
+     * `tags`, `terms` and `task toggle`/`task set` actually cap theirs
+     * (default 50, `--limit` to change it), so this is where `true`
+     * appears in practice. `lint-rules list`/`types list`/`views list`
+     * also return a bare array but accept no `--limit` at all (small fixed
+     * catalogs, always returned whole), so the field is eligible there too
+     * but never fires. A command whose `results` is an *object* that
+     * happens to carry an array field (`backlinks`: `{file, backlinks:
+     * [...]}`; `lint`'s `files`) is not eligible at all — `total` there
+     * already describes the whole run, not `results` itself, and the
+     * nested array's own cap is each command's own business (`lint` has
+     * `files_truncated` for exactly this). A script piping `find
+     * --broken-links --format json` through `--limit 0`-less defaults used
+     * to have no way to tell a sampled answer from a complete one short of
+     * comparing `results | length` to `total` itself.
+     */
+    truncated?: boolean;
 };
 
 type IndexDisposition = "not_used" | "updated" | "invalidated" | "update_failed";
@@ -110,6 +135,31 @@ type MutationReportEnvelope<T> = {
      * Total matching items before pagination, omitted for non-list commands.
      */
     total?: number;
+    /**
+     * `true` when `--limit` (or the default cap) cut `results` short of
+     * `total`; omitted (never `false`) when nothing was cut, when the
+     * command reports no `total` at all, or when `results` is not itself a
+     * bare JSON array (iter-313, UX-5; scope narrowed in the PR #379
+     * review).
+     *
+     * Computed generically from the envelope shape — any command whose
+     * `results` is a bare JSON array is eligible: `find`, `properties`,
+     * `tags`, `terms` and `task toggle`/`task set` actually cap theirs
+     * (default 50, `--limit` to change it), so this is where `true`
+     * appears in practice. `lint-rules list`/`types list`/`views list`
+     * also return a bare array but accept no `--limit` at all (small fixed
+     * catalogs, always returned whole), so the field is eligible there too
+     * but never fires. A command whose `results` is an *object* that
+     * happens to carry an array field (`backlinks`: `{file, backlinks:
+     * [...]}`; `lint`'s `files`) is not eligible at all — `total` there
+     * already describes the whole run, not `results` itself, and the
+     * nested array's own cap is each command's own business (`lint` has
+     * `files_truncated` for exactly this). A script piping `find
+     * --broken-links --format json` through `--limit 0`-less defaults used
+     * to have no way to tell a sampled answer from a complete one short of
+     * comparing `results | length` to `total` itself.
+     */
+    truncated?: boolean;
 };
 
 /**
@@ -2102,6 +2152,31 @@ type SearchEnvelope<T> = {
      * Total matching items before pagination, omitted for non-list commands.
      */
     total?: number;
+    /**
+     * `true` when `--limit` (or the default cap) cut `results` short of
+     * `total`; omitted (never `false`) when nothing was cut, when the
+     * command reports no `total` at all, or when `results` is not itself a
+     * bare JSON array (iter-313, UX-5; scope narrowed in the PR #379
+     * review).
+     *
+     * Computed generically from the envelope shape — any command whose
+     * `results` is a bare JSON array is eligible: `find`, `properties`,
+     * `tags`, `terms` and `task toggle`/`task set` actually cap theirs
+     * (default 50, `--limit` to change it), so this is where `true`
+     * appears in practice. `lint-rules list`/`types list`/`views list`
+     * also return a bare array but accept no `--limit` at all (small fixed
+     * catalogs, always returned whole), so the field is eligible there too
+     * but never fires. A command whose `results` is an *object* that
+     * happens to carry an array field (`backlinks`: `{file, backlinks:
+     * [...]}`; `lint`'s `files`) is not eligible at all — `total` there
+     * already describes the whole run, not `results` itself, and the
+     * nested array's own cap is each command's own business (`lint` has
+     * `files_truncated` for exactly this). A script piping `find
+     * --broken-links --format json` through `--limit 0`-less defaults used
+     * to have no way to tell a sampled answer from a complete one short of
+     * comparing `results | length` to `total` itself.
+     */
+    truncated?: boolean;
 };
 
 /**
@@ -2587,13 +2662,31 @@ type VaultSummary = {
     schema?: LintSummary;
     /**
      * Format version of the snapshot this summary was computed from
-     * (G4 / BUG-12, iter-276), or `None` for a disk scan.
+     * (G4 / BUG-12, iter-276), omitted for a disk scan.
      *
      * An agent comparing it against `hyalo config`'s
      * `snapshot_format_version` can tell an index this binary would refuse
      * from a fresh one *before* the numbers disagree.
      */
     index_format_version?: number;
+    /**
+     * The snapshot's own effective `[search] code_blocks` setting
+     * (`"index"` or `"skip"`) — present whenever a snapshot was consulted,
+     * including one this run refused (BUG-8, iter-313), so a mismatch
+     * against `hyalo config`'s reported setting is visible without
+     * re-running under `-q` stripped off. Omitted when no snapshot was
+     * requested, or a refused one's code_blocks could not be determined
+     * (an old-format refusal, BUG-7).
+     */
+    code_blocks?: string;
+    /**
+     * Where this summary's data actually came from: `"index"` when a
+     * snapshot was loaded and used, `"disk"` when a scan answered —
+     * including every case where `--index`/`--index-file` was given but the
+     * snapshot was refused (iter-313). Omitted when no snapshot was
+     * requested at all.
+     */
+    source?: string;
 };
 
 type ApiGlobals = Partial<Omit<GlobalArgs, "format" | "jq" | "count" | "hints" | "no_hints">>;

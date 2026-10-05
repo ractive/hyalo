@@ -1072,6 +1072,11 @@ pub(crate) enum Commands {
     /// Search and filter markdown files — returns one compact object per file (see --fields)
     #[command(long_about = "Search and filter markdown files.\n\n\
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
+            `truncated: true` appears whenever --limit (or the default 50-item cap) cut \
+            `results` short of `total`; the key is omitted (never `false`) when nothing was \
+            cut. --jq and --count already lift the default cap on their own (only an \
+            explicit --limit still caps under them), so `truncated` matters mainly under \
+            plain --format json; pass --limit 0 for the full set either way.\n\
             Each item carries the default field set — file, modified, size, lines, title, \
             properties, tags — where `title` is promoted out of `properties`. \
             --fields adds sections, tasks, links, backlinks and properties-typed, and an \
@@ -1461,6 +1466,15 @@ pub(crate) enum Commands {
             `files_with_violations` \u{2014} the same key `lint` uses for that quantity.\n\
             Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X, \
             or --broken-links --strict to fail CI on any finding.\n\
+            INDEX REPORTING: with --index/--index-file, the result also carries \
+            `index_format_version` (the snapshot's own format version), `code_blocks` \
+            (its effective `[search] code_blocks` setting, \"index\" or \"skip\") and \
+            `source` (\"index\" when the snapshot actually answered this summary, \"disk\" \
+            when a scan did instead). All three are populated even when the snapshot was \
+            refused \u{2014} too old a format, or a `code_blocks` mismatch with this run's \
+            config \u{2014} so the fallback is visible in JSON rather than reporting \
+            `index_format_version: null`. Omitted entirely when --index/--index-file was not \
+            given.\n\
             PROPERTIES: one entry per property NAME. A property that appears with more than one\n\
             type across the vault reads `type: \"mixed\"` with a `mixed_types` breakdown\n\
             ('published (103: 79 datetime, 24 date)' in text), so the property count is the\n\
@@ -2011,21 +2025,28 @@ Repeatable (AND).\n\
             dropped when it was built, and which patterns dropped them, so\n\
             `summary --index` reports the same `excluded` figure as a disk scan.\n\
             Change the patterns and the recorded count is ignored — rebuild.\n\
-            INCREMENTAL: when the output already holds a format-4 snapshot of this\n\
-            vault built with the same tokenizer and [search] code_blocks, unchanged\n\
+            INCREMENTAL: when the output already holds a current-format snapshot of\n\
+            this vault built with the same tokenizer and [search] code_blocks, unchanged\n\
             files (same size and mtime) keep their entries, changed and new files\n\
             are re-scanned, removed ones dropped, and the search postings patched\n\
             in place. A file whose mtime is not safely older than the previous\n\
             snapshot (\"racily clean\": a same-size rewrite in the same second keeps\n\
-            its mtime) is always re-scanned. --force rebuilds from scratch. Older\n\
-            snapshots are always rebuilt.\n\n\
+            its mtime) is always re-scanned. --force rebuilds from scratch and never\n\
+            loads the old snapshot first — it is discarded by construction, not read\n\
+            and thrown away. Older or mismatched snapshots are always rebuilt. A rerun\n\
+            that changed nothing at all (every entry reused, nothing removed,\n\
+            attachments unchanged) leaves the snapshot file itself untouched rather\n\
+            than rewriting byte-for-byte identical content (`results.written: false`).\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\
             statistics. On large vaults, create an index for this workload.\n\n\
             OUTPUT: JSON object with `path`, `files_indexed`, `warnings`, `reused`,\n\
-            `refreshed`, `skipped`, `removed` and `rebuilt` (true for a from-scratch build).\n\
-            SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir).\n\n\
+            `refreshed`, `skipped`, `removed`, `rebuilt` (true for a from-scratch build)\n\
+            and `written` (false only for a no-op rerun that left the snapshot\n\
+            untouched).\n\
+            SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir),\n\
+            except on a no-op rerun (`written: false`).\n\n\
             FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
             accepted as a synonym for `-o / --output PATH`. If both are provided and\n\
             differ, create-index returns an error.\n\n\

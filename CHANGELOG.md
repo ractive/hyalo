@@ -242,6 +242,34 @@ and this project adheres to
 - `find` marks a file it did not read because it exceeds the size limit with
   `skipped: "oversized"`, and a named oversized file is announced on stderr
   even under `-q` (DEC-301); `lint` reports such a file once instead of twice.
+- The "index format is older than this binary" refusal warning now survives
+  `-q`, like the missing-index fallback it sits beside (it used to go
+  through `warn::warn` instead of `warn::warn_always`).
+- A snapshot built under a different `[search] code_blocks` than the
+  current config is now refused outright — like an old-format snapshot —
+  with a `-q`-proof warning naming both settings, instead of silently
+  falling back to disk with no message at all (DEC-360).
+- `summary --index` reports `index_format_version`, `code_blocks` and
+  `source` ("index" or "disk") even when the snapshot it found was refused,
+  instead of `index_format_version: null` with no way to tell a disk
+  fallback had happened.
+- A no-op `create-index` rerun (every entry reused, nothing removed,
+  attachments unchanged) leaves the snapshot file untouched instead of
+  rewriting byte-for-byte identical content; `--force` already discarded
+  the previous snapshot by construction rather than loading and throwing it
+  away, confirmed and documented (DEC-361).
+- Any command whose JSON `results` is a bare array (`find`, `properties`,
+  `tags`, `terms`, `task toggle`/`task set`) now carries `truncated: true`
+  when `--limit` (or the default 50-item cap) cut it short of `total`; the
+  key is omitted (never `false`) otherwise, and is never present on a
+  command whose `results` is an object (`backlinks`, `lint`, `summary`).
+  `--jq`/`--count` already lift the default cap on their own and were not
+  affected; `--limit 0` on the shipped `.results[]`-walking recipes was
+  redundant but harmless, left in place.
+- `summary` hints "refresh the stale index" instead of "create an index"
+  when a `.hyalo-index` already exists and a cheap mtime probe suggests it
+  is behind the vault; when it exists and looks current, the hint points at
+  `--index` instead of rebuilding what is already there.
 - A filename containing a literal backslash (`notes/back\slash.md`, legal on
   macOS and Linux) is reported, looked up by `--file`, matched by `--glob`,
   and moved/set in a batch under its real name, instead of being silently
@@ -335,6 +363,29 @@ and this project adheres to
   `create-index` would never gain the new `IndexEntry.valid_utf8` field, so
   `summary --index`/`find --index` would permanently miss a non-UTF-8 file
   a disk scan already reports (DEC-365).
+- **Breaking: snapshot format 7.** Indexes written by earlier versions
+  (including this release's own 6) are refused and rebuilt. The header now
+  carries its own `[search] code_blocks` setting so the mismatch check
+  above can read it directly instead of forcing the BM25 section's lazy
+  decode — that decode alone was roughly doubling the cost of every
+  `--index` read on MDN (`summary` 0.46 s → 0.85 s, `tags` 0.35 s → 0.72 s,
+  `properties` 0.36 s → 0.73 s, a plain `find --property` 0.35 s → 0.73 s),
+  for commands that otherwise never touch BM25 at all (DEC-360 amended).
+- `create-index`'s no-op short-circuit (`written: false`) closes three
+  more cases that used to slip through: a file dropped by its own broken
+  frontmatter (still "discovered" on disk, so not `removed`, but no longer
+  scannable — caught by also requiring the previous snapshot's entry count
+  to match); a newly unparsable note (caught by comparing the previous
+  header's own frontmatter-skip list against this run's); and a newly
+  `.ignore`d or `[scan] exclude`d file (caught by comparing the previous
+  header's `scan_excluded`/`scan_exclude`/`gitignore_dropped` against this
+  run's freshly-walked counts). It is now also gated on the same cheap
+  directory-mtime probe DEC-280 already trusts: a directory that moved and
+  moved back (`mkdir x; rmdir x`) with no file actually changing used to
+  leave the snapshot's `created_at` (and its own on-disk mtime) behind the
+  vault forever, re-tripping DEC-339's tree-moved check on every future
+  `--index` read and leaving the stale-index hint stuck on (DEC-361
+  amended).
 - The Codex plugin manifest now carries the hyalo version (0.24.1, was 0.1.0)
   and is checked against the workspace version like the other manifests
   (DEC-340).

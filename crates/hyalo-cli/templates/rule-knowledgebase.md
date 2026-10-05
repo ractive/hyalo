@@ -356,7 +356,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **A wikilink target is trimmed, and `.` segments are dropped** (DEC-310, iter-275):
   `[[ a ]]`, `[[a ]]`, `[[a #Heading]]` and `[[./a]]` all resolve to `a.md` and report
   `path: "a.md"`. `target` still carries what the author wrote; `mv` rewrites the trimmed form.
-- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)#\(.fragment // "")"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
+- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --limit 0 --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)#\(.fragment // "")"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: `hyalo lint --rule HYALO008 --strict` checks heading fragments on resolved targets, including same-file and configured frontmatter links. HYALO008 is enabled as a warning by default; rule configuration and explicit severity overrides apply. HYALO006 remains target-only. Scoped lint keeps vault-wide target context. `hyalo find --broken-links --strict` remains a combined target/anchor gate. Summary counts broken targets and broken anchors separately, including when both occur in the vault.
 - **Review numbered-heading repairs**: `hyalo links fix --dry-run` proposes `#success-metrics` → `#6-success-metrics` only when removing a leading decimal section number identifies one eligible heading. The preview includes source line, fragments, and heading; ambiguous or unsupported cases carry a deferral reason. Ordinary `links fix --apply` writes safe target and anchor repairs together. `--apply-fuzzy` additionally enables eligible fuzzy file-target repairs; broader fuzzy anchor guesses remain advisory. Broken counts describe the pre-apply scan; anchor plans and apply outcomes are separate from file-target repairs. Source spans and target headings are revalidated before writing.
 - **Resolve explicit hidden targets**: Markdown paths such as `.gitignore` and `.github/workflows/lint.yml` resolve by bounded in-vault existence checks without adding hidden files to document discovery or bare-name, alias, or fuzzy candidates. This includes hidden paths omitted by scan exclusions or gitignore; nonhidden excluded targets keep their existing policy. Hidden Markdown existence does not admit its headings into scanned context. Vault containment and escaping-symlink checks still apply.
@@ -372,8 +372,26 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
 - **`create-index` is incremental; reads repair in memory** (DEC-339, iter-304): unchanged
   files (size + mtime) are reused, the rest re-scanned (`reused`/`refreshed`/`removed`/`rebuilt`);
-  `--force` rebuilds. An `--index` read re-scans drifted files in memory with a `-q`-proof note
-  and never writes the snapshot. Format-4 snapshots only — rebuild older ones.
+  `--force` rebuilds from scratch and never loads the old snapshot first. An `--index` read
+  re-scans drifted files in memory with a `-q`-proof note and never writes the snapshot.
+  A rerun that changed nothing at all — same entry count, frontmatter-skip list,
+  `scan_excluded`/`scan_exclude`/`gitignore_dropped` and attachments, *and* a clean
+  directory-mtime probe (a dirty one, even `mkdir x; rmdir x`, forces a real write so
+  `created_at` cannot fall permanently behind the vault) — leaves the snapshot file
+  untouched and reports `written: false` (iter-313, amended in review). Current-format
+  (v7) snapshots only — an older one, or one built under a different `[search] code_blocks`
+  than the config (read from the header, never forcing BM25's lazy decode), is refused with
+  a `-q`-proof warning naming both values (DEC-360); `summary --index` reports
+  `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused
+  snapshot, rather than `index_format_version: null`.
+- **Result caps are visible in JSON, not just text** (UX-5, iter-313): any command whose
+  `results` is a bare array (`find`, `properties`, `tags`, `terms`, `task toggle`/`task
+  set`) carries `truncated: true` whenever `--limit` (or the default 50-item cap) cut it
+  short of `total`, omitted — never `false` — otherwise; a command whose `results` is an
+  object instead (`backlinks`, `lint`, `summary`) never carries it. `--jq`/`--count` already
+  lift the default cap on their own (an explicit `--limit` still caps even under them), so
+  `truncated` mainly matters under plain `--format json` — pass `--limit 0` there for the
+  full set.
 
 - **Suppression comments are scope-correct and typo-loud** (iter-276):
   `markdownlint-disable-next-line` protects the line *after* the comment and never its own — a
@@ -478,10 +496,10 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `snapshot_format_version`).
 - **Link-kind histogram and missing images** (iter-277, G6): the whole external/attachment
   picture in one query, no new flag —
-  `hyalo find --fields links --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
+  `hyalo find --fields links --limit 0 --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
   counts every link by kind (`wikilink`, `embed`, `markdown`, `frontmatter`, `external`,
   `attachment`), and
-  `hyalo find --fields links --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
   lists every image or embed that resolves to nothing, as `file:line target`.
 - **Anchor fix writes the right fragment form** (DEC-351, iter-311): a wikilink anchor fix gets
   the heading TEXT (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug

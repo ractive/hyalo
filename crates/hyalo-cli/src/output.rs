@@ -267,6 +267,31 @@ pub struct Envelope<'a, T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub(crate) total: Option<u64>,
+    /// `true` when `--limit` (or the default cap) cut `results` short of
+    /// `total`; omitted (never `false`) when nothing was cut, when the
+    /// command reports no `total` at all, or when `results` is not itself a
+    /// bare JSON array (iter-313, UX-5; scope narrowed in the PR #379
+    /// review).
+    ///
+    /// Computed generically from the envelope shape — any command whose
+    /// `results` is a bare JSON array is eligible: `find`, `properties`,
+    /// `tags`, `terms` and `task toggle`/`task set` actually cap theirs
+    /// (default 50, `--limit` to change it), so this is where `true`
+    /// appears in practice. `lint-rules list`/`types list`/`views list`
+    /// also return a bare array but accept no `--limit` at all (small fixed
+    /// catalogs, always returned whole), so the field is eligible there too
+    /// but never fires. A command whose `results` is an *object* that
+    /// happens to carry an array field (`backlinks`: `{file, backlinks:
+    /// [...]}`; `lint`'s `files`) is not eligible at all — `total` there
+    /// already describes the whole run, not `results` itself, and the
+    /// nested array's own cap is each command's own business (`lint` has
+    /// `files_truncated` for exactly this). A script piping `find
+    /// --broken-links --format json` through `--limit 0`-less defaults used
+    /// to have no way to tell a sampled answer from a complete one short of
+    /// comparing `results | length` to `total` itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) truncated: Option<bool>,
 }
 
 impl<'a, T: Serialize> Envelope<'a, T> {
@@ -279,6 +304,7 @@ impl<'a, T: Serialize> Envelope<'a, T> {
             hints,
             results,
             total,
+            truncated: None,
         }
     }
 }
@@ -450,6 +476,15 @@ impl<'a> Envelope<'a, Cow<'a, serde_json::Value>> {
             envelope.files_missing = Some(c.files_missing);
             envelope.files_skipped_non_md = Some(c.files_skipped_non_md);
             envelope.files_skipped_outside_vault = Some(c.files_skipped_outside_vault);
+        }
+        // iter-313 (UX-5): only a list result (`results` is a JSON array) can
+        // be truncated by `--limit`/the default cap. `total` is the full
+        // match count computed before pagination, so a shorter `results`
+        // array under a `Some` total means the cap actually cut something.
+        if let (Some(total), serde_json::Value::Array(items)) = (total, value)
+            && u64::try_from(items.len()).unwrap_or(u64::MAX) < total
+        {
+            envelope.truncated = Some(true);
         }
         envelope
     }

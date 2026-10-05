@@ -253,6 +253,44 @@ pub(super) fn key_signature(map: &serde_json::Map<String, serde_json::Value>) ->
     keys.join(",")
 }
 
+/// Whether a sorted key signature describes a [`VaultSummary`](hyalo_core::types::VaultSummary).
+///
+/// Ten keys are always present; `schema` (a configured `[schema]` block,
+/// iter-266) and the `--index` reporting trio `index_format_version` /
+/// `code_blocks` / `source` (iter-306 P2, iter-313) are each independently
+/// optional. The trio alone already has four real on-disk shapes — absent;
+/// `source` alone (`--index` named nothing to refuse, e.g. no snapshot
+/// file); `index_format_version` + `source` (an old-format snapshot refused
+/// before its `code_blocks` could be read); all three (a successful
+/// `--index` run, or one refused specifically for a `code_blocks`
+/// mismatch) — crossed with `schema`'s own two states. Enumerating every
+/// resulting signature (iteration 306 P2's original fix) stops scaling the
+/// moment one more optional field exists; set membership does not.
+fn is_vault_summary_signature(key_sig: &str) -> bool {
+    const REQUIRED: [&str; 10] = [
+        "dead_ends",
+        "dir",
+        "files",
+        "links",
+        "orphans",
+        "properties",
+        "recent_files",
+        "status",
+        "tags",
+        "tasks",
+    ];
+    const OPTIONAL: [&str; 4] = ["schema", "index_format_version", "code_blocks", "source"];
+    let mut seen_required = [false; REQUIRED.len()];
+    for key in key_sig.split(',') {
+        if let Some(pos) = REQUIRED.iter().position(|&k| k == key) {
+            seen_required[pos] = true;
+        } else if !OPTIONAL.contains(&key) {
+            return false;
+        }
+    }
+    seen_required.iter().all(|&seen| seen)
+}
+
 /// Whether a sorted key signature describes a [`LinkInfo`].
 ///
 /// `target` is the one key every `LinkInfo` has had since the shape existed;
@@ -306,6 +344,9 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
     if is_link_info_signature(key_sig) {
         return Some(LINK_INFO_FILTER);
     }
+    if is_vault_summary_signature(key_sig) {
+        return Some(VAULT_SUMMARY_FILTER);
+    }
     match key_sig {
         // `hyalo new` (with and without the --dry-run `content` payload)
         "created,dry_run,file,type" | "content,created,dry_run,file,type" => {
@@ -334,18 +375,6 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // TaskDryRunResult
         "done,file,line,old_status,status,text" => Some(TASK_DRY_RUN_RESULT_FILTER),
-        // VaultSummary. `schema` (a configured `[schema]` block) and
-        // `index_format_version` (`summary --index`, iteration 306 / P2
-        // "summary --index --format text prints a raw key dump") are each
-        // independently optional, so all four key combinations must route to
-        // the same compact renderer — a signature this match doesn't
-        // recognize falls through to the raw generic key-dump below.
-        "dead_ends,dir,files,links,orphans,properties,recent_files,status,tags,tasks"
-        | "dead_ends,dir,files,links,orphans,properties,recent_files,schema,status,tags,tasks"
-        | "dead_ends,dir,files,index_format_version,links,orphans,properties,recent_files,status,tags,tasks"
-        | "dead_ends,dir,files,index_format_version,links,orphans,properties,recent_files,schema,status,tags,tasks" => {
-            Some(VAULT_SUMMARY_FILTER)
-        }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value) — with or without optional `note` field
         // (iter-216 D-1 added `skipped_count` to all three shapes.)

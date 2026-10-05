@@ -2101,6 +2101,29 @@ fn run_inner() -> Result<(), AppError> {
         ctx.snapshot_on_disk = index_path_buf.is_none()
             && cli.site_prefix.is_none()
             && dir.join(".hyalo-index").is_file();
+        // iter-313: a cheap approximation of "the on-disk snapshot is
+        // stale", for hint wording only — never a correctness gate (`--index`
+        // itself still runs the authoritative per-entry DEC-302 check). The
+        // index file's own mtime against the vault's newest directory mtime
+        // costs two stats, not a decode of a potentially 141 MB snapshot
+        // (dogfood UX-8: "summary hints create-index while a 10 MB
+        // .hyalo-index already exists and 19 files drifted" — the wording
+        // never distinguished a fresh snapshot from a stale one at all).
+        ctx.snapshot_stale = ctx.snapshot_on_disk
+            && std::fs::metadata(dir.join(".hyalo-index"))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|index_mtime| {
+                    let index_secs = index_mtime
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .ok()?
+                        .as_secs();
+                    hyalo_core::index::newest_dir_mtime(&dir).map(|newest| {
+                        newest
+                            > index_secs.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                    })
+                })
+                .unwrap_or(false);
         // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
         // existing `.md` path is a body search for that literal text. Record
         // it so `find`'s hints can offer `--file`.
@@ -2132,6 +2155,11 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
+    // iter-313 (BUG-7/BUG-8): metadata of a snapshot this run chose not to
+    // use because it was too old or built under a different `[search]
+    // code_blocks`, preserved for `summary --index` to report instead of a
+    // silent `index_format_version: null` once the index is discarded below.
+    let mut refused_index_info: Option<crate::dispatch::RefusedIndexInfo> = None;
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
         match SnapshotIndex::load(p) {
             Ok(Some(idx)) => {
@@ -2147,7 +2175,17 @@ fn run_inner() -> Result<(), AppError> {
                     // warning at all. Refuse it the way a site-prefix mismatch
                     // is refused, naming the version pair so the reader knows
                     // what to re-run.
-                    crate::warn::warn(format!(
+                    //
+                    // BUG-7 (dogfood v0.25.0-pre): `-q` silenced this exact
+                    // warning while the sibling "could not be used" fallback
+                    // a few lines down already went through `warn_always`.
+                    // Scripted `-q` callers lost the index with no stderr clue
+                    // at all. Both now go through the same `-q`-proof path.
+                    refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
+                        format_version: idx.format_version(),
+                        code_blocks: None,
+                    });
+                    crate::warn::warn_always(format!(
                         "index format is older than this binary (index v{}, binary v{}); \
                          falling back to disk scan — re-run create-index",
                         idx.format_version(),
@@ -2155,9 +2193,44 @@ fn run_inner() -> Result<(), AppError> {
                     ));
                     None
                 } else if idx.validate(&vault_dir_str, site_prefix) {
-                    // Content refresh belongs to the prepared invocation, after
-                    // cardinality validation and rooted target checks.
-                    Some(idx)
+                    // BUG-8 (dogfood v0.25.0-pre): a snapshot tokenized under
+                    // a different `[search] code_blocks` setting than this
+                    // run's config answers a different question (fenced code
+                    // present or absent from the corpus) but decoded fine, so
+                    // it fell back to disk with no message at all and
+                    // `summary --index` had no way to show the mismatch.
+                    // Refuse it exactly like the format-version case above,
+                    // naming both settings.
+                    //
+                    // Read from the header (DEC-360 amended, PR #379 review),
+                    // never `bm25_index()`: that forces the lazy BM25
+                    // section's full decode on every `--index` load just to
+                    // read this one bool, roughly doubling the cost of every
+                    // command accepting `--index` on MDN — most of which
+                    // (summary, tags, properties, a plain `find --property`)
+                    // never otherwise touch BM25 at all.
+                    let index_skip_code_blocks = idx.skip_code_blocks();
+                    let config_skip_code_blocks =
+                        hyalo_core::bm25::search_settings().skip_code_blocks;
+                    if index_skip_code_blocks == config_skip_code_blocks {
+                        // Content refresh belongs to the prepared invocation,
+                        // after cardinality validation and rooted target checks.
+                        Some(idx)
+                    } else {
+                        let label = |skip: bool| if skip { "skip" } else { "index" };
+                        refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
+                            format_version: idx.format_version(),
+                            code_blocks: Some(label(index_skip_code_blocks).to_owned()),
+                        });
+                        crate::warn::warn_always(format!(
+                            "index was built with [search] code_blocks = \"{}\", this run's \
+                             config says \"{}\"; falling back to disk scan — re-run \
+                             create-index",
+                            label(index_skip_code_blocks),
+                            label(config_skip_code_blocks),
+                        ));
+                        None
+                    }
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(
@@ -2471,6 +2544,7 @@ fn run_inner() -> Result<(), AppError> {
         zero_result_values: std::collections::BTreeMap::new(),
         zero_result_body_search: None,
         find_search: None,
+        refused_index: refused_index_info,
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),

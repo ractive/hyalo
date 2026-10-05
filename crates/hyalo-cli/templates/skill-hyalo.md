@@ -247,7 +247,7 @@ hyalo find --fields backlinks --file my-note.md       # see who links to this no
 hyalo find --orphan                                        # find orphan files (no inbound or outbound links)
 hyalo find --dead-end                                      # find dead-end files (inbound but no outbound links)
 hyalo find --broken-links                                  # find files with at least one unresolved link
-hyalo find --fields links --jq '[.results[].links[].kind]|group_by(.)|map({kind:.[0],n:length})'  # bucket links by kind
+hyalo find --fields links --limit 0 --jq '[.results[].links[].kind]|group_by(.)|map({kind:.[0],n:length})'  # bucket links by kind
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
@@ -259,7 +259,7 @@ types list, views list, lint-rules list) — the same set `--count` accepts.
 ```bash
 hyalo find --property status=draft --count                 # count matching files (bare integer)
 hyalo find --property status=draft --jq '.total'           # same, via jq
-hyalo find --property status=draft --jq '.results[].file'  # just file paths
+hyalo find --property status=draft --limit 0 --jq '.results[].file'  # just file paths
 hyalo summary --jq '.results.tasks.total'                  # tasks count from summary
 ```
 
@@ -680,9 +680,9 @@ Flags that only `--help` mentions, worth knowing:
   `--fields links` with `kind: "external"`, so an external-target histogram is complete. A
   bare URL in prose is deliberately not inventoried — it carries no link syntax.
 - **Link-kind histogram, and missing images** — no flag, two `--jq` recipes:
-  `hyalo find --fields links --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
+  `hyalo find --fields links --limit 0 --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
   and
-  `hyalo find --fields links --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
 - **`find --broken-links --format text` prints only the broken links** of each matched file
   (iter-277). JSON is unchanged: it carries every link with its own `path` / `broken_anchor`
   verdict.
@@ -1046,7 +1046,13 @@ structure.
 
 Capped commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at
 most **50 results** by default to avoid flooding the context window. When results are truncated,
-output shows "showing N of M matches" and a hint to get all results.
+output shows "showing N of M matches" and a hint to get all results. Any command whose JSON
+`results` is a bare array — `find`, `properties`, `tags`, `terms`, `task toggle`/`task set` —
+also carries `truncated: true` in that case (omitted — never `false` — when nothing was cut), so
+a script can detect a sampled answer without comparing `results | length` to `total` itself; a
+command whose `results` is an object instead (`backlinks`, `lint`) never carries it. `--jq` and
+`--count` already lift the default cap on their own (an explicit `--limit` still caps even under
+them), so `truncated` matters mainly under plain `--format json`.
 
 `types list`, `views list` and `lint-rules list` emit a `total` (so `--count` works) but are
 *not* capped and reject `--limit` — they enumerate small fixed catalogs and always return
@@ -1104,6 +1110,15 @@ the index stays consistent across interleaved reads and writes.
 
 Re-running `hyalo create-index` is incremental: unchanged files (same size and mtime) are
 reused, only changed/new/removed ones are re-scanned (`reused`, `refreshed`, `removed`,
-`rebuilt` in the result); `--force` rebuilds from scratch. An `--index` read of a drifted
+`rebuilt` in the result); `--force` rebuilds from scratch and never loads the old snapshot
+first. A rerun that changed nothing at all — same entry count, frontmatter-skip list,
+`[scan] exclude`/gitignore counts, attachments, and a clean directory-mtime probe (a dirty
+one, even a directory that moved and moved back, forces a real write) — leaves the
+snapshot file untouched and reports `written: false`. An `--index` read of a drifted
 snapshot re-scans just the drifted files in memory and says so on stderr — it never writes
-the snapshot, so run `create-index` to persist. Snapshots older than format 4 are refused.
+the snapshot, so run `create-index` to persist. An older-format snapshot, or one built
+under a different `[search] code_blocks` than the current config (read straight from the
+snapshot header, never forcing a lazy BM25 decode), is refused with a warning naming both
+values (survives `-q`) and the run falls back to a disk scan; `hyalo summary --index`
+reports `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a
+refused snapshot.

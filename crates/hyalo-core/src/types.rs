@@ -459,13 +459,29 @@ pub struct VaultSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<LintSummary>,
     /// Format version of the snapshot this summary was computed from
-    /// (G4 / BUG-12, iter-276), or `None` for a disk scan.
+    /// (G4 / BUG-12, iter-276), omitted for a disk scan.
     ///
     /// An agent comparing it against `hyalo config`'s
     /// `snapshot_format_version` can tell an index this binary would refuse
     /// from a fresh one *before* the numbers disagree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_format_version: Option<u32>,
+    /// The snapshot's own effective `[search] code_blocks` setting
+    /// (`"index"` or `"skip"`) — present whenever a snapshot was consulted,
+    /// including one this run refused (BUG-8, iter-313), so a mismatch
+    /// against `hyalo config`'s reported setting is visible without
+    /// re-running under `-q` stripped off. Omitted when no snapshot was
+    /// requested, or a refused one's code_blocks could not be determined
+    /// (an old-format refusal, BUG-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_blocks: Option<String>,
+    /// Where this summary's data actually came from: `"index"` when a
+    /// snapshot was loaded and used, `"disk"` when a scan answered —
+    /// including every case where `--index`/`--index-file` was given but the
+    /// snapshot was refused (iter-313). Omitted when no snapshot was
+    /// requested at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Vault-wide link health: total links and broken count.

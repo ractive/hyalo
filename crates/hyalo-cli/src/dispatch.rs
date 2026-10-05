@@ -288,6 +288,27 @@ pub(crate) struct CommandContext<'a> {
     /// suggestions and facets into the envelope and the rest into the hint
     /// context. `None` for every other command.
     pub find_search: Option<crate::commands::find::SearchReport>,
+    /// Metadata of an on-disk snapshot this run chose not to use — too old a
+    /// format version, or built under a different `[search] code_blocks` —
+    /// captured in `run.rs` before the snapshot is discarded (iter-313,
+    /// BUG-7/BUG-8). `summary --index` reports it so the fallback to disk is
+    /// visible in JSON instead of silently reporting `index_format_version:
+    /// null`. `None` whenever no snapshot was requested, or the one found was
+    /// used successfully.
+    pub refused_index: Option<RefusedIndexInfo>,
+}
+
+/// See [`CommandContext::refused_index`].
+#[derive(Debug, Clone)]
+pub(crate) struct RefusedIndexInfo {
+    /// The refused snapshot's own format version.
+    pub format_version: u32,
+    /// The refused snapshot's own effective `[search] code_blocks` setting
+    /// (`"index"` or `"skip"`), when the refusal was specifically a
+    /// code_blocks mismatch (BUG-8). `None` for a plain format-version
+    /// refusal (BUG-7), where the old snapshot's BM25 section may not even
+    /// decode under the current types.
+    pub code_blocks: Option<String>,
 }
 
 /// Resolve the effective limit for a list command.

@@ -4,9 +4,9 @@ use hyalo_core::bm25::{Bm25InvertedIndex, PreTokenizedInput, TOKENIZER_VERSION, 
 use hyalo_core::discovery;
 use hyalo_core::index::{
     IndexEntry, STALENESS_TOLERANCE_SECS, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex,
-    find_stale_indexes, format_mtime,
+    find_stale_indexes, format_mtime, newest_dir_mtime,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -23,7 +23,13 @@ use crate::output::{CommandOutcome, Format, output_value};
 /// the same `[search] code_blocks`, unchanged files (same size and mtime) keep
 /// their entries, changed and new files are re-scanned, removed files are
 /// dropped, and the BM25 postings are patched in place. `force` rebuilds
-/// from scratch.
+/// from scratch and never loads the previous snapshot first (iter-313): it
+/// is discarded by construction (`force || !replacing_existing` short-
+/// circuits to `None`), not loaded and then thrown away. When the rerun
+/// changed nothing at all — every entry reused, nothing removed, attachments
+/// unchanged — the snapshot file itself is left untouched rather than
+/// rewritten byte-for-byte identical content (`results.written: false`,
+/// iter-313).
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn create_index(
     dir: &Path,
@@ -189,6 +195,93 @@ pub fn create_index(
     // exactly as a disk run does. A failed walk degrades to "no attachments",
     // which is the pre-iter-261 behaviour, not an error.
     let attachments = discovery::discover_attachments(dir).unwrap_or_default();
+    let file_count = build.index.entries().len();
+
+    // iter-313: a rerun that changed nothing — every entry reused verbatim,
+    // nothing removed, and the attachment list unchanged — used to rewrite
+    // the whole snapshot anyway (141 MB on MDN, 1.8-4.6 s for zero new
+    // information). `force` already skips loading the previous snapshot
+    // (short-circuited above), so this is the complementary half: skip the
+    // *write* when reusing it produced byte-for-byte the same set of
+    // documents it already held. `previous` is only `Some` here when its
+    // entries and BM25 postings were actually reused (see the `old_bm25`
+    // fallback to `None` above), so this cannot fire on a first build or a
+    // forced rebuild.
+    //
+    // Review round (PR #379): `reused == file_count` alone is not enough —
+    // it is also true when a file silently dropped out of `entries` (broken
+    // frontmatter: still "discovered" on disk, so not counted in `removed`,
+    // but no longer scannable), which would keep a stale entry under a
+    // skipped write. `prev.entries().len() == file_count` catches that: a
+    // dropped entry always shrinks `file_count` below what the previous
+    // snapshot held. The current run's own frontmatter-skip list, and the
+    // `[scan] exclude`/gitignore counters this walk just computed, must also
+    // match the previous header's — each is replayed verbatim by `summary
+    // --index` and friends instead of being recomputed, so a header a
+    // skipped write left behind must still describe the vault exactly, not
+    // just its entry count. And the cheap directory-mtime probe (DEC-280)
+    // must itself be clean: if a directory moved (a file added/removed/
+    // renamed anywhere, even one that nets back to the same entry set, e.g.
+    // `mkdir x; rmdir x`) since this snapshot's `created_at`, skip the
+    // no-op and fall through to a real write instead — otherwise `created_at`
+    // would never advance, `snapshot_drift`'s tree-moved check would stay
+    // permanently tripped (an extra missing-files walk on every future
+    // `--index` read, forever), and the on-disk file's own mtime would stay
+    // behind the vault's, making the stale-index hint fire forever even
+    // though every rerun keeps correctly finding nothing to do.
+    let current_skipped: BTreeSet<&str> = build
+        .warnings
+        .iter()
+        .filter(|w| w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE)
+        .map(|w| w.rel_path.as_str())
+        .collect();
+    let current_scan_excluded = discovery::scan_excluded_count() as u64;
+    let current_scan_exclude = discovery::scan_exclude_patterns();
+    let current_gitignore_dropped = discovery::gitignore_dropped_count() as u64;
+    let no_op = !force
+        && replacing_existing
+        && !rebuilt
+        && removed == 0
+        && reused == file_count
+        && previous.as_ref().is_some_and(|prev| {
+            let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
+            let (_, _, created_at, _) = prev.header_info();
+            prev.entries().len() == file_count
+                && prev.attachments() == attachments.as_slice()
+                && prev_skipped == current_skipped
+                && prev.scan_excluded() == current_scan_excluded
+                && prev.scan_exclude() == current_scan_exclude
+                && prev.gitignore_dropped() == current_gitignore_dropped
+                && newest_dir_mtime(dir).is_none_or(|newest| {
+                    newest <= created_at.saturating_add(STALENESS_TOLERANCE_SECS)
+                })
+        });
+
+    if no_op {
+        let report = crate::commands::apply::ApplyReport {
+            paths: vec![crate::commands::apply::PathEffect {
+                file: index_path.display().to_string(),
+                state: crate::commands::apply::EffectState::Unchanged,
+                error: None,
+                category: None,
+            }],
+            index: crate::commands::apply::IndexDisposition::NotUsed,
+            index_error: None,
+        };
+        let result = CreateIndexResult {
+            path: index_path.display().to_string(),
+            files_indexed: file_count,
+            warnings: build.warnings.len(),
+            note: Some("nothing changed since the last create-index — snapshot left untouched"),
+            reused,
+            refreshed: 0,
+            skipped: files.len().saturating_sub(file_count),
+            removed,
+            rebuilt,
+            written: false,
+        };
+        return Ok(CommandOutcome::success(output_value(&result)).with_apply_report(report));
+    }
 
     // Save the snapshot (with the persisted BM25 index when available).
     let publication = SnapshotIndex::save_with_attachments_observed(
@@ -243,7 +336,6 @@ pub fn create_index(
         }
     }
 
-    let file_count = build.index.entries().len();
     let result = CreateIndexResult {
         path: index_path.display().to_string(),
         files_indexed: file_count,
@@ -254,6 +346,7 @@ pub fn create_index(
         skipped: files.len().saturating_sub(file_count),
         removed,
         rebuilt,
+        written: true,
     };
 
     let report = crate::commands::apply::ApplyReport {
@@ -292,6 +385,10 @@ struct CreateIndexResult<'a> {
     /// Whether the index was built from scratch (no reusable snapshot,
     /// a format/tokenizer/setting mismatch, or `--force`).
     rebuilt: bool,
+    /// Whether the snapshot file was actually (re)written. `false` only for a
+    /// no-op rerun — every entry reused, nothing removed, attachments
+    /// unchanged — which leaves the on-disk bytes untouched (iter-313).
+    written: bool,
 }
 
 /// The previous snapshot's entry for `rel` when it still describes the file:
