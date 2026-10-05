@@ -3,7 +3,7 @@ title: "Iteration 317: backlog leftovers before 0.25.0"
 type: iteration
 date: 2026-10-05
 tags: [iteration, index, snapshot, links, backlog]
-status: in-progress
+status: completed
 branch: iter-317/backlog-leftovers-before-0250
 priority: 2
 ---
@@ -39,7 +39,7 @@ DEC number reserved: **DEC-368**.
 - [x] On an MDN scratch copy, `create-index` followed by three reruns reports `written: false` each time; with the index file's mtime pushed two seconds past `created_at`, the next rerun is still `written: false`
 - [x] `hyalo find --file <f> --fields links` reports `target: "sub/note.md"` for `[[sub/note.md]]` with `path: "sub/note.md"`, OR the backlog note carries the audit explaining why not
 - [x] No behaviour change for links without an authored `.md`; Obsidian Hub counts unchanged (`summary.links.broken` 162, orphans 0, dead ends 193)
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, the xtask gates and `hyalo lint --strict` green; CI green on three platforms
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, the xtask gates and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
