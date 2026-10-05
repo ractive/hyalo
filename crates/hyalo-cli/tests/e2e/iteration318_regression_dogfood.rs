@@ -191,3 +191,67 @@ fn plain_read_of_a_non_utf8_frontmatter_note_prints_its_body() {
     assert!(out.status.success(), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stdout).contains("body"));
 }
+
+/// Runs `hyalo --dir <dir> <args>` and returns (exit code, stdout, stderr).
+fn run_text(dir: &Path, args: &[&str]) -> (Option<i32>, String, String) {
+    let out = hyalo_no_hints()
+        .arg("--dir")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371: `prefix*` and `terms PREFIX` fold accents and case
+// ---------------------------------------------------------------------------
+
+#[test]
+fn accented_prefix_and_terms_prefix_fold_like_a_bare_word_on_disk_and_index() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "cv.md",
+        "# CV\n\nMy résumé lists get_user_name.\n",
+    );
+    write_md(
+        tmp.path(),
+        "other.md",
+        "# Other\n\nResume the work later.\n",
+    );
+    write_md(tmp.path(), "none.md", "# None\n\nNothing here.\n");
+    for index in [false, true] {
+        if index {
+            let (code, _, err) = run_text(tmp.path(), &["create-index"]);
+            assert_eq!(code, Some(0), "{err}");
+        }
+        let extra: &[&str] = if index { &["--index"] } else { &[] };
+        let count = |q: &str| {
+            run_text(
+                tmp.path(),
+                &[&["find", "--count"], extra, &["--", q]].concat(),
+            )
+            .1
+        };
+        let plain = count("resume*");
+        assert_eq!(plain, "2");
+        for q in ["résumé*", "Résum*", "RESUM*"] {
+            assert_eq!(count(q), plain, "{q} index={index}");
+        }
+        let terms = |p: &str| {
+            run_text(
+                tmp.path(),
+                &[&["terms", p, "--format", "text"], extra].concat(),
+            )
+            .1
+        };
+        assert_eq!(terms("rés"), terms("res"), "index={index}");
+        assert_eq!(terms("conf*"), terms("conf"), "index={index}");
+        assert!(terms("get_user").contains("getusernam"), "index={index}");
+    }
+}

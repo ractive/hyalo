@@ -586,6 +586,15 @@ fn positional_alternatives(text: &str, stemmers: &[&Stemmer]) -> Vec<Vec<String>
 /// stem (at least three characters). The fallbacks are used only when the raw
 /// prefix matches no dictionary stem, so `configuration*` still finds
 /// `configur` (the stem of "configuration").
+/// `terms PREFIX` normalization: fold accents and case, drop every
+/// non-alphanumeric character (a trailing `*`, an identifier's `_`/`-`/`.`).
+fn normalize_dictionary_prefix(raw: &str) -> String {
+    super::tokenizer::fold_lower(raw)
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
 fn prefix_candidates(raw: &str, stemmers: &[&Stemmer]) -> Vec<String> {
     let mut out = vec![raw.to_owned()];
     for stemmer in stemmers {
@@ -772,11 +781,13 @@ impl Compiler<'_> {
             });
         }
         if let Some(body) = text.strip_suffix('*') {
-            let body = body.trim_end_matches('*');
+            // Fold before splitting: a decomposed accent's combining mark is
+            // not alphanumeric and would otherwise split the word (DEC-371).
+            let body = super::tokenizer::fold_lower(body.trim_end_matches('*'));
             let parts: Vec<String> = body
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|p| !p.is_empty())
-                .map(str::to_lowercase)
+                .map(str::to_owned)
                 .collect();
             let Some((last, leading)) = parts.split_last() else {
                 return Err(QuerySyntaxError::new(format!(
@@ -1575,10 +1586,13 @@ impl Bm25InvertedIndex {
     }
 
     /// Dictionary terms (stems) with their document frequency, most frequent
-    /// first then alphabetical. `prefix` (lowercased) narrows the listing.
+    /// first then alphabetical. `prefix` narrows the listing after the
+    /// tokenizer's own normalization (DEC-371): accents and case are folded,
+    /// a trailing `*` is dropped, and an identifier's separators are removed
+    /// so `get_user` lists the joined whole `getusernam` the index holds.
     #[must_use]
     pub fn dictionary(&self, prefix: Option<&str>) -> Vec<(&str, usize)> {
-        let prefix = prefix.map(str::to_lowercase);
+        let prefix = prefix.map(normalize_dictionary_prefix);
         let mut terms: Vec<(&str, usize)> = self
             .postings
             .iter()
@@ -2538,11 +2552,33 @@ mod tests {
     }
 
     #[test]
+    fn accented_prefix_folds_like_a_bare_word() {
+        let index = corpus(&[("a.md", "my résumé is here"), ("b.md", "unrelated")]);
+        for query in ["résumé*", "Résum*", "resume*", "re\u{301}sum*"] {
+            assert_eq!(hits(&index, query), vec!["a.md".to_owned()], "{query}");
+        }
+    }
+
+    #[test]
+    fn dictionary_prefix_joins_an_identifier_like_the_tokenizer() {
+        let index = corpus(&[("a.md", "call get_user_name now")]);
+        let listed: Vec<&str> = index
+            .dictionary(Some("get_user"))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert!(listed[0].starts_with("getuser"), "{listed:?}");
+    }
+
+    #[test]
     fn dictionary_lists_terms_by_frequency() {
         let index = corpus(&[("a.md", "link links linking"), ("b.md", "link alpha")]);
         let all = index.dictionary(None);
         assert_eq!(all[0], ("link", 2));
         assert_eq!(index.dictionary(Some("AL")), vec![("alpha", 1)]);
+        assert_eq!(index.dictionary(Some("al*")), vec![("alpha", 1)]);
+        assert_eq!(index.dictionary(Some("Ál")), vec![("alpha", 1)]);
         let got = index.dictionary(Some("zz"));
         assert!(got.is_empty(), "expected empty, got {got:?}");
     }

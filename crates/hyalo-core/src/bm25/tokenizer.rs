@@ -174,6 +174,17 @@ fn fold(word: &str) -> String {
     word.nfkd().filter(|c| !is_combining_mark(*c)).collect()
 }
 
+/// Accent-fold and lowercase `word` the way the tokenizer does before
+/// stemming (DEC-336), so a `prefix*` or a `terms PREFIX` typed with accents
+/// or capitals meets the folded dictionary (`Résum` → `resum`).
+pub(crate) fn fold_lower(word: &str) -> String {
+    if word.is_ascii() {
+        word.to_ascii_lowercase()
+    } else {
+        fold(word).to_lowercase()
+    }
+}
+
 fn stem_lower(part: &str, stemmer: &Stemmer) -> String {
     if part.is_ascii() {
         stemmer.stem(&part.to_ascii_lowercase()).into_owned()
