@@ -86,6 +86,67 @@ fn yaml11_integer_forms_read_as_strings() {
 }
 
 #[test]
+fn core_hex_and_octal_int_forms_stay_numbers() {
+    // dogfood PR #378 review follow-up: `0x1F`/`0o17` (lowercase prefix)
+    // are YAML 1.2 core integers, not a YAML 1.1 extension, and must stay
+    // numbers even in the same file as a true YAML 1.1 form that triggers
+    // the slow re-check path.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\nh: 0x1F\no: 0o17\nneg: -0x1F\nbad: 0X1F\n---\nbody\n",
+    );
+    let props = properties(tmp.path(), "a.md");
+    assert_eq!(props["h"], json!(31));
+    assert_eq!(props["o"], json!(15));
+    assert_eq!(props["neg"], json!(-31));
+    assert_eq!(props["bad"], json!("0X1F"));
+
+    // `find --property h=31` must match: `0x1F` really is the integer 31.
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--property", "h=31", "--count"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+
+    // `set --property fresh=0x1F`: `set`'s own CLI-value coercion
+    // (`frontmatter::types::infer_value`) only recognizes a plain decimal
+    // integer, unchanged by this fix — hex/octal CLI input was never
+    // special-cased there, before or after BUG-14. So "0x1F" typed on the
+    // command line is coerced to the *string* "0x1F", and the emitter
+    // correctly quotes it (`fresh: "0x1F"`): writing that string plain
+    // would now (post-fix) read back as the integer 31, corrupting the
+    // round trip of the string value the user actually typed. This is the
+    // existing `set x=0X1F`/`z=0b101` pattern, extended automatically by
+    // serde-saphyr's own plain-scalar safety check — not something this
+    // fix added.
+    hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["set", "a.md", "--property", "fresh=0x1F"])
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        text.contains("fresh: \"0x1F\"\n"),
+        "a CLI-typed hex string must stay quoted so it round-trips as the \
+         string it was typed as, not the integer it would read back as \
+         plain: {text:?}"
+    );
+    let props = properties(tmp.path(), "a.md");
+    assert_eq!(props["fresh"], json!("0x1F"));
+
+    // The pre-existing hex `h: 0x1F` property already written to this file's
+    // frontmatter (unquoted, a real core int) is untouched by this `set`.
+    let props_h = properties(tmp.path(), "a.md");
+    assert_eq!(props_h["h"], json!(31));
+}
+
+#[test]
 fn set_property_round_trips_yaml11_int_forms_as_text() {
     // AC: `hyalo set f.md --property x=1_000` round-trips unchanged — `set`
     // already quotes `1_000`/`0X1F` on write (DEC-350), and reading them

@@ -73,6 +73,21 @@ Every task and every AC except the CI-platform half of the last one is done and 
   Before/after: `find --fields properties-typed` on `d: 1_000` → `{"type": "number", "value":
   1000}` before, `{"type": "text", "value": "1_000"}` after; `find --property p=31` matched
   `p: 0X1F` before, matches nothing after.
+  **PR review round:** the first version over-corrected — `resolve_core_int` only matched
+  the decimal pattern, so once the slow path triggered on a true YAML 1.1 form elsewhere in
+  the same block, a co-occurring core-valid `0x1F`/`0o17` (lowercase prefix) was *also*
+  wrongly turned into a string. Fixed by teaching `resolve_core_int` all three of core's
+  integer forms (decimal, lowercase `0x…` hex, lowercase `0o…` octal, DEC-326-style sign
+  handling down to the `i64::MIN` boundary through any radix), and widening the trigger to
+  also catch `0o`/`0O`. `0x1F`/`0o17` now correctly stay numbers (`find --property h=31`
+  matches `h: 0x1F`); only `1_000`/`0X1F`/`0b101` (and `0O17`) read as strings. DEC-364 was
+  rewritten to name exactly those four forms. `set --property h=0x1F` (CLI-typed) still
+  writes a *quoted* string — verified as correct, not a bug: `set`'s own coercion never
+  parsed hex input as an integer (unchanged by this fix), so "0x1F" is a string value, and
+  quoting it is what keeps it round-tripping as that string now that plain `0x1F` reads back
+  as 31. New tests: `resolve_core_int_accepts_the_core_schema_pattern_only` (extended),
+  `core_hex_and_octal_int_forms_stay_numbers_alongside_yaml11_strings`,
+  `core_hex_and_octal_int_forms_stay_numbers` (e2e).
 - **BUG-19 (DEC-365)**: `scan_one_file` returns its own `valid_utf8` instead of only being
   inferred from "no BM25 tokens," so `find`/`summary` report and count the same skip `lint`
   already refused the file over, on every scan shape including the minimal `--fields file`

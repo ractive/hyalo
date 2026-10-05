@@ -7846,52 +7846,86 @@ does not exist once the normalization itself stops firing on non-Windows.
 `crates/hyalo-cli/src/commands/mv.rs` (`resolve_batch_sources`).
 [[iterations/iteration-314-config-files-and-yaml-leftovers]].
 
-## DEC-364: YAML 1.1 integer literal forms read as strings, closing the second half of DEC-350's core-schema contract (2026-10-05)
+## DEC-364: exactly three YAML 1.1 integer forms read as strings — core's own hex/octal stay integers (2026-10-05, amended same day — review round)
 
-**Decision.** `1_000` (digit-group underscores), `0X1F`/`0x1f` (hex) and
-`0b101` (binary) now parse as the **strings** they are written as, not the
-integers 1000/31/5. YAML 1.2's core schema has exactly one integer literal
-grammar, `[-+]?[0-9]+` (DEC-350), and none of these three match it; `set`
-already quoted all three on write before this fix (DEC-350's "digit run with
-underscores" and `0X1F` cases), so the write side and read side now agree.
+**Decision.** `1_000` (digit-group underscores), `0X1F` (uppercase-`X` hex)
+and `0b101` (binary) now parse as the **strings** they are written as, not
+the integers 1000/31/5. These three, and only these three, are YAML 1.1
+extensions with no equivalent in YAML 1.2's core schema. Core's own grammar
+is wider than the single decimal pattern DEC-350 named: `[-+]?[0-9]+`
+(decimal, DEC-350's leading-zero rule applies), `[-+]?0x[0-9a-fA-F]+`
+(hex, **lowercase** `x` only) and `[-+]?0o[0-7]+` (octal, **lowercase** `o`
+only) are all core, so `0x1F`, `0o17` and their negatives correctly stay
+integers — `0X1F` and `0O17` (uppercase prefix) do not, because core's
+grammar uses the lowercase letter literally.
 
 **Why, and why DEC-350's own mechanism didn't already catch this.**
 DEC-350's `resolve_core_int` slow path exists to re-check a scalar's source
 text against the core grammar, but it only ever ran when the **fast**
 `serde_json::Value` parse produced an **integral float** — the one shape a
 leading-zero decimal (`01234`) takes once serde-saphyr 1.x refuses to read
-it as an integer. `1_000`, `0X1F` and `0b101` are different: serde-saphyr
-resolves all three straight to a plain integer (`visit_i64`/`visit_u64`),
-with no float detour at all, so `has_integral_float`'s trigger never fired
-and `node_to_value`'s `Node::Number(n) => Value::Number(n)` arm passed the
-wrongly-resolved integer straight through unchecked.
+it as an integer. `1_000`, `0X1F`, `0b101`, and core's own `0x1F`/`0o17`,
+are all different: serde-saphyr resolves every one of them straight to a
+plain integer (`visit_i64`/`visit_u64`), with no float detour at all, so
+`has_integral_float`'s trigger never fired and `node_to_value`'s
+`Node::Number(n) => Value::Number(n)` arm passed whatever serde-saphyr
+produced straight through unchecked — right for `0x1F`/`0o17`, wrong for
+the YAML 1.1 forms.
 
 **The fix is two independent, complementary pieces.** (1) A cheap textual
 pre-check, `might_have_yaml11_int_form`, scans the raw frontmatter text for
 an underscore adjacent to a digit or a `0` immediately followed by
-`x`/`X`/`b`/`B`, and joins `has_integral_float` as a second trigger for the
-slow, span-based re-parse — deliberately over-eager (a false positive just
-costs a redundant re-parse; a snake_case key like `created_at`, where every
-underscore sits between two letters, never matches and stays on the fast
-path). (2) `node_to_value`'s `Node::Number` arm, not just its `Node::Float`
-arm, now reads the scalar's own source text through its byte span
-(`untagged_span_text`, factored out of the `Float` arm's existing logic) and
-runs it through `resolve_core_int`: a core match keeps the integer, anything
-else — including every YAML 1.1 form above — becomes the string as written.
-An explicit tag (`!!int 0x10`) is still never re-resolved, exactly as
-DEC-350 left the `Float` arm.
+`x`/`X`/`o`/`O`/`b`/`B`, and joins `has_integral_float` as a second trigger
+for the slow, span-based re-parse — deliberately over-eager (a false
+positive just costs a redundant re-parse; a snake_case key like
+`created_at`, where every underscore sits between two letters, never
+matches and stays on the fast path). (2) `node_to_value`'s `Node::Number`
+arm, not just its `Node::Float` arm, now reads the scalar's own source text
+through its byte span (`untagged_span_text`, factored out of the `Float`
+arm's existing logic) and runs it through `resolve_core_int`, **which now
+understands all three of core's forms, not only the decimal one**: a core
+match (decimal, lowercase-`0x` hex, or lowercase-`0o` octal) keeps the
+integer; anything else — `0X1F`, `0O17`, `0b101`, `1_000` — becomes the
+string as written. An explicit tag (`!!int 0x10`) is still never
+re-resolved, exactly as DEC-350 left the `Float` arm.
+
+**The review-round bug, and why it reached a reviewer rather than a test.**
+The first version of this fix left `resolve_core_int` matching only
+`[-+]?[0-9]+` — DEC-350's original decimal-only grammar — so once the slow
+path triggered (correctly, on seeing `0x`/`0X`/`0b`/`0B` anywhere in the
+block), `0x1F` and `0o17` failed that too-narrow check and were wrongly
+turned into strings alongside the real YAML 1.1 forms, even though they are
+core integers and the fast path alone would have kept them correct. The
+existing pinning test only ever exercised `0X1F` (uppercase) in the same
+block as the true YAML 1.1 forms, so it never caught a lowercase `0x1F`/
+`0o17` being corrupted by co-occurrence — the two new tests below cover
+exactly that: `resolve_core_int_accepts_the_core_schema_pattern_only` adds
+hex/octal cases (including the `i64::MIN` boundary through a hex literal),
+and `core_hex_and_octal_int_forms_stay_numbers_alongside_yaml11_strings`
+puts `0x1F`/`0o17` in the same block as `0X1F`/`0O17`/`0b101`/`1_000` to
+pin the co-occurrence case directly.
 
 **Consequences.** `find --fields properties-typed` reports `d: 1_000`,
 `p: 0X1F` and `q: 0b101` as `type: "text"`; `find --property p=31` no
-longer matches a file holding `p: 0X1F`. A value nested in a list or map
-is re-checked the same way (`node_to_value` recurses). Performance:
-`might_have_yaml11_int_form` is a single linear byte scan with no
-allocation, run once per frontmatter block only when the fast parse alone
-would otherwise have skipped the slow path — DEC-350's own measurements
-(the slow path costs roughly 2× on a block that needs it, and essentially
-nothing end-to-end) are unaffected by a textual pre-check this cheap, and no
-block in the repo vault, MDN, the Obsidian Hub or kepano-obsidian contains
-any of these three forms.
+longer matches a file holding `p: 0X1F`, but still matches one holding
+`p: 0x1F` (lowercase). A value nested in a list or map is re-checked the
+same way (`node_to_value` recurses). `set --property h=0x1F` — typed on the
+CLI, not read from existing frontmatter — still goes through
+`frontmatter::types::infer_value`, whose own integer coercion is unchanged
+(plain decimal only, via `str::parse::<i64>`); "0x1F" is therefore coerced
+to the *string* "0x1F", and the emitter quotes it (`h: "0x1F"`) because
+writing that string plain would now read back as the integer 31 — the same
+round-trip-preserving quoting `0X1F`/`0b101`/`1_000` already get, applied
+automatically by serde-saphyr's own plain-scalar safety check, not new code
+from this fix. A pre-existing `h: 0x1F` already in a file's frontmatter is
+untouched by any `set` call and stays the integer 31 on every read.
+Performance: `might_have_yaml11_int_form` is a single linear byte scan with
+no allocation, run once per frontmatter block only when the fast parse
+alone would otherwise have skipped the slow path — DEC-350's own
+measurements (the slow path costs roughly 2× on a block that needs it, and
+essentially nothing end-to-end) are unaffected by a textual pre-check this
+cheap, and no block in the repo vault, MDN, the Obsidian Hub or
+kepano-obsidian contains any of `1_000`/`0X1F`/`0O17`/`0b101`.
 
 **Rejected alternatives.** Triggering the slow path whenever the fast parse
 produced *any* `Number` (int or float), dropping the textual pre-check
@@ -7900,7 +7934,12 @@ integer property (`priority: 3`, `rating: 5`) in every vault, exactly the
 cost DEC-350 measured and rejected for the leading-zero case, for no gain
 over the cheap textual scan. Disabling serde-saphyr's YAML 1.1 integer
 resolution via an `Options` flag: no such flag exists (checked against the
-1.3 API, same as DEC-350's own search for a leading-zero opt-out).
+1.3 API, same as DEC-350's own search for a leading-zero opt-out). Extending
+`set`'s CLI-value coercion to also parse `0x`/`0o` input as an integer, so
+`set --property h=0x1F` writes a plain, unquoted value: rejected as scope
+creep beyond this bug — it is a `set`-coercion feature request, not a
+read-side resolver fix, and the current quoted behaviour is already
+correct and round-trip-safe without it.
 
 **Where:** `crates/hyalo-core/src/frontmatter/parse.rs`
 (`might_have_yaml11_int_form`, `untagged_span_text`, `node_to_value`,
