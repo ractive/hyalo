@@ -20,17 +20,23 @@ const SOURCE_CAP: usize = 64 * 1024;
 const INPUT_CAP: usize = 64 * 1024 * 1024;
 const ERROR_CAP: usize = 4096;
 static CANCELLED: AtomicBool = AtomicBool::new(false);
-static SIGNAL_HANDLER: OnceLock<Result<(), String>> = OnceLock::new();
+static SIGNAL_HANDLER: OnceLock<()> = OnceLock::new();
 
-fn cancellation() -> Result<&'static AtomicBool, String> {
-    SIGNAL_HANDLER
-        .get_or_init(|| {
-            ctrlc::try_set_handler(|| CANCELLED.store(true, Ordering::Relaxed))
-                .map_err(|e| format!("cannot install jq cancellation handler: {e}"))
-        })
-        .as_ref()
-        .map_err(ToOwned::to_owned)?;
-    Ok(&CANCELLED)
+/// The flag Ctrl-C raises to cancel a running jq worker (DEC-369).
+///
+/// Installing the handler is best effort. `ctrlc` refuses when SIGINT already
+/// has a non-default disposition — notably `SIG_IGN`, which is what a shell
+/// background job (`cmd &` in a non-interactive shell), `nohup` and many job
+/// runners hand us. Such a process cannot be interrupted by Ctrl-C anyway, so
+/// the filter simply runs without cancellation; the 3 s deadline and the
+/// worker's resource limits still bound it. Failing the whole command there
+/// (iteration 295's behaviour) broke every `--jq` in a background job.
+fn cancellation() -> &'static AtomicBool {
+    SIGNAL_HANDLER.get_or_init(|| {
+        // Ignoring the error is deliberate: see the doc comment above.
+        let _ = ctrlc::try_set_handler(|| CANCELLED.store(true, Ordering::Relaxed));
+    });
+    &CANCELLED
 }
 
 // Header is magic/version, message kind, big-endian payload byte length. Each
@@ -191,7 +197,7 @@ fn worker_command() -> Result<Command, String> {
 }
 
 fn bounded_worker(kind: u8, request: Vec<u8>, expected: u8) -> Result<String, String> {
-    let cancelled = cancellation()?;
+    let cancelled = cancellation();
     exchange(
         &mut worker_command()?,
         kind,
