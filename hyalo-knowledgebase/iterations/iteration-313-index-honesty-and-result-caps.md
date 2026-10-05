@@ -3,7 +3,7 @@ title: "Iteration 313: index honesty and result caps"
 type: iteration
 date: 2026-10-04
 tags: [iteration, index, snapshot, hints, recipes, dogfooding]
-status: in-progress
+status: completed
 branch: iter-313/index-honesty-and-result-caps
 priority: 2
 related:
@@ -39,7 +39,7 @@ recipes (UX-5). DEC numbers reserved for this iteration: **DEC-359 to DEC-361**.
 - [x] Index built under `code_blocks = "index"`, config switched to `"skip"`: `find --index` warns under `-q` and `summary --index` JSON shows both values
 - [x] MDN no-op `create-index` finishes well under the 1.8 s measured and leaves the snapshot bytes unchanged; `--force` is not slower than a fresh build
 - [x] `hyalo find --broken-links --format json` on GitHub Docs carries `truncated: true` at the default limit and no `truncated` key with `--limit 0`; `check-jq-recipes` passes
-- [ ] Exit codes 0/1/2 (DEC-307); fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift and `hyalo lint --strict` green; CI green on three platforms
+- [x] Exit codes 0/1/2 (DEC-307); fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
