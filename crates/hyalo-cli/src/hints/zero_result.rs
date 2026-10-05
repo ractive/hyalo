@@ -249,6 +249,17 @@ pub(crate) fn legacy_field_flag(field: &str, value: &str) -> (&'static str, Stri
     }
 }
 
+/// The words and slop of a PATTERN that is exactly one proximity phrase
+/// (`"a b"~5`) of 2+ plain words; `None` for anything else.
+fn slop_phrase_parts(pattern: &str) -> Option<(Vec<String>, usize)> {
+    let rest = pattern.trim().strip_prefix('"')?;
+    let (inner, tail) = rest.split_once('"')?;
+    let slop: usize = tail.strip_prefix('~')?.parse().ok()?;
+    let words: Vec<String> = inner.split_whitespace().map(str::to_owned).collect();
+    (words.len() >= 2 && words.iter().all(|w| w.chars().all(char::is_alphanumeric)))
+        .then_some((words, slop))
+}
+
 /// Prefix for the zero-result `hyalo terms` hint: the first three letters of
 /// the first suggested (or, failing that, first plain) query word.
 fn terms_hint_prefix(ctx: &HintContext, pattern: &str) -> Option<String> {
@@ -562,10 +573,44 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
             &["--granularity", "file"],
         ));
     }
+    // 0b''. A whole-query proximity phrase (`"a b"~5`, the DEC-367 hint's own
+    //       shape) found nothing although every word occurs: the slop is
+    //       ordered, so offer the plain AND and the reversed order instead of
+    //       a `terms` listing that cannot help (DEC-371).
+    let slop_rewrites = ctx
+        .body_pattern
+        .as_deref()
+        .filter(|_| !ctx.has_regex_search && ctx.zero_posting_terms.is_empty())
+        .and_then(slop_phrase_parts);
+    if let (Some((words, slop)), Some(pattern)) = (&slop_rewrites, &ctx.body_pattern) {
+        let and_form = words.join(" ");
+        let reversed: Vec<&str> = words.iter().rev().map(String::as_str).collect();
+        let reversed = format!("\"{}\"~{slop}", reversed.join(" "));
+        for (description, replacement) in [
+            (
+                "Drop the order and distance -- match the words anywhere",
+                and_form,
+            ),
+            (
+                "The slop is ordered -- try the words in reverse order",
+                reversed,
+            ),
+        ] {
+            let command = rebuild_find_with(ctx, &filters, None, |token| {
+                if token == pattern {
+                    replacement.clone()
+                } else {
+                    token.to_owned()
+                }
+            });
+            hints.push(Hint::new(description, command));
+        }
+    }
     // 0c. Ranked search with nothing found: show which indexed terms exist.
     //     Pointless when every term has postings (section mode above).
     if !ctx.has_regex_search
         && !words_exist
+        && slop_rewrites.is_none()
         && let Some(pattern) = &ctx.body_pattern
         && let Some(prefix) = terms_hint_prefix(ctx, pattern)
     {
@@ -813,6 +858,17 @@ mod tests {
         let files = values.iter().map(|v| v.count).sum();
         ctx.observed_property_values
             .insert(key.to_owned(), ObservedProperty { files, values });
+    }
+
+    #[test]
+    fn slop_phrase_parts_accepts_only_a_whole_query_proximity_phrase() {
+        assert_eq!(
+            slop_phrase_parts("\"release tokenizer\"~5"),
+            Some((vec!["release".to_owned(), "tokenizer".to_owned()], 5))
+        );
+        assert_eq!(slop_phrase_parts("\"release tokenizer\""), None);
+        assert_eq!(slop_phrase_parts("\"a b\"~5 c"), None);
+        assert_eq!(slop_phrase_parts("\"solo\"~5"), None);
     }
 
     #[test]

@@ -20,9 +20,6 @@ pub(super) const FACET_HINT_BUCKETS: usize = 3;
 const SECTION_HINT_MIN_WORDS: usize = 3;
 /// See [`SECTION_HINT_MIN_WORDS`].
 const SECTION_HINT_MIN_FILES: u64 = 100;
-/// A PATTERN-less `--section` filter matching headings in this many files
-/// teaches section mode with the heading words as PATTERN (DEC-367).
-const SECTION_FILTER_HINT_MIN_FILES: u64 = 10;
 /// Extra words the many-results proximity hint allows between the query
 /// words (`"a b"~5`, DEC-338 / DEC-367).
 const PROXIMITY_HINT_SLOP: usize = 5;
@@ -48,47 +45,10 @@ fn positive_bare_words(pattern: &str) -> Option<Vec<&str>> {
     )
 }
 
-/// Words too common or too short to search a heading by: a `--section The`
-/// or `--section '1.'` filter has nothing a ranked query could use.
-const HEADING_STOPWORDS: &[&str] = &[
-    "the", "and", "for", "with", "from", "into", "this", "that", "are", "was", "not", "but",
-];
-
-/// Whether a heading word is worth searching: 3+ characters, not a number,
-/// not a stopword.
-fn significant_heading_word(word: &str) -> bool {
-    word.chars().count() >= 3
-        && !word.chars().all(char::is_numeric)
-        && !HEADING_STOPWORDS
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(word))
-}
-
-/// The words of a `--section` filter, as a ranked PATTERN: `## Open
-/// questions` gives `Open questions`. `None` for a `/regex/` filter or one
-/// with no significant word (see [`significant_heading_word`]).
-fn heading_words(filter: &str) -> Option<String> {
-    let text = filter.trim().trim_start_matches('#').trim();
-    if text.len() >= 2 && text.starts_with('/') && text.ends_with('/') {
-        return None;
-    }
-    let words: Vec<&str> = text
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| {
-            !w.is_empty() && !w.eq_ignore_ascii_case("or") && !w.eq_ignore_ascii_case("and")
-        })
-        .collect();
-    words
-        .iter()
-        .any(|w| significant_heading_word(w))
-        .then(|| words.join(" "))
-}
-
 /// The "paragraph, not the file" teaching hint (iteration 316, DEC-367):
 /// a ranked query of [`SECTION_HINT_MIN_WORDS`]+ positive words matching
-/// [`SECTION_HINT_MIN_FILES`]+ files, or a PATTERN-less `--section` filter
-/// matching headings in [`SECTION_FILTER_HINT_MIN_FILES`]+ files, gets the
-/// same scope re-asked at `--granularity section`. Withheld whenever the
+/// [`SECTION_HINT_MIN_FILES`]+ files gets the same scope re-asked at
+/// `--granularity section`. Withheld whenever the
 /// rewrite would carry a flag section mode refuses.
 fn section_mode_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
     let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved else {
@@ -107,19 +67,10 @@ fn section_mode_hint(ctx: &HintContext, total: u64) -> Option<Hint> {
             spec.section_mode_rewrite(ctx, pattern, true)?,
         )
     } else {
-        let filter = ctx.section_filters.first()?;
-        if total < SECTION_FILTER_HINT_MIN_FILES {
-            return None;
-        }
-        let words = heading_words(filter)?;
-        (
-            format!(
-                "--section matched headings in {total} files -- rank every section that \
-                 mentions '{words}' instead; the --section scope is dropped (the paragraph, \
-                 not the file)"
-            ),
-            spec.section_mode_rewrite(ctx, &words, false)?,
-        )
+        // DEC-371 (amends DEC-367): a PATTERN-less `--section X` is no
+        // longer re-asked at section granularity -- it widened 299 files to
+        // 1 007 sections that merely mention the heading words.
+        return None;
     };
     rewrite
         .ok()

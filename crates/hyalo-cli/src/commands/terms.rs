@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 //! `hyalo terms` — list BM25 dictionary terms (stemmed tokens) with their
-//! document frequency: the number of files whose authored title or body
+//! document frequency: the number of files whose title, headings, body or tags
 //! contains the stem.
 //!
 //! Corpus resolution mirrors the other read commands: an `--index`/
@@ -19,7 +19,7 @@ use crate::commands::{ScannedIndexOutcome, build_scanned_index};
 use crate::dispatch::{CommandContext, resolve_limit};
 use crate::output::CommandOutcome;
 
-/// One dictionary term and the number of files whose authored title or body
+/// One dictionary term and the number of files whose title, headings, body or tags
 /// contains it (the BM25 corpus indexes both).
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -27,7 +27,7 @@ use crate::output::CommandOutcome;
 pub struct TermEntry {
     /// Stemmed token.
     pub(crate) term: String,
-    /// Number of files whose title or body contains this stem.
+    /// Number of files whose title, headings, body or tags contain this stem.
     pub(crate) docs: usize,
 }
 

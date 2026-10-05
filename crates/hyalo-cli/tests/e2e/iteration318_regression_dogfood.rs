@@ -452,3 +452,45 @@ fn links_fix_applies_a_target_and_an_anchor_repair_in_one_file_in_one_run() {
     assert_eq!(second["results"]["anchor_fixable"], 0, "{second}");
     assert_eq!(std::fs::read_to_string(tmp.path().join("c.md")).unwrap(), c);
 }
+
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-367): a zero-result slop phrase hints AND and reverse
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_result_slop_phrase_hints_the_and_form_and_the_reversed_order() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "# A\n\nthe tokenizer before the release\n",
+    );
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "\"release tokenizer\"~5", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["total"], 0, "{json}");
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.ends_with("-- 'release tokenizer'")),
+        "{cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| c.contains("\"tokenizer release\"~5")),
+        "{cmds:?}"
+    );
+    assert!(!cmds.iter().any(|c| c.contains("hyalo terms")), "{cmds:?}");
+    let reversed = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "\"tokenizer release\"~5"],
+    );
+    assert_eq!(reversed.1, "1");
+}
