@@ -29,14 +29,34 @@ DEC number reserved: **DEC-368**.
 
 ## Tasks
 
-- [ ] `created_at`: stamp it after the rename, or compare directory mtimes against `max(created_at, the index file's own mtime)`; a test that fakes a slow tail (index file mtime two seconds after `created_at`) asserts the next `create-index` is `written: false` and `tree_moved` stays false; no snapshot format change unless unavoidable (if the header changes, bump and say so)
-- [ ] Authored `.md` suffix: audit every reader of a wikilink's `target` (`mv` self-link matching, `discovery::resolve_target`, `classify_short_form_wikilink`, alias matching, `links fix`, the snapshot); implement ONLY if the audit shows a contained change — the reported `target` in `--fields links` carries the authored text (`sub/note.md`) while every internal consumer keeps the stripped stem — with tests for `[[sub/note.md]]`, `[[sub/Note.MD]]`, `[[note.md#H]]`, `[[note.md|label]]`, disk and `--index` identical, and `mv`/`links fix` output unchanged; otherwise leave the backlog note open and record the audit's findings in it
-- [ ] Both backlog notes updated: `status=completed` with a pointer to this iteration for what was fixed; an unfixed one stays `planned` with the audit appended
-- [ ] Docs in sync: claims paragraph, CHANGELOG `[Unreleased]` Fixed, DEC-368 (covers both decisions; amends DEC-361 and, if the suffix is fixed, DEC-310)
+- [x] `created_at`: stamp it after the rename, or compare directory mtimes against `max(created_at, the index file's own mtime)`; a test that fakes a slow tail (index file mtime two seconds after `created_at`) asserts the next `create-index` is `written: false` and `tree_moved` stays false; no snapshot format change unless unavoidable (if the header changes, bump and say so)
+- [x] Authored `.md` suffix: audit every reader of a wikilink's `target` (`mv` self-link matching, `discovery::resolve_target`, `classify_short_form_wikilink`, alias matching, `links fix`, the snapshot); implement ONLY if the audit shows a contained change — the reported `target` in `--fields links` carries the authored text (`sub/note.md`) while every internal consumer keeps the stripped stem — with tests for `[[sub/note.md]]`, `[[sub/Note.MD]]`, `[[note.md#H]]`, `[[note.md|label]]`, disk and `--index` identical, and `mv`/`links fix` output unchanged; otherwise leave the backlog note open and record the audit's findings in it
+- [x] Both backlog notes updated: `status=completed` with a pointer to this iteration for what was fixed; an unfixed one stays `planned` with the audit appended
+- [x] Docs in sync: claims paragraph, CHANGELOG `[Unreleased]` Fixed, DEC-368 (covers both decisions; amends DEC-361 and, if the suffix is fixed, DEC-310)
 
 ## Acceptance criteria
 
-- [ ] On an MDN scratch copy, `create-index` followed by three reruns reports `written: false` each time; with the index file's mtime pushed two seconds past `created_at`, the next rerun is still `written: false`
-- [ ] `hyalo find --file <f> --fields links` reports `target: "sub/note.md"` for `[[sub/note.md]]` with `path: "sub/note.md"`, OR the backlog note carries the audit explaining why not
-- [ ] No behaviour change for links without an authored `.md`; Obsidian Hub counts unchanged (`summary.links.broken` 162, orphans 0, dead ends 193)
+- [x] On an MDN scratch copy, `create-index` followed by three reruns reports `written: false` each time; with the index file's mtime pushed two seconds past `created_at`, the next rerun is still `written: false`
+- [x] `hyalo find --file <f> --fields links` reports `target: "sub/note.md"` for `[[sub/note.md]]` with `path: "sub/note.md"`, OR the backlog note carries the audit explaining why not
+- [x] No behaviour change for links without an authored `.md`; Obsidian Hub counts unchanged (`summary.links.broken` 162, orphans 0, dead ends 193)
 - [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, the xtask gates and `hyalo lint --strict` green; CI green on three platforms
+
+## Outcome
+
+- `created_at` (DEC-368): fixed. `SnapshotIndex::published_at()` returns the
+  later of `created_at` and the snapshot file's own mtime, recorded by the
+  loader in a `#[serde(skip)]` header field. `create-index`'s no-op guard,
+  `snapshot_drift`'s tree check and the write path's stale warning compare
+  against it. No format change (v7). The racily-clean rule keeps `created_at`.
+  MDN scratch copy: build + three reruns → `true, false, false, false`; with
+  the root and index mtimes pushed two seconds past `created_at` → `false`;
+  a later root bump → `true`.
+- Authored `.md` suffix: audit only, not implemented. More than ten reporting
+  sites (`find --fields links`, HYALO006/008, `links fix` `old_target` — also
+  the `--apply` matching key — `backlinks`, `mv` skip reports, `anchor_fix`)
+  plus a v8 snapshot bump. The audit and a recommended design are in
+  [[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]], which
+  stays `planned`.
+- Obsidian Hub unchanged: `summary.links.broken` 162, orphans 0, dead ends 193.
+- Gates: fmt, clippy, `cargo test --workspace -q` (5679 passed), `cargo deny
+  check`, `hyalo lint --strict`, and the nine xtask gates all green locally.

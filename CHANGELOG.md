@@ -98,6 +98,13 @@ and this project adheres to
 
 ### Fixed
 
+- A slow `create-index` publish no longer makes the snapshot look stale
+  forever (DEC-368). `created_at` is stamped before the serialize, fsync and
+  rename, and the rename bumps the vault root. When that tail took more than
+  about two seconds, every later `create-index` rewrote the snapshot and
+  every `--index` read re-walked the vault. The directory-mtime probe now
+  compares against the later of `created_at` and the snapshot file's own
+  mtime. The snapshot format is unchanged.
 - `links fix` writes the fragment form a link's own syntax actually resolves
   (DEC-351): a wikilink anchor fix gets the heading TEXT
   (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug

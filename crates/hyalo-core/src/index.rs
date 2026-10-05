@@ -3038,7 +3038,10 @@ mod iso_tests {
             .unwrap()
             .set_modified(later)
             .unwrap();
-        let later_secs = later.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let later_secs = later
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let index = SnapshotIndex::load(&snap).unwrap().unwrap();
         assert_eq!(index.published_at(), later_secs);
         let reuse = SnapshotIndex::load_for_reuse(&snap).unwrap();

@@ -2,7 +2,7 @@
 title: "Snapshot created_at is stamped before the serialize-and-rename tail"
 type: backlog
 date: 2026-10-05
-status: planned
+status: completed
 priority: low
 origin: "iter-313 PR #379 review follow-up, 2026-10-05"
 ---
@@ -39,3 +39,9 @@ the next `create-index` is still a no-op and `tree_moved` stays false.
 
 - [[iterations/iteration-313-index-honesty-and-result-caps]] (DEC-361, the no-op guard this interacts with)
 - [[decision-log]] — DEC-339 (racily-clean rescan) and DEC-361
+
+## Outcome
+
+Fixed in [[iterations/iteration-317-backlog-leftovers-before-0250]] (DEC-368):
+the directory-mtime probes compare against the later of `created_at` and the
+snapshot file's own mtime; no format change.

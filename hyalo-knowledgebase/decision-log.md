@@ -5633,6 +5633,12 @@ path saw two different files.
 `discovery::resolves_via_alias`. See
 [[iterations/iteration-275-alias-semantics-and-mv-guards]].
 
+**Known exception (DEC-368, iteration 317).** A wikilink's trailing `.md`
+is still stripped at parse time, so `[[sub/note.md]]` reports
+`target: "sub/note"`. The audit of the reporting sites is in
+[[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]]; it was
+left open rather than fixed piecemeal.
+
 ## DEC-311: `[[note#Heading One#Sub Two]]` is a heading *path*, resolved by walking the outline (2026-09-05) — sits beside DEC-299
 
 **Decision:** A fragment containing an inner `#` is read as Obsidian's heading
@@ -7925,6 +7931,13 @@ not enough:
   very next rerun is a clean no-op again — one extra write, not a
   permanent regression.
 
+**Amendment (DEC-368, iteration 317): the probe compares against
+`published_at`, not `created_at`.** `created_at` is stamped before the
+serialize-fsync-rename tail and the rename bumps the vault root, so a tail
+slower than the tolerance made the guard above fail on every rerun. The
+guard is now `newest_dir_mtime(dir) <= published_at + tolerance`, where
+`published_at = max(created_at, the snapshot file's own mtime)`.
+
 ## DEC-362: an unloadable `[schema]` joins the gate refusal, scoped to gates only (2026-10-05)
 
 **Decision.** `lint` (with or without `--strict`) and `views run <view>` now
@@ -8466,3 +8479,49 @@ other `hints` array, it is empty under `--no-hints` and `--jq` (DEC-313). The
 prose `hint` stays in both cases. A grammar change
 now has to update `find_101.txt`, and gate 3h forces the skill and rule copies
 to follow.
+
+## DEC-368: the directory-mtime staleness probe compares against when the snapshot was published; the authored `.md` suffix stays open (2026-10-05)
+
+**Context.** `create-index` stamps the header's `created_at` before it
+serializes the snapshot (141 MB on MDN), fsyncs it and renames it into
+place, and the rename bumps the vault root's mtime. Three probes compare
+`newest_dir_mtime(dir)` against `created_at + 1 s`: DEC-361's no-op guard
+in `create-index` (the "part two" amendment of DEC-360 above),
+`snapshot_drift`'s `tree_moved` check (DEC-339) and the write path's
+"index older than vault" warning. A tail longer than about two seconds
+(slow disk, Windows, CI) therefore made every later `create-index` rewrite
+the whole snapshot and every `--index` read re-walk the vault, forever.
+The second backlog item of iteration 317 asked whether `[[sub/note.md]]`
+could report `target: "sub/note.md"` as DEC-310 promises.
+
+**Decision** (iteration 317,
+[[iterations/iteration-317-backlog-leftovers-before-0250]]).
+
+- *Staleness.* The three directory probes compare against
+  `SnapshotIndex::published_at()` — the later of `created_at` and the
+  snapshot file's own whole-second mtime, read from the `stat` the loader
+  already makes. The file's mtime is set by the last write before the
+  rename, so it bounds the tail. The mtime lives in a `#[serde(skip)]`
+  header field: no snapshot format change, the format stays v7. The
+  per-file racily-clean rule (DEC-339) still uses `created_at`, because it
+  has to stay anchored to when the files were scanned.
+- *Authored `.md` suffix.* Not implemented. The audit found more than ten
+  user-visible sites (`find --fields links`, HYALO006/008 messages,
+  `links fix` `old_target` — which is also `--apply`'s span-matching key —
+  `backlinks`, `mv` skip reports, `anchor_fix`) plus a snapshot format bump
+  to v8. That is above the iteration's stop rule, so the backlog note keeps
+  the audit and a recommended design and stays `planned`.
+
+**Why `max(created_at, file mtime)` and not stamping `created_at` after the
+rename.** `created_at` sits inside the serialized header, so stamping it
+after the rename would need a second write of the header (and a second
+rename) or a format change. The file mtime is already known at load time
+and costs nothing.
+
+**Consequences.** Changes made between the walk and the end of the publish
+tail were already in the probe's blind spot when the tail fit inside the
+tolerance. A slow tail now widens that blind spot by the length of the
+tail instead of tripping the probe permanently. A per-file change is still
+caught by DEC-302's per-entry mtime check. Touching the index file by hand
+moves `published_at` forward the same way. Amends DEC-361 (the DEC-360
+no-op amendment) and records the `.md` exception under DEC-310.
