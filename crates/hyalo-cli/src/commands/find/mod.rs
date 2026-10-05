@@ -240,16 +240,12 @@ pub(crate) struct FindExtras<'a> {
     pub(crate) section_mode: bool,
     /// Parsed `--facet` specs; empty when none was requested.
     pub(crate) facets: &'a [FacetSpec],
-    /// `true` when no PATTERN was given and the real process argv held a
-    /// `-s…`/`-t…` token with a concatenated value (BUG-5 / DEC-356, review
-    /// fix): the shape a leading-dash PATTERN takes once clap reads it as
-    /// `--section`/`--tag` plus the rest of the token instead. Computed once
-    /// from `std::env::args_os()` by the CLI entry point
-    /// (`argv_has_concatenated_short_flag`), not re-derived from whether the
-    /// resulting filter happened to match many headings or none -- that
-    /// conflated "the filter is unusual" with "the filter was never typed".
-    pub(crate) dash_swallowed_argv: bool,
 }
+
+/// The `-q`-proof tip printed whenever [`argv_has_concatenated_short_flag`]
+/// fires (DEC-356, completed by DEC-371).
+pub(crate) const DASH_SWALLOWED_TIP: &str = "a `-s…`/`-t…` word was read as --section/--tag plus the rest of the word -- \
+     to search for a term starting with '-', write `hyalo find -- '-term'`";
 
 /// `true` when `args` (a real or simulated argv, PROGRAM name included or
 /// not) contains a short-flag token for `--section` (`-s`) or `--tag`
@@ -262,7 +258,8 @@ pub(crate) struct FindExtras<'a> {
 /// Pure over an argv slice, independent of `std::env::args_os()`, so the
 /// detection itself is unit-testable without spawning a process.
 pub(crate) fn argv_has_concatenated_short_flag(args: &[String]) -> bool {
-    args.iter().any(|a| {
+    // Everything after `--` is PATTERN text, never a flag (DEC-371).
+    args.iter().take_while(|a| a.as_str() != "--").any(|a| {
         let bytes = a.as_bytes();
         !a.starts_with("--")
             && bytes.len() > 2
@@ -1807,34 +1804,11 @@ pub(crate) fn find_prepared(
     // per-file note, which would spam a large result set) names how many
     // result files hit this so the asymmetry is visible without being noisy.
     if ambiguous_section_files > 0 {
-        // BUG-5 / DEC-356: with no PATTERN, `-section` (a leading-dash term
-        // the shell never saw as the body-search PATTERN) is swallowed by
-        // clap as `-s` plus the rest of the token, e.g. `hyalo find
-        // '-snapshot'` silently becomes `--section napshot`. Review fix:
-        // keyed on the real argv shape (`extras.dash_swallowed_argv`), not
-        // on "no PATTERN" alone -- a deliberate `hyalo find --section Task`
-        // with no PATTERN and a genuinely ambiguous heading is not this bug
-        // and should not get a hint about a dash it never typed.
-        let dash_hint = if extras.dash_swallowed_argv {
-            " -- to search for a term starting with '-', write `hyalo find -- '-term'`"
-        } else {
-            ""
-        };
         crate::warn::warn(format!(
             "--section matched more than one heading in {ambiguous_section_files} file(s) \
              -- each such file's results include content from every matched section \
-             (see `hyalo find --help`){dash_hint}"
+             (see `hyalo find --help`)"
         ));
-    } else if extras.dash_swallowed_argv && !section_filters.is_empty() {
-        // Review fix (SHOULD-FIX 3): the common case is a *single* matching
-        // heading, which never set `ambiguous_section_files` and so never
-        // warned at all -- `hyalo find '-sqlite'` (clap: `-s` + "qlite")
-        // silently returned the one file whose heading contains "qlite"
-        // with no sign a dash-prefixed PATTERN had been swallowed.
-        crate::warn::warn(
-            "--section matched a heading, but no PATTERN was given -- if '-term' was meant \
-             as the search pattern, write `hyalo find -- '-term'`",
-        );
     }
 
     // F-4: warn when a --sort property key holds more than one JSON type

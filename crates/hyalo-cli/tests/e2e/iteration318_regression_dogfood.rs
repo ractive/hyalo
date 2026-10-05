@@ -255,3 +255,31 @@ fn accented_prefix_and_terms_prefix_fold_like_a_bare_word_on_disk_and_index() {
         assert!(terms("get_user").contains("getusernam"), "index={index}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// DEC-371 (completes DEC-356): the leading-dash tip
+// ---------------------------------------------------------------------------
+
+const DASH_TIP: &str = "write `hyalo find -- '-term'`";
+
+#[test]
+fn dash_cluster_followed_by_a_pattern_gets_the_tip_even_under_quiet() {
+    let tmp = vault();
+    for quiet in [false, true] {
+        let mut args = vec!["find", "-snapshot", "index", "--count"];
+        if quiet {
+            args.insert(0, "-q");
+        }
+        let (code, _, err) = run_text(tmp.path(), &args);
+        assert_eq!(code, Some(0), "{err}");
+        assert_eq!(err.matches(DASH_TIP).count(), 1, "quiet={quiet}: {err}");
+    }
+}
+
+#[test]
+fn a_dash_term_after_double_dash_gets_no_tip() {
+    let tmp = vault();
+    let (code, _, err) = run_text(tmp.path(), &["find", "--count", "--", "-snapshot index"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains(DASH_TIP), "{err}");
+}

@@ -164,7 +164,11 @@ pub(crate) fn run(
     let argv: Vec<String> = std::env::args_os()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let dash_swallowed_argv = pattern.is_none() && super::argv_has_concatenated_short_flag(&argv);
+    // DEC-371 (completes DEC-356): the tip no longer depends on whether a
+    // PATTERN followed — `hyalo find -snapshot index` runs `--section napshot`
+    // with PATTERN `index` and used to say nothing. It is `-q`-proof like the
+    // other query-reading warnings: a silently re-read query is not noise.
+    let dash_swallowed_argv = super::argv_has_concatenated_short_flag(&argv);
     for t in &tag {
         if let Err(msg) = crate::commands::tags::validate_tag(t) {
             // With no PATTERN, a leading-dash term the shell never saw as
@@ -184,6 +188,12 @@ pub(crate) fn run(
                 None,
             )));
         }
+    }
+
+    // Emitted after the tag check: an invalid swallowed tag already carries
+    // the same advice as its error hint, once.
+    if dash_swallowed_argv {
+        crate::warn::warn_always(super::DASH_SWALLOWED_TIP);
     }
 
     // Dispatch owns an already-normalized identity. Disk fallback and filters
@@ -288,7 +298,6 @@ pub(crate) fn run(
                 &super::FindExtras {
                     section_mode,
                     facets: &facet_specs,
-                    dash_swallowed_argv,
                 },
                 &mut search_report,
             )?;

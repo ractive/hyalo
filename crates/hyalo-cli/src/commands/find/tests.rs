@@ -2235,6 +2235,23 @@ fn argv_detects_concatenated_section_and_tag_short_flags() {
 }
 
 #[test]
+fn argv_ignores_dash_terms_after_double_dash() {
+    let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    assert!(!argv_has_concatenated_short_flag(&s(&[
+        "hyalo",
+        "find",
+        "--",
+        "-snapshot"
+    ])));
+    assert!(argv_has_concatenated_short_flag(&s(&[
+        "hyalo",
+        "find",
+        "-snapshot",
+        "index"
+    ])));
+}
+
+#[test]
 fn argv_ignores_separate_and_long_forms() {
     let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     // Short flag with a separately-given value: legitimate `-s Task`.
