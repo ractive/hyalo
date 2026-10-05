@@ -3,7 +3,7 @@ title: "Iteration 315: remove field terms from the search grammar"
 type: iteration
 date: 2026-10-05
 tags: [iteration, search, find, cleanup]
-status: in-progress
+status: completed
 branch: iter-315/remove-field-terms
 priority: 1
 ---
@@ -41,7 +41,7 @@ for any released version. DEC number reserved: **DEC-366** (amends DEC-333).
 - [x] Every non-field query from the 2026-10-04 dogfood report's grammar table returns the same count as before (`snapshot incremental OR refresh` 52, `snapshot (incremental OR refresh) -mdn` 24, `"stale index"~3` 56, `config*` 228, `configuration*` 120)
 - [x] Disk and `--index` byte-identical on the queries above; `terms` unchanged
 - [x] No mention of `title:`/`heading:`/`tag:`/`path:` field terms remains in help, claims, templates or README (`grep -rn 'heading:' --include='*.md' --include='*.rs'` reviewed)
-- [ ] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, jq-recipes, ts-types, pi-package-sync, pi-runtime and `hyalo lint --strict` green; CI green on three platforms
+- [x] fmt, clippy `-D warnings`, `cargo test --workspace -q`, `cargo deny check`, help-drift, jq-recipes, ts-types, pi-package-sync, pi-runtime and `hyalo lint --strict` green; CI green on three platforms
 
 ## Outcome
 
