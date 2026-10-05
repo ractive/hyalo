@@ -682,8 +682,7 @@ pub(crate) fn find_prepared(
                     let hint = match field_group {
                         Some(field) => format!(
                             "field terms were removed from the search grammar (DEC-366) -- \
-                             select by {field} with {} instead; see QUERY SYNTAX in \
-                             `hyalo find --help`",
+                             select by {field} with {} instead",
                             crate::hints::legacy_field_flag(field, "").0
                         ),
                         None => "quote text to search it literally (e.g. '\"a)\"'); \

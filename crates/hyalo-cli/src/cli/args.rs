@@ -295,7 +295,8 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         All JSON is wrapped in a consistent envelope:\n\
           {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
         total is present for list commands ({LIST_COMMANDS}). \
-        hints is always present (empty [] when --no-hints). \
+        hints is always present on a result (empty [] when --no-hints); an error envelope \
+        carries it only when it has a hint to offer. \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
         --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
         RESULTS CONVENTIONS: the envelope owns \"total\". When a command repeats \"total\" inside \

@@ -98,6 +98,40 @@ and this project adheres to
 
 ### Fixed
 
+- `--jq` works when SIGINT is ignored — a shell background job
+  (`cmd &` in a non-interactive shell), `nohup`, `trap '' INT` — instead of
+  failing every filter with "cannot install jq cancellation handler"
+  (DEC-369). Ctrl-C still cancels a running filter when it can be caught.
+- A note whose frontmatter holds invalid UTF-8 no longer makes `properties`,
+  `tags` and `find --fields file`/`--count` exit 2 with no file named: every
+  scan reads it lossily, on disk and under `--index` alike, and the summary
+  line says "N files contain invalid UTF-8 — read lossily" instead of
+  "skipped N unreadable files". A named write (`set bad.md`) or
+  `read bad.md --frontmatter` exits 1 naming the file (DEC-370).
+- `prefix*` and `terms PREFIX` fold accents and case like a bare word:
+  `résumé*` = `resume*`, `terms rés` = `terms res`; `terms` also drops a
+  trailing `*` and an identifier's separators (`get_user`) (DEC-371).
+- `find -snapshot index` (a `-s…`/`-t…` word read as a flag, followed by a
+  PATTERN) now prints the `hyalo find -- '-term'` tip, and the tip is
+  `-q`-proof (DEC-371, completes DEC-356).
+- `find --index --file <deleted>` and `find --index PATTERN <deleted>` exit 1
+  "file not found" like a disk scan instead of serving the stale snapshot
+  entry (exit 0) or failing while reading snippets (exit 2); `--files-from`
+  under `--index` counts a deleted file as missing (DEC-371).
+- `links fix --apply` writes a target repair and an anchor repair in the same
+  file in one run; the anchor used to be deferred to a second run while the
+  first reported "Applied: yes".
+- `set --property p=9223372036854775808` writes the exact integer (a larger
+  integer literal is kept as quoted text) instead of a lossy float.
+- No false "no files matched --property map.b; did you mean: map?" warning
+  when the dot-path exists; an operator-only or dash-only query says the
+  query is empty instead of "negating every word"; a `--facet` drill-down no
+  longer duplicates the generic "Narrow by tag" hint.
+- Help: `read --help` says `size`/`lines` are whole-file numbers, `terms
+  --help` says a tag-only term counts, `find --help` no longer names a
+  snapshot format, group `-h` footers say `--count(listing-only)`, and
+  `hyalo --help` says an error envelope carries `hints` only when it has one.
+
 - A slow `create-index` publish no longer makes the snapshot look stale
   forever (DEC-368). `created_at` is stamped before the serialize, fsync and
   rename, and the rename bumps the directory holding the snapshot. When that
@@ -346,6 +380,19 @@ and this project adheres to
   crate installs them from `templates/jev/` (DEC-344).
 
 ### Changed
+
+- **A `title:x`-shaped query word warns on every query**, not only on zero
+  results: one stderr line names the flag that replaced it (`--title`,
+  `--section`, `--tag`, `--glob`); `-q` silences it and `--jq` output is
+  unchanged. `title:(a OR b)`'s parenthesis error names the removal, and the
+  zero-result migration hint drops a trailing `*` for `--title`/`--section`
+  (DEC-371, amends DEC-366).
+- **An explicit `--dry-run` refuses under a malformed `.hyalo.toml`** exactly
+  like the write it previews (exit 1), reversing iteration 201's carve-out.
+- Teaching hints (DEC-371, amends DEC-367): a PATTERN-less `--section X` no
+  longer hints section mode; a zero-result `"a b"~N` whose words all occur
+  hints the plain AND and the reversed order instead of `terms`; `find
+  --help` says slop is ordered and shows `'"a b"~5 OR "b a"~5'`.
 
 - **Breaking: `read --lines A:B` is file-absolute.** It used to count from
   the first line of the body, with the frontmatter block excluded; it now

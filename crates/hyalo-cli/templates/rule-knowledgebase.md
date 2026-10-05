@@ -37,8 +37,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Query language** (DEC-333): implicit AND; `OR` binds tighter (`a b OR c` = a AND (b OR c));
   `( … )` groups and nests; `-` negates a term, phrase or group; `conf*` expands over **stems**
   (256 most frequent, `-q`-proof warning). There are no field terms (DEC-366): `title:x` or
-  `foo:bar` is a plain word — select structure with `--title`, `--section`, `--tag`, `--glob`;
-  unbalanced `(`/`()`/bare `*` exit 1. Terms are stemmed in
+  `foo:bar` is a plain word — select structure with `--title`, `--section`, `--tag`, `--glob`
+  (a `title:x`-shaped word warns once, results or not; DEC-371); `prefix*` and `terms PREFIX`
+  fold accents and case like a bare word; unbalanced `(`/`()`/bare `*` exit 1. Terms are stemmed in
   every vault language. Zero results carry `suggestions` (did-you-mean) and a corrected-query
   hint; `hyalo terms [PREFIX]` lists the stemmed dictionary with document counts.
 - **Tokenizer v4 and BM25F** (DEC-336–338, iter-304): accents fold (`résumé` = `resume`); an
@@ -84,8 +85,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every
-  mutating command **and every gate command** (`lint`, `find --strict`, `views run`) with
-  exit 1; other reads continue on defaults, with a `-q`-proof warning.
+  mutating command (an explicit `--dry-run` of one included) **and every gate command**
+  (`lint`, `find --strict`, `views run`) with exit 1; other reads continue on defaults, with a `-q`-proof warning.
 - **A project-local `dir` must stay at-or-below the config directory**: an absolute `dir` or one
   whose `..` components net above where `.hyalo.toml` lives refuses *every* command (reads
   included) with a `-q`-proof error naming the file and value — `hyalo config` still reports it
@@ -109,7 +110,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   frontmatter will not parse is skipped and counted, and the run ends with one stderr line —
   `warning: skipped N files with unparsable frontmatter (run hyalo lint --rule HYALO005 for
   details)`. `-q` silences it; `[scan] verbose_skips = true` or `RUST_LOG=hyalo=debug` restores
-  the per-file YAML excerpts. `summary` accounts for them: `Files: 75 (28 skipped, 0 excluded)`
+  the per-file YAML excerpts. A note holding invalid UTF-8 is still listed — read lossily and kept
+  out of full-text search — and summarised as `N files contain invalid UTF-8` (DEC-370); a named
+  write to one with a non-UTF-8 frontmatter exits 1. `summary` accounts for them: `Files: 75 (28 skipped, 0 excluded)`
   in text, `results.files.skipped` / `results.files.excluded` in JSON, with per-directory
   attribution under `results.files.directories[].skipped`.
 - **A broken `.hyalo.toml` fails a gate** (DEC-279, iter-265): `lint`, `find --strict` and
@@ -248,7 +251,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `lint --rule HYALO005` hint) instead of returning an empty result set; a `--files-from` list
   keeps batch semantics and counts it at exit 0. With `--index`, a named path the snapshot has
   never seen is read from disk for that run, so a note created since the last `create-index` is
-  never invisible; a path in neither place is still `file not found`, exit 1. `--file`/`--glob`
+  never invisible; a path in neither place — or deleted since the snapshot was built
+  (DEC-371) — is `file not found`, exit 1. `--file`/`--glob`
   now keep `broken_anchor` and `suggested_fragment`, so the four ways of selecting one file
   return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
   error is HYALO005's finding and is otherwise a counted skip.

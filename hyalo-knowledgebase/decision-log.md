@@ -5346,6 +5346,8 @@ set `site_prefix` or fix the links.
 
 ## DEC-301: a path the caller names is a promise, not a filter (2026-09-05) — amends DEC-278, DEC-280, DEC-284
 
+**Amended by DEC-371 (iteration 318):** the promise holds under `--index` too. A named path is resolved on disk exactly as a disk scan resolves it before the snapshot answers, so a file deleted since `create-index` is "file not found" (exit 1) — not a stale entry (exit 0) or a snippet failure (exit 2). `--files-from` keeps its lenient contract and counts it under `files_missing`.
+
 **Decision:** For `find`, a path supplied as `--file` or positionally is
 answered *about that path*, never quietly dropped:
 
@@ -7502,6 +7504,8 @@ script that only checks the exit code.
 
 ## DEC-356: a leading-dash PATTERN names `--` in its own error, never only in `--help` (2026-10-04)
 
+**Amended by DEC-371 (iteration 318):** the tip no longer requires that no PATTERN followed (`find -snapshot index` ran `--section napshot` silently), the argv check stops at `--`, and the tip is `-q`-proof.
+
 **Decision.** `hyalo find '-tag:iteration snapshot'` and `hyalo find
 '-snapshot'` are not new failure modes — clap has always read a bare
 leading-dash positional as a short-flag cluster (`-t` plus the rest of the
@@ -8209,6 +8213,8 @@ correct and round-trip-safe without it.
 
 ## DEC-365: `find`, `summary` and `lint` agree a non-UTF-8 note is a problem, on disk and under `--index` alike (2026-10-05, amended same day — review round)
 
+**Amended by DEC-370 (iteration 318):** invalid UTF-8 in the *frontmatter* is now read lossily by the frontmatter-only scans too (they used to exit 2), and such a file is reported as "read lossily", not "skipped … unreadable".
+
 **Decision.** A note whose body contains invalid UTF-8 bytes is now
 reported, every time a scan actually reads its body, as a skip: `find`
 (default fields) and `summary` emit the same "skipped N unreadable
@@ -8334,6 +8340,8 @@ shape), `crates/hyalo-core/src/index.rs` (`IndexEntry.valid_utf8`,
 
 ## DEC-366: Field terms removed from the search grammar — structure is selected with flags (2026-10-05)
 
+**Amended by DEC-371 (iteration 318):** the migration notice fires on every query holding a `title:x`-shaped word, not only on zero results.
+
 **Context.** Iteration 302 ([[decision-log#DEC-333: Ranked search grammar: OR binds tighter than AND, groups, prefixes, field terms (2026-10-03)]]) added `title:`,
 `heading:`, `tag:` and `path:` field terms to the ranked-search PATTERN.
 Reviewing them after the 2026-10-04 dogfood, the owner found that each one
@@ -8394,6 +8402,8 @@ benefit; a partial grammar would also invite "why not `tag:`?" and re-grow
 the removed surface.
 
 ## DEC-367: Search is taught by hints and one shared FIND 101 block, not by a new help surface (2026-10-05)
+
+**Amended by DEC-371 (iteration 318):** the PATTERN-less `--section` → section-mode hint is removed, and a zero-result `"a b"~N` hints the AND form and the reversed order instead of `terms`.
 
 **Context.** The ranked-search features of iterations 302–304 (the grammar,
 `--granularity section`, `--facet`, `terms`) were documented in a 42 KB
@@ -8553,3 +8563,68 @@ documents:
 Per-file edits are still caught by DEC-302's per-entry mtime check and
 deletions by the per-entry stat. Amends DEC-361 (the DEC-360 no-op
 amendment) and records the `.md` exception under DEC-310.
+
+## DEC-369: `--jq` cancellation is best effort; an ignored SIGINT runs the filter (2026-10-05)
+
+**Context.** Iteration 295 isolated `--jq` in a worker process and installed a
+Ctrl-C handler (`ctrlc::try_set_handler`) so an interrupt kills the worker.
+`ctrlc` refuses to install when SIGINT already has a non-default
+disposition — `SIG_IGN` under a shell background job (`cmd &` in a
+non-interactive shell), `nohup`, `trap '' INT`, many job runners — and the
+error failed every `--jq` with exit 1 (dogfood 2026-10-05, HIGH).
+
+**Decision** (iteration 318, [[iterations/iteration-318-regression-dogfood-fixes]]).
+Installing the handler is best effort: when it cannot be installed the filter
+runs without Ctrl-C cancellation. A process whose SIGINT is ignored cannot be
+interrupted by Ctrl-C anyway; the 3 s deadline and the worker's rlimits still
+bound it. No `libc::sigaction` query is needed, since the install error
+covers both "ignored" and "already registered".
+
+## DEC-370: invalid UTF-8 in frontmatter is read lossily everywhere; a named write refuses (2026-10-05) — amends DEC-365
+
+**Context.** The frontmatter framer validated each line as UTF-8 to find the
+closing `---`, so one note with invalid bytes in its frontmatter made
+`properties`, `tags` and `find --fields file` exit 2 with no file named,
+while `find`, `summary`, `lint` and every `--index` read skipped (and listed)
+it. `read`/`set` on that file exited 2.
+
+**Decision** (iteration 318).
+- A line holding invalid UTF-8 is frontmatter content, never a delimiter;
+  framing is a byte question. The frontmatter-only scan decodes the framed
+  block lossily, exactly like the full-body scan, and reports the block's
+  validity (it ends at the closing delimiter, so unlike DEC-365's bodyless
+  prefix it cannot end mid-character). Disk and `--index` agree.
+- Such a file is reported under a new skip kind: "N files contain invalid
+  UTF-8 — read lossily and excluded from full-text search". It is listed, so
+  "skipped … unreadable" misdescribed it; `summary.files.skipped` still
+  counts it (DEC-365).
+- `read_frontmatter_from_reader` reports the decode failure as a typed
+  frontmatter error: a named write (`set`, `append`, `remove`) or
+  `read --frontmatter` exits 1 naming the file, and a bulk write skips and
+  counts it — a lossy re-encode is never written back. A plain `read` prints
+  the body, as it does for a body-invalid note.
+
+## DEC-371: query-reading honesty — migration notice always, folded prefixes, the dash tip, named files under `--index`, fewer teaching hints (2026-10-05) — amends DEC-301, DEC-356, DEC-366, DEC-367
+
+**Context.** The regression dogfood of 2026-10-05 found several places where a
+query was silently read as something else, or a hint led nowhere.
+
+**Decision** (iteration 318).
+- *Migration notice.* A positive `title:x` / `heading:x` / `tag:x` / `path:x`
+  word gets one ordinary stderr warning per query naming the replacing
+  flags, results or not (`title:dogfood` silently matched 134 files).
+  `title:(a OR b)`'s parenthesis error names the removal; the zero-result
+  hint drops a trailing `*` for the substring flags `--title`/`--section`.
+- *Accent folding.* `prefix*` and `terms PREFIX` fold accents and case with
+  the tokenizer's own `fold` before matching stems (DEC-336), folding before
+  the word is split so a decomposed accent's combining mark cannot split it.
+  `terms` also drops a trailing `*` and an identifier's separators, so
+  `get_user` lists the joined whole the index holds.
+- *Dash tip* (completes DEC-356). Fires for any `-s…`/`-t…` cluster before
+  `--`, PATTERN or not, and is `-q`-proof like the other query warnings.
+- *Named files under `--index`* (amends DEC-301). See the amendment note there.
+- *Teaching hints* (amends DEC-367). The PATTERN-less `--section` hint is
+  removed (299 files became 1 007 sections); a zero-result whole-query
+  `"a b"~N` whose words all occur hints the plain AND and the reversed
+  order, never `terms`. FIND 101 is unchanged; QUERY SYNTAX says the slop is
+  ordered and shows `'"a b"~5 OR "b a"~5'`.

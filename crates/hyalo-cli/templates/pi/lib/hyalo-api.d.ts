@@ -2520,7 +2520,7 @@ type TaskReadResult = {
 };
 
 /**
- * One dictionary term and the number of files whose authored title or body
+ * One dictionary term and the number of files whose title, headings, body or tags
  * contains it (the BM25 corpus indexes both).
  */
 type TermEntry = {
@@ -2529,7 +2529,7 @@ type TermEntry = {
      */
     term: string;
     /**
-     * Number of files whose title or body contains this stem.
+     * Number of files whose title, headings, body or tags contain this stem.
      */
     docs: number;
 };
