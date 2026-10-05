@@ -4,7 +4,7 @@ members = ["crates/*"]
 default-members = ["crates/hyalo-cli"]
 
 [workspace.package]
-version = "0.24.1"
+version = "0.25.0"
 edition = "2024"
 # MSRV: AtomicU64::try_update (stable in 1.95) is the newest std API in use;
 # checked with `cargo +1.95 check --workspace --all-targets`.
@@ -14,8 +14,8 @@ repository = "https://github.com/ractive/hyalo"
 
 [workspace.dependencies]
 # Internal crates
-hyalo-core = { path = "crates/hyalo-core", version = "0.24.1" }
-hyalo-mdlint = { path = "crates/hyalo-mdlint", version = "0.24.1" }
+hyalo-core = { path = "crates/hyalo-core", version = "0.25.0" }
+hyalo-mdlint = { path = "crates/hyalo-mdlint", version = "0.25.0" }
 
 # External dependencies
 anyhow = "1"
