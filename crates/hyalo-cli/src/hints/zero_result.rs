@@ -232,7 +232,9 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
 /// a `*` is passed through as the glob itself.
 pub(crate) fn legacy_field_flag(field: &str, value: &str) -> (&'static str, String) {
     match field {
-        "heading" => ("--section", value.to_owned()),
+        // `--section` and `--title` are substring flags: a trailing `*`
+        // would be matched literally (DEC-371).
+        "heading" => ("--section", value.trim_end_matches('*').to_owned()),
         "tag" => ("--tag", value.trim_start_matches('#').to_owned()),
         "path" => {
             let glob = if value.contains('*') {
@@ -243,7 +245,7 @@ pub(crate) fn legacy_field_flag(field: &str, value: &str) -> (&'static str, Stri
             };
             ("--glob", glob)
         }
-        _ => ("--title", value.to_owned()),
+        _ => ("--title", value.trim_end_matches('*').to_owned()),
     }
 }
 

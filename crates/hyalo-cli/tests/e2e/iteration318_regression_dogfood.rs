@@ -276,6 +276,83 @@ fn dash_cluster_followed_by_a_pattern_gets_the_tip_even_under_quiet() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-366): the field-term migration notice
+// ---------------------------------------------------------------------------
+
+const MIGRATION: &str = "field terms were removed from the search grammar";
+
+#[test]
+fn field_shaped_word_with_results_gets_one_migration_notice_and_keeps_its_results() {
+    let tmp = vault();
+    write_md(tmp.path(), "t.md", "# T\n\ntitle and snapshot under a heading with an index\n");
+    let (code, out, err) = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "title:snapshot heading:index"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert_ne!(out, "0", "plain-word results are still returned");
+    assert_eq!(err.matches(MIGRATION).count(), 1, "{err}");
+    assert!(
+        err.contains("--title") && err.contains("--section"),
+        "{err}"
+    );
+
+    let (_, quiet_out, quiet_err) = run_text(
+        tmp.path(),
+        &[
+            "-q",
+            "find",
+            "--count",
+            "--",
+            "title:snapshot heading:index",
+        ],
+    );
+    assert_eq!(quiet_out, out);
+    assert!(!quiet_err.contains(MIGRATION), "{quiet_err}");
+
+    let (_, jq_out, _) = run_text(tmp.path(), &["find", "title:snapshot", "--jq", ".total"]);
+    let (_, plain_jq, _) = run_text(tmp.path(), &["find", "title snapshot", "--jq", ".total"]);
+    assert_eq!(jq_out, plain_jq);
+}
+
+#[test]
+fn grouped_field_term_error_names_the_removal() {
+    let tmp = vault();
+    let out = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "title:(a OR b)", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(MIGRATION) && err.contains("--title"), "{err}");
+}
+
+#[test]
+fn zero_result_migration_hint_strips_the_trailing_star_for_title() {
+    let tmp = vault();
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "title:zzbirds*", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        cmds.iter()
+            .any(|c| c.contains("--title zzbirds") && !c.contains('*')),
+        "{cmds:?}"
+    );
+}
+
 #[test]
 fn a_dash_term_after_double_dash_gets_no_tip() {
     let tmp = vault();

@@ -359,6 +359,46 @@ fn score_corpus(
     scored
 }
 
+/// The one-line field-term migration notice (DEC-371), or `None` when the
+/// query holds no `title:x`-shaped word.
+fn legacy_field_notice(terms: &[hyalo_core::bm25::LegacyFieldTerm]) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+    let words: Vec<String> = terms
+        .iter()
+        .map(|t| format!("'{}:{}'", t.field, t.value))
+        .collect();
+    let mut flags: Vec<&str> = Vec::new();
+    for t in terms {
+        let flag = crate::hints::legacy_field_flag(&t.field, &t.value).0;
+        if !flags.contains(&flag) {
+            flags.push(flag);
+        }
+    }
+    Some(format!(
+        "{} searched as plain words -- field terms were removed from the search grammar \
+         (DEC-366); select with {} instead",
+        words.join(", "),
+        flags.join(", ")
+    ))
+}
+
+/// The removed field name when `pattern` opens a group right after one
+/// (`title:(a OR b)`), the old grouped field-term form.
+fn legacy_field_group(pattern: &str) -> Option<&'static str> {
+    pattern.split_whitespace().find_map(|word| {
+        let word = word.trim_start_matches(['-', '(']);
+        let (name, rest) = word.split_once(':')?;
+        if !rest.starts_with('(') {
+            return None;
+        }
+        ["title", "heading", "tag", "path"]
+            .into_iter()
+            .find(|f| f.eq_ignore_ascii_case(name))
+    })
+}
+
 /// Advisory for `find` with an empty-string `--pattern`/positional body
 /// query: "no filter" rather than a user error, but worth a note so a
 /// scripted caller does not mistake "matches everything" for a bug.
@@ -636,15 +676,26 @@ pub(crate) fn find_prepared(
                 }
                 Ok(query) => Some(query),
                 Err(error) => {
+                    // DEC-371: `title:(a OR b)` is the old field-term grouping;
+                    // name the removal rather than only the parenthesis.
+                    let field_group = legacy_field_group(pattern);
+                    let hint = match field_group {
+                        Some(field) => format!(
+                            "field terms were removed from the search grammar (DEC-366) -- \
+                             select by {field} with {} instead; see QUERY SYNTAX in \
+                             `hyalo find --help`",
+                            crate::hints::legacy_field_flag(field, "").0
+                        ),
+                        None => "quote text to search it literally (e.g. '\"a)\"'); \
+                             see QUERY SYNTAX in `hyalo find --help`"
+                            .to_owned(),
+                    };
                     return Ok(CommandOutcome::UserError(
                         crate::output::user_diagnostic(
                             format,
                             &format!("invalid search query: {error}"),
                             None,
-                            Some(
-                                "quote text to search it literally (e.g. '\"a)\"'); \
-                             see QUERY SYNTAX in `hyalo find --help`",
-                            ),
+                            Some(&hint),
                             None,
                         )
                         .with_help_pointer("find", "QUERY SYNTAX"),
@@ -690,6 +741,13 @@ pub(crate) fn find_prepared(
                 "'{term}': '*' only means a prefix wildcard as the last character of a word \
                  (e.g. 'config*') -- here it is a literal character and was dropped"
             ));
+        }
+        // DEC-371 (amends DEC-366): a `title:x`-shaped word gets the
+        // migration notice whether or not the query matched -- `title:dogfood`
+        // silently matching 134 files on the plain words was the trap. One
+        // ordinary (`-q`-silenced) line per query, not per word.
+        if let Some(notice) = legacy_field_notice(query.legacy_field_terms()) {
+            crate::warn::warn(notice);
         }
     }
     // DEC-334: section scoring borrows the IDF and prefix expansion of the
