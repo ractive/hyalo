@@ -1,0 +1,717 @@
+//! Iteration 318: regression dogfood fixes before 0.25.0.
+
+use super::common::{hyalo_no_hints, write_md};
+use serde_json::Value;
+use std::path::Path;
+use tempfile::TempDir;
+
+fn vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: Alpha\ntags: [search]\n---\n# Alpha\n\nsnapshot index body\n",
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\ntitle: Beta\n---\n# Beta\n\nanother snapshot\n",
+    );
+    tmp
+}
+
+fn run_json(dir: &Path, args: &[&str]) -> (Value, std::process::Output) {
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    let json = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    (json, output)
+}
+
+// ---------------------------------------------------------------------------
+// DEC-369: `--jq` runs when SIGINT is ignored
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+mod jq_under_ignored_sigint {
+    use super::*;
+    use std::process::Command;
+
+    /// Runs `script` under `sh -c`, with `$0` the hyalo binary and `$1` the vault.
+    fn sh(script: &str, dir: &Path) -> std::process::Output {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg(assert_cmd::cargo::cargo_bin("hyalo"))
+            .arg(dir)
+            .output()
+            .unwrap()
+    }
+
+    fn assert_prints(output: &std::process::Output, expected: &str) {
+        assert!(
+            output.status.success(),
+            "exit {:?}, stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+    }
+
+    #[test]
+    fn jq_find_runs_as_a_background_job_of_a_non_interactive_shell() {
+        let tmp = vault();
+        let out = sh(
+            r#""$0" --dir "$1" find snapshot --jq .total & wait $!"#,
+            tmp.path(),
+        );
+        assert_prints(&out, "2");
+    }
+
+    #[test]
+    fn jq_summary_runs_with_sigint_trapped_to_ignore() {
+        let tmp = vault();
+        let out = sh(
+            r#"trap '' INT; "$0" --dir "$1" summary --jq .results.files.total"#,
+            tmp.path(),
+        );
+        assert_prints(&out, "2");
+    }
+
+    #[test]
+    fn jq_set_dry_run_runs_with_sigint_ignored() {
+        let tmp = vault();
+        let out = sh(
+            r#"trap '' INT; "$0" --dir "$1" set a.md --property x=1 --dry-run --jq '.results.modified | length'"#,
+            tmp.path(),
+        );
+        assert_prints(&out, "1");
+    }
+
+    #[test]
+    fn jq_runs_under_nohup() {
+        let tmp = vault();
+        let out = sh(
+            r#"command -v nohup >/dev/null || { echo 2; exit 0; }; nohup "$0" --dir "$1" find snapshot --jq .total 2>/dev/null"#,
+            tmp.path(),
+        );
+        assert_prints(&out, "2");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DEC-370: invalid UTF-8 in frontmatter
+// ---------------------------------------------------------------------------
+
+/// `ok.md` plus `bad.md`, whose frontmatter title holds the bytes FF FE.
+fn utf8_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "ok.md",
+        "---\ntitle: Ok\ntags: [a]\n---\nbody ok\n",
+    );
+    std::fs::write(
+        tmp.path().join("bad.md"),
+        b"---\ntitle: Bad \xff\xfe\ntags: [b]\n---\nbody\n",
+    )
+    .unwrap();
+    tmp
+}
+
+const LOSSY_WARNING: &str = "1 file contains invalid UTF-8 — read lossily";
+
+#[test]
+fn frontmatter_only_scans_read_a_non_utf8_frontmatter_lossily_on_disk_and_index() {
+    let tmp = utf8_vault();
+    for index in [false, true] {
+        if index {
+            let (_, out) = run_json(tmp.path(), &["create-index", "--format", "json"]);
+            assert!(out.status.success(), "{out:?}");
+        }
+        let extra: &[&str] = if index { &["--index"] } else { &[] };
+        for (args, expected) in [
+            (&["tags", "--jq", ".results | length"][..], "2"),
+            (&["properties", "--jq", ".results | length"][..], "2"),
+            (&["find", "--fields", "file", "--jq", ".total"][..], "2"),
+            (&["find", "--count"][..], "2"),
+        ] {
+            let out = hyalo_no_hints()
+                .arg("--dir")
+                .arg(tmp.path())
+                .args(args)
+                .args(extra)
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{args:?} index={index}: {stderr}");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout).trim(),
+                expected,
+                "{args:?}"
+            );
+            assert!(
+                stderr.contains(LOSSY_WARNING),
+                "{args:?} index={index}: {stderr}"
+            );
+            assert!(!stderr.contains("unreadable"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn named_write_or_frontmatter_read_of_a_non_utf8_frontmatter_exits_1_naming_the_file() {
+    let tmp = utf8_vault();
+    for args in [
+        &["set", "bad.md", "--property", "x=1"][..],
+        &["read", "bad.md", "--frontmatter"][..],
+    ] {
+        let (_, out) = run_json(tmp.path(), &[args, &["--format", "json"]].concat());
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stderr);
+        assert!(text.contains("bad.md"), "{args:?}: {text}");
+        assert!(text.contains("not valid UTF-8"), "{args:?}: {text}");
+    }
+    let bytes = std::fs::read(tmp.path().join("bad.md")).unwrap();
+    assert!(bytes.windows(2).any(|w| w == b"\xff\xfe"), "file untouched");
+}
+
+#[test]
+fn plain_read_of_a_non_utf8_frontmatter_note_prints_its_body() {
+    let tmp = utf8_vault();
+    let out = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["read", "bad.md", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("body"));
+}
+
+#[test]
+fn bulk_writes_skip_a_non_utf8_frontmatter_note_and_leave_its_bytes_untouched() {
+    for args in [
+        &["set", "--glob", "*.md", "--property", "x=1"][..],
+        &["append", "--glob", "*.md", "--property", "tags=z"][..],
+        &["remove", "--glob", "*.md", "--property", "title"][..],
+        &["tags", "rename", "--from", "a", "--to", "aa"][..],
+        &["properties", "rename", "--from", "title", "--to", "name"][..],
+    ] {
+        let tmp = utf8_vault();
+        let before = std::fs::read(tmp.path().join("bad.md")).unwrap();
+        let (json, out) = run_json(tmp.path(), &[args, &["--format", "json"]].concat());
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        assert_eq!(
+            std::fs::read(tmp.path().join("bad.md")).unwrap(),
+            before,
+            "{args:?}: bytes changed"
+        );
+        let ok = std::fs::read_to_string(tmp.path().join("ok.md")).unwrap();
+        assert_ne!(ok, "---\ntitle: Ok\ntags: [a]\n---\nbody ok\n", "{args:?}");
+        if let Some(detail) = json["results"]["skipped_detail"].as_array() {
+            assert!(
+                detail
+                    .iter()
+                    .any(|d| d["file"] == "bad.md" && d["reason"] == "unparsable"),
+                "{args:?}: {json}"
+            );
+        }
+    }
+}
+
+/// Runs `hyalo --dir <dir> <args>` and returns (exit code, stdout, stderr).
+fn run_text(dir: &Path, args: &[&str]) -> (Option<i32>, String, String) {
+    let out = hyalo_no_hints()
+        .arg("--dir")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371: `prefix*` and `terms PREFIX` fold accents and case
+// ---------------------------------------------------------------------------
+
+#[test]
+fn accented_prefix_and_terms_prefix_fold_like_a_bare_word_on_disk_and_index() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "cv.md",
+        "# CV\n\nMy résumé lists get_user_name.\n",
+    );
+    write_md(
+        tmp.path(),
+        "other.md",
+        "# Other\n\nResume the work later.\n",
+    );
+    write_md(tmp.path(), "none.md", "# None\n\nNothing here.\n");
+    for index in [false, true] {
+        if index {
+            let (code, _, err) = run_text(tmp.path(), &["create-index"]);
+            assert_eq!(code, Some(0), "{err}");
+        }
+        let extra: &[&str] = if index { &["--index"] } else { &[] };
+        let count = |q: &str| {
+            run_text(
+                tmp.path(),
+                &[&["find", "--count"], extra, &["--", q]].concat(),
+            )
+            .1
+        };
+        let plain = count("resume*");
+        assert_eq!(plain, "2");
+        for q in ["résumé*", "Résum*", "RESUM*"] {
+            assert_eq!(count(q), plain, "{q} index={index}");
+        }
+        let terms = |p: &str| {
+            run_text(
+                tmp.path(),
+                &[&["terms", p, "--format", "text"], extra].concat(),
+            )
+            .1
+        };
+        assert_eq!(terms("rés"), terms("res"), "index={index}");
+        assert_eq!(terms("conf*"), terms("conf"), "index={index}");
+        assert!(terms("get_user").contains("getusernam"), "index={index}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371 (completes DEC-356): the leading-dash tip
+// ---------------------------------------------------------------------------
+
+const DASH_TIP: &str = "write `hyalo find -- '-term'`";
+
+#[test]
+fn dash_cluster_followed_by_a_pattern_gets_the_tip_even_under_quiet() {
+    let tmp = vault();
+    for quiet in [false, true] {
+        let mut args = vec!["find", "-snapshot", "index", "--count"];
+        if quiet {
+            args.insert(0, "-q");
+        }
+        let (code, _, err) = run_text(tmp.path(), &args);
+        assert_eq!(code, Some(0), "{err}");
+        assert_eq!(err.matches(DASH_TIP).count(), 1, "quiet={quiet}: {err}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-366): the field-term migration notice
+// ---------------------------------------------------------------------------
+
+const MIGRATION: &str = "field terms were removed from the search grammar";
+
+#[test]
+fn field_shaped_word_with_results_gets_one_migration_notice_and_keeps_its_results() {
+    let tmp = vault();
+    write_md(
+        tmp.path(),
+        "t.md",
+        "# T\n\ntitle and snapshot under a heading with an index\n",
+    );
+    let (code, out, err) = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "title:snapshot heading:index"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert_ne!(out, "0", "plain-word results are still returned");
+    assert_eq!(err.matches(MIGRATION).count(), 1, "{err}");
+    assert!(
+        err.contains("--title") && err.contains("--section"),
+        "{err}"
+    );
+
+    let (_, quiet_out, quiet_err) = run_text(
+        tmp.path(),
+        &[
+            "-q",
+            "find",
+            "--count",
+            "--",
+            "title:snapshot heading:index",
+        ],
+    );
+    assert_eq!(quiet_out, out);
+    assert!(!quiet_err.contains(MIGRATION), "{quiet_err}");
+
+    let (_, jq_out, _) = run_text(tmp.path(), &["find", "title:snapshot", "--jq", ".total"]);
+    let (_, plain_jq, _) = run_text(tmp.path(), &["find", "title snapshot", "--jq", ".total"]);
+    assert_eq!(jq_out, plain_jq);
+}
+
+#[test]
+fn grouped_field_term_error_names_the_removal() {
+    let tmp = vault();
+    let out = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "title:(a OR b)", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(MIGRATION) && err.contains("--title"), "{err}");
+}
+
+#[test]
+fn zero_result_migration_hint_strips_the_trailing_star_for_title() {
+    let tmp = vault();
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "title:zzbirds*", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        cmds.iter()
+            .any(|c| c.contains("--title zzbirds") && !c.contains('*')),
+        "{cmds:?}"
+    );
+}
+
+/// A swallowed filter that matches headings/tags may be deliberate: the tip
+/// is an ordinary note `-q` silences. One matching nothing stays `-q`-proof.
+#[test]
+fn dash_tip_is_quiet_able_only_when_the_swallowed_filter_matches() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "t.md",
+        "---\ntags: [iteration]\n---\n## Tasks\n\nindex body\n\n## Snapshot notes\n\nindex here\n",
+    );
+    let tip_count = |args: &[&str]| {
+        let (_, _, err) = run_text(tmp.path(), args);
+        err.matches(DASH_TIP).count()
+    };
+    for args in [
+        &["find", "-sTasks"][..],
+        &["find", "-titeration"][..],
+        &["find", "-snapshot", "index"][..],
+    ] {
+        assert_eq!(tip_count(args), 1, "{args:?} without -q");
+        assert_eq!(tip_count(&[&["-q"], args].concat()), 0, "{args:?} with -q");
+    }
+    // Matches nothing: -q-proof.
+    assert_eq!(tip_count(&["-q", "find", "-sZzqq"]), 1);
+    // Invalid swallowed tag: the error itself names the fix, under -q too.
+    let (code, _, err) = run_text(tmp.path(), &["-q", "find", "-tag:x"]);
+    assert_eq!(code, Some(1));
+    assert!(err.contains(DASH_TIP), "{err}");
+}
+
+#[test]
+fn a_dash_term_after_double_dash_gets_no_tip() {
+    let tmp = vault();
+    let (code, _, err) = run_text(tmp.path(), &["find", "--count", "--", "-snapshot index"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains(DASH_TIP), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-301): a named file deleted since `create-index`
+// ---------------------------------------------------------------------------
+
+fn vault_with_deleted_indexed_note() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "# note\n\nalpha text\n");
+    write_md(tmp.path(), "note2.md", "# note2\n\nalpha beta\n");
+    let (code, _, err) = run_text(tmp.path(), &["create-index"]);
+    assert_eq!(code, Some(0), "{err}");
+    std::fs::remove_file(tmp.path().join("note2.md")).unwrap();
+    tmp
+}
+
+#[test]
+fn index_read_of_a_named_deleted_file_exits_1_file_not_found() {
+    let tmp = vault_with_deleted_indexed_note();
+    for args in [
+        &["find", "--index", "--file", "note2.md"][..],
+        &["find", "--index", "alpha", "note2.md"][..],
+        &["find", "--index", "alpha", "--file", "note2.md"][..],
+    ] {
+        let (code, _, err) = run_text(tmp.path(), &[args, &["--format", "json"]].concat());
+        assert_eq!(code, Some(1), "{args:?}: {err}");
+        assert!(err.contains("file not found"), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn index_files_from_counts_a_deleted_file_as_missing() {
+    let tmp = vault_with_deleted_indexed_note();
+    let list = tmp.path().join("list.txt");
+    std::fs::write(&list, "note2.md\nnote.md\n").unwrap();
+    let (code, out, err) = run_text(
+        tmp.path(),
+        &[
+            "find",
+            "--index",
+            "--files-from",
+            list.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["files_missing"], 1, "{json}");
+    assert_eq!(json["total"], 1, "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// `links fix --apply`: a target repair and an anchor repair in one file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_replan_honours_frontmatter_false() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n[links]\nfrontmatter = false\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "sub/note.md", "# note\n");
+    write_md(tmp.path(), "note2.md", "## 1. Intro\n");
+    let source = "---\nsee: \"[[note2#Intro]]\"\n---\n[[sub/NOTE]]\n\n[[note2#Intro]]\n";
+    write_md(tmp.path(), "c.md", source);
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "fix", "--apply", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let c = std::fs::read_to_string(tmp.path().join("c.md")).unwrap();
+    assert_eq!(
+        c, "---\nsee: \"[[note2#Intro]]\"\n---\n[[sub/note]]\n\n[[note2#1. Intro]]\n",
+        "an out-of-scope frontmatter link is not rewritten on the second pass"
+    );
+}
+
+#[test]
+fn links_fix_applies_a_target_and_an_anchor_repair_in_one_file_in_one_run() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "sub/note.md", "# note\n");
+    write_md(tmp.path(), "note2.md", "## 1. Intro\n");
+    write_md(
+        tmp.path(),
+        "c.md",
+        "[[sub/NOTE]]\n\n[[note2#Intro]]\n\n[m](sub/NOTE.md) and [n](note2.md#intro)\n",
+    );
+    write_md(
+        tmp.path(),
+        "d.md",
+        "[[NOTE2#Intro]] and [x](NOTE2.md#intro)\n",
+    );
+    let (json, out) = run_json(tmp.path(), &["links", "fix", "--apply", "--format", "json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(json["results"]["anchors_applied"], 4, "{json}");
+    assert_eq!(json["results"]["anchors_deferred"], 0, "{json}");
+    let c = std::fs::read_to_string(tmp.path().join("c.md")).unwrap();
+    assert_eq!(
+        c,
+        "[[sub/note]]\n\n[[note2#1. Intro]]\n\n[m](sub/note.md) and [n](note2.md#1-intro)\n"
+    );
+    let d = std::fs::read_to_string(tmp.path().join("d.md")).unwrap();
+    assert_eq!(d, "[[note2#1. Intro]] and [x](note2.md#1-intro)\n");
+
+    let (second, out) = run_json(tmp.path(), &["links", "fix", "--apply", "--format", "json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(second["results"]["anchors_applied"], 0, "{second}");
+    assert_eq!(second["results"]["anchor_fixable"], 0, "{second}");
+    assert_eq!(std::fs::read_to_string(tmp.path().join("c.md")).unwrap(), c);
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-367): a zero-result slop phrase hints AND and reverse
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_result_slop_phrase_hints_the_and_form_and_the_reversed_order() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "# A\n\nthe tokenizer before the release\n",
+    );
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "\"release tokenizer\"~5", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["total"], 0, "{json}");
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.ends_with("-- 'release tokenizer'")),
+        "{cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| c.contains("\"tokenizer release\"~5")),
+        "{cmds:?}"
+    );
+    assert!(!cmds.iter().any(|c| c.contains("hyalo terms")), "{cmds:?}");
+    let reversed = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "\"tokenizer release\"~5"],
+    );
+    assert_eq!(reversed.1, "1");
+}
+
+// ---------------------------------------------------------------------------
+// Small correctness fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dry_run_refuses_under_an_unusable_config_like_the_real_run() {
+    let tmp = vault();
+    std::fs::write(tmp.path().join(".hyalo.toml"), "[views.open\n").unwrap();
+    for args in [
+        &["set", "a.md", "--property", "x=1", "--dry-run"][..],
+        &["remove", "a.md", "--property", "title", "--dry-run"][..],
+        &["links", "fix"][..],
+        &["links"][..],
+        &["types", "set", "note", "--required", "title", "--dry-run"][..],
+        &["task", "toggle", "a.md", "--line", "6", "--dry-run"][..],
+    ] {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unusable .hyalo.toml"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn set_keeps_an_integer_past_i64_exact() {
+    let tmp = vault();
+    let (code, _, err) = run_text(
+        tmp.path(),
+        &["set", "a.md", "--property", "p=9223372036854775808"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(text.contains("p: 9223372036854775808\n"), "{text}");
+}
+
+#[test]
+fn existing_dot_path_gets_no_did_you_mean_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "m.md", "---\nmap:\n  b: 0x1F\n---\nx\n");
+    let (code, _, err) = run_text(
+        tmp.path(),
+        &["find", "--property", "map.b=99", "--format", "text"],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did you mean"), "{err}");
+}
+
+#[test]
+fn operator_only_or_dash_only_query_says_the_query_is_empty() {
+    let tmp = vault();
+    let text = |pattern: &str| {
+        let out = super::common::hyalo()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["find", "--format", "text", "--", pattern])
+            .output()
+            .unwrap();
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    for pattern in ["OR", "-"] {
+        let out = text(pattern);
+        assert!(out.contains("the query is empty"), "{pattern}: {out}");
+        assert!(!out.contains("negating every word"), "{pattern}: {out}");
+    }
+    let out = text("-snapshot");
+    assert!(out.contains("negating every word"), "{out}");
+}
+
+#[test]
+fn facet_drilldown_and_narrow_by_tag_hint_are_not_duplicated() {
+    let tmp = TempDir::new().unwrap();
+    for i in 0..4 {
+        write_md(
+            tmp.path(),
+            &format!("n{i}.md"),
+            "---\ntags: [search, iteration]\n---\nx\n",
+        );
+    }
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find", "--tag", "search", "--facet", "tags", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    let before = cmds.len();
+    cmds.sort_unstable();
+    cmds.dedup();
+    assert_eq!(cmds.len(), before, "{json}");
+}
+
+#[test]
+fn terms_prefix_that_loses_characters_names_the_effective_prefix() {
+    let tmp = vault();
+    let (code, _, err) = run_text(tmp.path(), &["terms", "s++", "--count"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("is searched as 's'"), "{err}");
+    let (_, all, err) = run_text(tmp.path(), &["terms", "*", "--count"]);
+    assert!(err.contains("listing the whole dictionary"), "{err}");
+    let (_, plain, _) = run_text(tmp.path(), &["terms", "--count"]);
+    assert_eq!(all, plain);
+    let (_, _, err) = run_text(tmp.path(), &["terms", "sna*", "--count"]);
+    assert!(!err.contains("is searched as"), "{err}");
+}
+
+#[test]
+fn negated_field_word_gets_the_migration_notice_but_a_phrase_does_not() {
+    let tmp = vault();
+    let (_, _, err) = run_text(
+        tmp.path(),
+        &["find", "--count", "--", "snapshot -title:beta"],
+    );
+    assert!(err.contains("field terms were removed"), "{err}");
+    let (_, _, err) = run_text(tmp.path(), &["find", "--count", "--", "\"title:beta\""]);
+    assert!(!err.contains("field terms were removed"), "{err}");
+}

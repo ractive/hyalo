@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 //! `hyalo terms` — list BM25 dictionary terms (stemmed tokens) with their
-//! document frequency: the number of files whose authored title or body
+//! document frequency: the number of files whose title, headings, body or tags
 //! contains the stem.
 //!
 //! Corpus resolution mirrors the other read commands: an `--index`/
@@ -19,7 +19,7 @@ use crate::commands::{ScannedIndexOutcome, build_scanned_index};
 use crate::dispatch::{CommandContext, resolve_limit};
 use crate::output::CommandOutcome;
 
-/// One dictionary term and the number of files whose authored title or body
+/// One dictionary term and the number of files whose title, headings, body or tags
 /// contains it (the BM25 corpus indexes both).
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -27,7 +27,7 @@ use crate::output::CommandOutcome;
 pub struct TermEntry {
     /// Stemmed token.
     pub(crate) term: String,
-    /// Number of files whose title or body contains this stem.
+    /// Number of files whose title, headings, body or tags contain this stem.
     pub(crate) docs: usize,
 }
 
@@ -76,6 +76,22 @@ pub(crate) fn run(
     glob: &[String],
     limit: Option<usize>,
 ) -> Result<CommandOutcome> {
+    // DEC-371: PREFIX is normalized like a query word. Say so when that drops
+    // more than a trailing `*`, so `c++` (searched as `c`) is not a surprise.
+    let effective = prefix.map(hyalo_core::bm25::normalize_dictionary_prefix);
+    if let (Some(raw), Some(norm)) = (prefix, effective.as_deref()) {
+        if norm.is_empty() {
+            crate::warn::note(format!(
+                "PREFIX '{raw}' holds no letter or digit -- listing the whole dictionary"
+            ));
+        } else if hyalo_core::bm25::dictionary_prefix_drops_characters(raw) {
+            crate::warn::warn(format!(
+                "PREFIX '{raw}' is searched as '{norm}' -- dictionary terms hold only letters \
+                 and digits"
+            ));
+        }
+    }
+    let prefix = effective.as_deref().filter(|p| !p.is_empty());
     // Fast path: an up-to-date snapshot's persisted BM25 dictionary, when no
     // --glob narrows the corpus (a glob needs a fresh scan scoped to the
     // matched files — the persisted index covers the whole vault).

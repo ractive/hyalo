@@ -1723,13 +1723,13 @@ fn ranked_partial_persisted_corpus_reuses_nonselected_tokens() {
     let unreadable_warnings = |output: &std::process::Output| {
         String::from_utf8_lossy(&output.stderr)
             .lines()
-            .filter(|line| line.contains("unreadable"))
+            .filter(|line| line.contains("invalid UTF-8"))
             .map(str::to_owned)
             .collect::<Vec<_>>()
     };
     let before_warnings = unreadable_warnings(&before);
     assert_eq!(before_warnings.len(), 1);
-    assert!(before_warnings[0].contains("skipped 1 unreadable file"));
+    assert!(before_warnings[0].contains("1 file contains invalid UTF-8 — read lossily"));
     assert_eq!(before_warnings, unreadable_warnings(&after));
     assert!(!String::from_utf8_lossy(&after.stderr).contains("changed on disk"));
 }

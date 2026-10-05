@@ -390,12 +390,28 @@ fn skipped_summary() -> String {
     let mut text = String::new();
     if !hyalo_core::warn::verbose_skips() {
         let frontmatter = hyalo_core::warn::skipped_frontmatter_count();
-        let other = hyalo_core::warn::skipped_count().saturating_sub(frontmatter);
+        let lossy = hyalo_core::warn::invalid_utf8_count();
+        let other = hyalo_core::warn::skipped_count()
+            .saturating_sub(frontmatter)
+            .saturating_sub(lossy);
         if frontmatter > 0 {
             let plural = if frontmatter == 1 { "file" } else { "files" };
             let _ = writeln!(
                 text,
                 "warning: skipped {frontmatter} {plural} with unparsable frontmatter (run hyalo lint --rule HYALO005 for details)"
+            );
+        }
+        // DEC-370: such a file is still listed (read lossily), so "skipped"
+        // would misdescribe it; it is only kept out of full-text search.
+        if lossy > 0 {
+            let (plural, verb) = if lossy == 1 {
+                ("file", "contains")
+            } else {
+                ("files", "contain")
+            };
+            let _ = writeln!(
+                text,
+                "warning: {lossy} {plural} {verb} invalid UTF-8 — read lossily and excluded from full-text search (set [scan] verbose_skips = true, or RUST_LOG=hyalo=debug, to list them)"
             );
         }
         if other > 0 {

@@ -164,7 +164,11 @@ pub(crate) fn run(
     let argv: Vec<String> = std::env::args_os()
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let dash_swallowed_argv = pattern.is_none() && super::argv_has_concatenated_short_flag(&argv);
+    // DEC-371 (completes DEC-356): the tip no longer depends on whether a
+    // PATTERN followed — `hyalo find -snapshot index` runs `--section napshot`
+    // with PATTERN `index` and used to say nothing. It is `-q`-proof like the
+    // other query-reading warnings: a silently re-read query is not noise.
+    let dash_swallowed_argv = super::argv_has_concatenated_short_flag(&argv);
     for t in &tag {
         if let Err(msg) = crate::commands::tags::validate_tag(t) {
             // With no PATTERN, a leading-dash term the shell never saw as
@@ -260,6 +264,35 @@ pub(crate) fn run(
             // JSON is untouched — every link is still reported, with its own
             // `path` / `broken_anchor` verdict.
             crate::output::set_broken_links_only(broken_links);
+            // DEC-371: the dash tip. An invalid swallowed `--tag` already
+            // carried it in its error above. A swallowed filter that matches
+            // nothing in the vault is almost certainly a mangled PATTERN, so
+            // the tip is `-q`-proof; one that does match may be a deliberate
+            // `-sTasks` / `-tproject`, so it is an ordinary note `-q` silences.
+            if dash_swallowed_argv {
+                let entries = resolved.as_index().entries();
+                let sections_match = section_filters.iter().all(|filter| {
+                    entries.iter().any(|e| {
+                        e.sections.iter().any(|s| {
+                            s.heading
+                                .as_deref()
+                                .is_some_and(|text| filter.matches(s.level, text))
+                        })
+                    })
+                });
+                let tags_match = tag.iter().all(|query| {
+                    entries.iter().any(|e| {
+                        e.tags
+                            .iter()
+                            .any(|t| hyalo_core::filter::tag_matches(t, query))
+                    })
+                });
+                if sections_match && tags_match {
+                    crate::warn::note(super::DASH_SWALLOWED_TIP);
+                } else {
+                    crate::warn::warn_always(super::DASH_SWALLOWED_TIP);
+                }
+            }
             let mut search_report = super::SearchReport::default();
             let mut outcome = find_prepared(
                 resolved.as_index(),
@@ -288,7 +321,6 @@ pub(crate) fn run(
                 &super::FindExtras {
                     section_mode,
                     facets: &facet_specs,
-                    dash_swallowed_argv,
                 },
                 &mut search_report,
             )?;

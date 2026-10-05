@@ -176,6 +176,15 @@ fn infer_value(raw: &str) -> Value {
     if let Ok(i) = raw.parse::<i64>() {
         return Value::Number(i.into());
     }
+    if let Ok(u) = raw.parse::<u64>() {
+        return Value::Number(u.into());
+    }
+    // An integer literal past u64 must not become a lossy float
+    // (`9.223372036854776e+18`); keep the exact digits as text (iteration 318).
+    let digits = raw.strip_prefix(['-', '+']).unwrap_or(raw);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Value::String(raw.to_owned());
+    }
     // Try float (reject NaN/inf which parse successfully but aren't useful property values)
     if let Ok(f) = raw.parse::<f64>()
         && f.is_finite()
@@ -213,6 +222,22 @@ fn infer_value(raw: &str) -> Value {
 #[cfg(test)]
 mod wikilink_tests {
     use super::*;
+
+    #[test]
+    fn integers_past_i64_stay_exact() {
+        assert_eq!(
+            infer_value("9223372036854775808"),
+            Value::Number(9_223_372_036_854_775_808_u64.into())
+        );
+        assert_eq!(
+            infer_value("99999999999999999999999"),
+            Value::String("99999999999999999999999".to_owned())
+        );
+        assert_eq!(
+            infer_value("-9223372036854775809"),
+            Value::String("-9223372036854775809".to_owned())
+        );
+    }
 
     #[test]
     fn wikilink_simple_is_string() {

@@ -240,16 +240,12 @@ pub(crate) struct FindExtras<'a> {
     pub(crate) section_mode: bool,
     /// Parsed `--facet` specs; empty when none was requested.
     pub(crate) facets: &'a [FacetSpec],
-    /// `true` when no PATTERN was given and the real process argv held a
-    /// `-s…`/`-t…` token with a concatenated value (BUG-5 / DEC-356, review
-    /// fix): the shape a leading-dash PATTERN takes once clap reads it as
-    /// `--section`/`--tag` plus the rest of the token instead. Computed once
-    /// from `std::env::args_os()` by the CLI entry point
-    /// (`argv_has_concatenated_short_flag`), not re-derived from whether the
-    /// resulting filter happened to match many headings or none -- that
-    /// conflated "the filter is unusual" with "the filter was never typed".
-    pub(crate) dash_swallowed_argv: bool,
 }
+
+/// The `-q`-proof tip printed whenever [`argv_has_concatenated_short_flag`]
+/// fires (DEC-356, completed by DEC-371).
+pub(crate) const DASH_SWALLOWED_TIP: &str = "a `-s…`/`-t…` word was read as --section/--tag plus the rest of the word -- \
+     to search for a term starting with '-', write `hyalo find -- '-term'`";
 
 /// `true` when `args` (a real or simulated argv, PROGRAM name included or
 /// not) contains a short-flag token for `--section` (`-s`) or `--tag`
@@ -262,7 +258,8 @@ pub(crate) struct FindExtras<'a> {
 /// Pure over an argv slice, independent of `std::env::args_os()`, so the
 /// detection itself is unit-testable without spawning a process.
 pub(crate) fn argv_has_concatenated_short_flag(args: &[String]) -> bool {
-    args.iter().any(|a| {
+    // Everything after `--` is PATTERN text, never a flag (DEC-371).
+    args.iter().take_while(|a| a.as_str() != "--").any(|a| {
         let bytes = a.as_bytes();
         !a.starts_with("--")
             && bytes.len() > 2
@@ -360,6 +357,46 @@ fn score_corpus(
         report.legacy_field_rest = query.legacy_field_rewrite();
     }
     scored
+}
+
+/// The one-line field-term migration notice (DEC-371), or `None` when the
+/// query holds no `title:x`-shaped word.
+fn legacy_field_notice(terms: &[hyalo_core::bm25::LegacyFieldTerm]) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+    let words: Vec<String> = terms
+        .iter()
+        .map(|t| format!("'{}:{}'", t.field, t.value))
+        .collect();
+    let mut flags: Vec<&str> = Vec::new();
+    for t in terms {
+        let flag = crate::hints::legacy_field_flag(&t.field, &t.value).0;
+        if !flags.contains(&flag) {
+            flags.push(flag);
+        }
+    }
+    Some(format!(
+        "{} searched as plain words -- field terms were removed from the search grammar \
+         (DEC-366); select with {} instead",
+        words.join(", "),
+        flags.join(", ")
+    ))
+}
+
+/// The removed field name when `pattern` opens a group right after one
+/// (`title:(a OR b)`), the old grouped field-term form.
+fn legacy_field_group(pattern: &str) -> Option<&'static str> {
+    pattern.split_whitespace().find_map(|word| {
+        let word = word.trim_start_matches(['-', '(']);
+        let (name, rest) = word.split_once(':')?;
+        if !rest.starts_with('(') {
+            return None;
+        }
+        ["title", "heading", "tag", "path"]
+            .into_iter()
+            .find(|f| f.eq_ignore_ascii_case(name))
+    })
 }
 
 /// Advisory for `find` with an empty-string `--pattern`/positional body
@@ -639,15 +676,25 @@ pub(crate) fn find_prepared(
                 }
                 Ok(query) => Some(query),
                 Err(error) => {
+                    // DEC-371: `title:(a OR b)` is the old field-term grouping;
+                    // name the removal rather than only the parenthesis.
+                    let field_group = legacy_field_group(pattern);
+                    let hint = match field_group {
+                        Some(field) => format!(
+                            "field terms were removed from the search grammar (DEC-366) -- \
+                             select by {field} with {} instead",
+                            crate::hints::legacy_field_flag(field, "").0
+                        ),
+                        None => "quote text to search it literally (e.g. '\"a)\"'); \
+                             see QUERY SYNTAX in `hyalo find --help`"
+                            .to_owned(),
+                    };
                     return Ok(CommandOutcome::UserError(
                         crate::output::user_diagnostic(
                             format,
                             &format!("invalid search query: {error}"),
                             None,
-                            Some(
-                                "quote text to search it literally (e.g. '\"a)\"'); \
-                             see QUERY SYNTAX in `hyalo find --help`",
-                            ),
+                            Some(&hint),
                             None,
                         )
                         .with_help_pointer("find", "QUERY SYNTAX"),
@@ -693,6 +740,19 @@ pub(crate) fn find_prepared(
                 "'{term}': '*' only means a prefix wildcard as the last character of a word \
                  (e.g. 'config*') -- here it is a literal character and was dropped"
             ));
+        }
+        // DEC-371 (amends DEC-366): a `title:x`-shaped word gets the
+        // migration notice whether or not the query matched -- `title:dogfood`
+        // silently matching 134 files on the plain words was the trap. One
+        // ordinary (`-q`-silenced) line per query, not per word.
+        let field_words: Vec<hyalo_core::bm25::LegacyFieldTerm> = query
+            .legacy_field_terms()
+            .iter()
+            .chain(query.negated_legacy_field_terms())
+            .cloned()
+            .collect();
+        if let Some(notice) = legacy_field_notice(&field_words) {
+            crate::warn::warn(notice);
         }
     }
     // DEC-334: section scoring borrows the IDF and prefix expansion of the
@@ -958,7 +1018,7 @@ pub(crate) fn find_prepared(
                             hyalo_core::warn::record_skip(
                                 entry.rel_path.as_str(),
                                 crate::commands::INVALID_UTF8_CONSEQUENCE,
-                                hyalo_core::warn::SkipKind::Other,
+                                hyalo_core::warn::SkipKind::InvalidUtf8,
                             );
                             return Ok(());
                         }
@@ -1807,34 +1867,11 @@ pub(crate) fn find_prepared(
     // per-file note, which would spam a large result set) names how many
     // result files hit this so the asymmetry is visible without being noisy.
     if ambiguous_section_files > 0 {
-        // BUG-5 / DEC-356: with no PATTERN, `-section` (a leading-dash term
-        // the shell never saw as the body-search PATTERN) is swallowed by
-        // clap as `-s` plus the rest of the token, e.g. `hyalo find
-        // '-snapshot'` silently becomes `--section napshot`. Review fix:
-        // keyed on the real argv shape (`extras.dash_swallowed_argv`), not
-        // on "no PATTERN" alone -- a deliberate `hyalo find --section Task`
-        // with no PATTERN and a genuinely ambiguous heading is not this bug
-        // and should not get a hint about a dash it never typed.
-        let dash_hint = if extras.dash_swallowed_argv {
-            " -- to search for a term starting with '-', write `hyalo find -- '-term'`"
-        } else {
-            ""
-        };
         crate::warn::warn(format!(
             "--section matched more than one heading in {ambiguous_section_files} file(s) \
              -- each such file's results include content from every matched section \
-             (see `hyalo find --help`){dash_hint}"
+             (see `hyalo find --help`)"
         ));
-    } else if extras.dash_swallowed_argv && !section_filters.is_empty() {
-        // Review fix (SHOULD-FIX 3): the common case is a *single* matching
-        // heading, which never set `ambiguous_section_files` and so never
-        // warned at all -- `hyalo find '-sqlite'` (clap: `-s` + "qlite")
-        // silently returned the one file whose heading contains "qlite"
-        // with no sign a dash-prefixed PATTERN had been swallowed.
-        crate::warn::warn(
-            "--section matched a heading, but no PATTERN was given -- if '-term' was meant \
-             as the search pattern, write `hyalo find -- '-term'`",
-        );
     }
 
     // F-4: warn when a --sort property key holds more than one JSON type
@@ -2265,8 +2302,15 @@ fn fuzzy_suggest_property_keys(index: &dyn VaultIndex, property_filters: &[Prope
         let Some(queried_key) = filter.key() else {
             continue;
         };
-        // Skip if there's an exact key match (value mismatch, not a key typo).
-        if all_keys.iter().any(|k| k == queried_key) {
+        // Skip if there's an exact key match (value mismatch, not a key typo),
+        // including a dot-path that resolves in some file (`map.b`), which
+        // is no typo of the top-level key `map` (iteration 318).
+        if all_keys.iter().any(|k| k == queried_key)
+            || (queried_key.contains('.')
+                && index.entries().iter().any(|e| {
+                    hyalo_core::filter::resolve_prop(&e.properties, queried_key).is_some()
+                }))
+        {
             continue;
         }
         let mut ranked: Vec<(usize, &str)> = all_keys

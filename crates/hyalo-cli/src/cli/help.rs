@@ -186,11 +186,26 @@ pub(crate) fn global_pointer(hide_dir: bool, hide_format: bool) -> String {
 }
 
 /// Keep the compact pointer in sync with the command-specific long help.
+///
+/// On a command group (`types`, `lint-rules`) `--count` works only for the
+/// bare listing form, never for `show`/`set`/`remove`, so the group page says
+/// so instead of advertising it for every subcommand listed above it.
 pub(crate) fn applicable_global_pointer(command: &clap::Command, pointer: &str) -> String {
+    let group = command
+        .get_subcommands()
+        .any(|sub| sub.get_name() != "help");
     pointer
         .split_whitespace()
+        .map(|word| {
+            if group && word == "--count" {
+                "--count(listing-only)"
+            } else {
+                word
+            }
+        })
         .filter(|word| {
             if let Some(long) = word.strip_prefix("--") {
+                let long = long.split('(').next().unwrap_or(long);
                 command
                     .get_arguments()
                     .any(|arg| arg.get_long() == Some(long) && !arg.is_hide_set())
@@ -579,7 +594,8 @@ OUTPUT SHAPES (JSON, default):
   # All commands wrap output in a consistent envelope:
   {\"results\": <payload>, \"total\": N, \"hints\": [...]}
   # total: present for list commands ({LIST_COMMANDS}); omitted elsewhere
-  # hints: always present (empty [] when --no-hints or --jq)
+  # hints: always present on a result (empty [] when --no-hints or --jq);
+  #   an ERROR envelope carries it only when it has a hint to offer
   # --jq operates on the full envelope: --jq '.results[].file', --jq '.total'
   # Conventions inside results:
   #   - a `total` inside results always counts items the command considered;

@@ -541,6 +541,9 @@ pub struct CompiledQuery {
     warnings: QueryWarnings,
     /// Positive words shaped like a removed field term (DEC-366).
     legacy_fields: Vec<LegacyFieldTerm>,
+    /// Negated ones (`-title:x`), named by the migration notice only
+    /// (DEC-371); they never feed the zero-result rewrite.
+    negated_legacy_fields: Vec<LegacyFieldTerm>,
 }
 
 fn dedup<T: PartialEq>(items: Vec<T>) -> Vec<T> {
@@ -586,6 +589,25 @@ fn positional_alternatives(text: &str, stemmers: &[&Stemmer]) -> Vec<Vec<String>
 /// stem (at least three characters). The fallbacks are used only when the raw
 /// prefix matches no dictionary stem, so `configuration*` still finds
 /// `configur` (the stem of "configuration").
+/// Whether `terms PREFIX` normalization drops more than a trailing `*`
+/// (`c++`, `get_user`), after accents and case are folded.
+#[must_use]
+pub fn dictionary_prefix_drops_characters(raw: &str) -> bool {
+    super::tokenizer::fold_lower(raw.trim_end_matches('*'))
+        .chars()
+        .any(|c| !c.is_alphanumeric())
+}
+
+/// `terms PREFIX` normalization: fold accents and case, drop every
+/// non-alphanumeric character (a trailing `*`, an identifier's `_`/`-`/`.`).
+#[must_use]
+pub fn normalize_dictionary_prefix(raw: &str) -> String {
+    super::tokenizer::fold_lower(raw)
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect()
+}
+
 fn prefix_candidates(raw: &str, stemmers: &[&Stemmer]) -> Vec<String> {
     let mut out = vec![raw.to_owned()];
     for stemmer in stemmers {
@@ -645,6 +667,8 @@ struct Compiler<'a> {
     misplaced_wildcards: Vec<String>,
     /// Positive `title:x`-shaped words (DEC-366).
     legacy_fields: Vec<LegacyFieldTerm>,
+    /// Negated `-title:x`-shaped words (DEC-371).
+    negated_legacy_fields: Vec<LegacyFieldTerm>,
     /// The query text, for spans of `title:"phrase"` pairs.
     source: &'a str,
     /// Nesting depth of the node being compiled: the root AND is 0, its
@@ -759,24 +783,30 @@ impl Compiler<'_> {
         end: usize,
         positive: bool,
     ) -> Result<Option<Node>, QuerySyntaxError> {
-        if positive
-            && let Some((field, value)) = legacy_field_parts(text)
+        if let Some((field, value)) = legacy_field_parts(text)
             && !value.is_empty()
         {
-            self.legacy_fields.push(LegacyFieldTerm {
+            let term = LegacyFieldTerm {
                 field,
                 value: value.to_owned(),
                 start,
                 end,
                 top_level: self.depth == 1,
-            });
+            };
+            if positive {
+                self.legacy_fields.push(term);
+            } else {
+                self.negated_legacy_fields.push(term);
+            }
         }
         if let Some(body) = text.strip_suffix('*') {
-            let body = body.trim_end_matches('*');
+            // Fold before splitting: a decomposed accent's combining mark is
+            // not alphanumeric and would otherwise split the word (DEC-371).
+            let body = super::tokenizer::fold_lower(body.trim_end_matches('*'));
             let parts: Vec<String> = body
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|p| !p.is_empty())
-                .map(str::to_lowercase)
+                .map(str::to_owned)
                 .collect();
             let Some((last, leading)) = parts.split_last() else {
                 return Err(QuerySyntaxError::new(format!(
@@ -872,6 +902,7 @@ impl CompiledQuery {
             params: super::search_settings(),
             warnings: QueryWarnings::default(),
             legacy_fields: Vec::new(),
+            negated_legacy_fields: Vec::new(),
         }
     }
 
@@ -882,6 +913,7 @@ impl CompiledQuery {
             words: Vec::new(),
             misplaced_wildcards: Vec::new(),
             legacy_fields: Vec::new(),
+            negated_legacy_fields: Vec::new(),
             source: query,
             depth: 0,
         };
@@ -895,6 +927,7 @@ impl CompiledQuery {
             params: super::search_settings(),
             warnings,
             legacy_fields: compiler.legacy_fields,
+            negated_legacy_fields: compiler.negated_legacy_fields,
         })
     }
 
@@ -903,6 +936,13 @@ impl CompiledQuery {
     #[must_use]
     pub fn legacy_field_terms(&self) -> &[LegacyFieldTerm] {
         &self.legacy_fields
+    }
+
+    /// Negated words shaped like a removed field term (`-title:x`; DEC-371).
+    /// Only the migration notice names them.
+    #[must_use]
+    pub fn negated_legacy_field_terms(&self) -> &[LegacyFieldTerm] {
+        &self.negated_legacy_fields
     }
 
     /// The query text with every [`Self::legacy_field_terms`] token removed
@@ -1575,10 +1615,13 @@ impl Bm25InvertedIndex {
     }
 
     /// Dictionary terms (stems) with their document frequency, most frequent
-    /// first then alphabetical. `prefix` (lowercased) narrows the listing.
+    /// first then alphabetical. `prefix` narrows the listing after the
+    /// tokenizer's own normalization (DEC-371): accents and case are folded,
+    /// a trailing `*` is dropped, and an identifier's separators are removed
+    /// so `get_user` lists the joined whole `getusernam` the index holds.
     #[must_use]
     pub fn dictionary(&self, prefix: Option<&str>) -> Vec<(&str, usize)> {
-        let prefix = prefix.map(str::to_lowercase);
+        let prefix = prefix.map(normalize_dictionary_prefix);
         let mut terms: Vec<(&str, usize)> = self
             .postings
             .iter()
@@ -2538,11 +2581,33 @@ mod tests {
     }
 
     #[test]
+    fn accented_prefix_folds_like_a_bare_word() {
+        let index = corpus(&[("a.md", "my résumé is here"), ("b.md", "unrelated")]);
+        for query in ["résumé*", "Résum*", "resume*", "re\u{301}sum*"] {
+            assert_eq!(hits(&index, query), vec!["a.md".to_owned()], "{query}");
+        }
+    }
+
+    #[test]
+    fn dictionary_prefix_joins_an_identifier_like_the_tokenizer() {
+        let index = corpus(&[("a.md", "call get_user_name now")]);
+        let listed: Vec<&str> = index
+            .dictionary(Some("get_user"))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert!(listed[0].starts_with("getuser"), "{listed:?}");
+    }
+
+    #[test]
     fn dictionary_lists_terms_by_frequency() {
         let index = corpus(&[("a.md", "link links linking"), ("b.md", "link alpha")]);
         let all = index.dictionary(None);
         assert_eq!(all[0], ("link", 2));
         assert_eq!(index.dictionary(Some("AL")), vec![("alpha", 1)]);
+        assert_eq!(index.dictionary(Some("al*")), vec![("alpha", 1)]);
+        assert_eq!(index.dictionary(Some("Ál")), vec![("alpha", 1)]);
         let got = index.dictionary(Some("zz"));
         assert!(got.is_empty(), "expected empty, got {got:?}");
     }

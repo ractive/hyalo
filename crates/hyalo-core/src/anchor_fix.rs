@@ -334,6 +334,13 @@ fn source_spans(content: &str) -> SourceSpans {
     spans
 }
 
+/// Deferral reason for an anchor whose source (or target) also receives a
+/// file-target repair in the same run. `links fix --apply` re-plans exactly
+/// these after the target repairs are written (DEC-371), so they are applied
+/// in the same run rather than left for a second one.
+pub const TARGET_REPAIR_CONFLICT: &str =
+    "conflicting file-target repair in source; rerun after target repairs";
+
 /// Durable application results, separate from file-target repairs.
 #[derive(Debug, Default)]
 pub struct AnchorApplyReport {
@@ -379,10 +386,7 @@ fn apply_anchor_fixes_with_executor(
             if target_fixes.iter().any(|fix| {
                 fix.source == source || plans.iter().any(|plan| plan.target == fix.source)
             }) {
-                return Err(
-                    "conflicting file-target repair in source; rerun after target repairs"
-                        .to_owned(),
-                );
+                return Err(TARGET_REPAIR_CONFLICT.to_owned());
             }
             let source_path = canonical.join(source);
             if !crate::discovery::ensure_within_vault(&canonical, &source_path).unwrap_or(false) {

@@ -194,7 +194,9 @@ pub fn resolve_with_index(
                 return false;
             };
             let rel_fwd = rel_path.to_string_lossy().replace('\\', "/");
-            index.get(&rel_fwd).is_some()
+            // DEC-371: a file deleted since the snapshot was built is missing,
+            // not a stale entry served as if it were still there.
+            index.get(&rel_fwd).is_some() && full.is_file()
         },
     ))
 }

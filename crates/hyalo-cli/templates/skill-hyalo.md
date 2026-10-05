@@ -268,7 +268,7 @@ hyalo find --fields properties,backlinks              # combine with other field
 **All JSON output uses a consistent envelope:** `{"results": <payload>, "total": N, "hints": [...]}`.
 `total` is present for list commands (find, lint, tags summary, properties summary, backlinks,
 types list, views list, lint-rules list) — the same set `--count` accepts.
-`hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope:
+`hints` is always present on a result (empty `[]` when `--no-hints`); an error envelope carries it only when it has a hint to offer. `--jq` operates on the full envelope:
 
 ```bash
 hyalo find --property status=draft --count                 # count matching files (bare integer)

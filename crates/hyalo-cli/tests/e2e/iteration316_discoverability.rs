@@ -105,27 +105,16 @@ fn section_mode_hint_needs_three_words_and_a_hundred_files() {
     );
 }
 
+/// DEC-371 (amends DEC-367): a PATTERN-less `--section X` is no longer
+/// re-asked at section granularity -- it widened 299 files to 1 007 sections
+/// that merely mention the heading words.
 #[test]
-fn section_filter_matching_many_files_hints_section_mode_with_heading_words() {
+fn section_filter_matching_many_files_gets_no_section_mode_hint() {
     let tmp = vault(12);
     let hints = hints(&tmp, &["find", "--section", "## Tasks"]);
-    let (description, cmd) = hints
-        .iter()
-        .find(|(_, cmd)| cmd.contains("--granularity section"))
-        .unwrap_or_else(|| panic!("no section-mode hint: {hints:?}"));
     assert!(
-        description.contains("12 files") && description.contains("--section scope is dropped"),
-        "{description}"
-    );
-    assert!(cmd.ends_with("-- Tasks"), "{cmd}");
-    assert!(!cmd.contains("--section"), "{cmd}");
-    let json = run_hint(cmd);
-    assert_eq!(json["total"], 12, "{json}");
-    // A `/regex/` filter has no words to search: no hint.
-    let regex = self::hints(&tmp, &["find", "--section", "/^Tasks$/"]);
-    assert!(
-        !regex.iter().any(|(_, c)| c.contains("--granularity")),
-        "{regex:?}"
+        !hints.iter().any(|(_, c)| c.contains("--granularity")),
+        "{hints:?}"
     );
 }
 

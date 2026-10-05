@@ -1781,7 +1781,14 @@ pub fn read_frontmatter_from_reader<R: BufRead>(mut reader: R) -> Result<IndexMa
     let Some(yaml_bytes) = framed.frame().yaml(framed.bytes()) else {
         return Ok(IndexMap::new());
     };
-    let yaml = std::str::from_utf8(yaml_bytes).context("frontmatter is not valid UTF-8")?;
+    // DEC-370: a typed frontmatter error, so a named read or write refuses
+    // with exit 1 naming the file (DEC-301/DEC-307) and a bulk write skips
+    // and counts it — never a lossy re-encode written back to disk.
+    let yaml = std::str::from_utf8(yaml_bytes).map_err(|e| {
+        anyhow::Error::new(FrontmatterError(format!(
+            "frontmatter is not valid UTF-8 ({e})"
+        )))
+    })?;
     if yaml.trim().is_empty() {
         return Ok(IndexMap::new());
     }

@@ -127,6 +127,71 @@ impl Commands {
         }
     }
 
+    /// `true` for a preview of a command that would otherwise write: an
+    /// explicit `--dry-run`, or an `--apply`-style command run without
+    /// `--apply` (`links fix`, `links auto`, `okf`, `madr`, `changelog`)
+    /// (iteration 318). A dry run predicts the real run, so under an
+    /// unusable `.hyalo.toml` it must refuse exactly like the write it
+    /// previews instead of planning on built-in defaults and exiting 0.
+    pub(crate) fn previews_write(&self) -> bool {
+        match self {
+            Self::Lint {
+                fix,
+                fix_rule,
+                dry_run,
+                ..
+            } => (*fix || !fix_rule.is_empty()) && *dry_run,
+            Self::Set { dry_run, .. }
+            | Self::Remove { dry_run, .. }
+            | Self::Append { dry_run, .. }
+            | Self::Mv { dry_run, .. }
+            | Self::Task {
+                action: TaskAction::Toggle { dry_run, .. } | TaskAction::Set { dry_run, .. },
+            }
+            | Self::Properties {
+                action: Some(PropertiesAction::Rename { dry_run, .. }),
+                ..
+            }
+            | Self::Tags {
+                action: Some(TagsAction::Rename { dry_run, .. }),
+                ..
+            }
+            | Self::Types {
+                action: Some(TypesAction::Set { dry_run, .. }),
+            }
+            | Self::LintRules {
+                action:
+                    Some(
+                        LintRulesAction::Set { dry_run, .. }
+                        | LintRulesAction::Remove { dry_run, .. },
+                    ),
+            } => *dry_run,
+            // `links` with no subcommand is the `fix` preview; the
+            // `--apply`-style generators preview by default.
+            Self::Links { action: None } => true,
+            Self::Links {
+                action:
+                    Some(
+                        LinksAction::Fix { apply, dry_run, .. }
+                        | LinksAction::Auto { apply, dry_run, .. },
+                    ),
+            }
+            | Self::Okf {
+                action:
+                    OkfAction::Index { apply, dry_run, .. } | OkfAction::Log { apply, dry_run, .. },
+            }
+            | Self::Madr {
+                action: MadrAction::Toc { apply, dry_run, .. },
+            }
+            | Self::Changelog {
+                action:
+                    ChangelogAction::Release { apply, dry_run, .. }
+                    | ChangelogAction::Add { apply, dry_run, .. },
+            } => !*apply || *dry_run,
+            _ => false,
+        }
+    }
+
     /// `true` when this invocation's **exit code is a gate** — a verdict a
     /// caller (usually CI) acts on, rather than a report a human reads.
     ///

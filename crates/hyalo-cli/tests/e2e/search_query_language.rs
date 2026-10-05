@@ -490,7 +490,7 @@ fn dash_swallowed_short_section_flag_single_match_gets_the_hint() {
     assert!(output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("no PATTERN was given") && stderr.contains("hyalo find -- '-term'"),
+        stderr.contains("read as --section/--tag") && stderr.contains("hyalo find -- '-term'"),
         "{stderr}"
     );
 }

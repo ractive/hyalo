@@ -295,7 +295,8 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         All JSON is wrapped in a consistent envelope:\n\
           {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
         total is present for list commands ({LIST_COMMANDS}). \
-        hints is always present (empty [] when --no-hints). \
+        hints is always present on a result (empty [] when --no-hints); an error envelope \
+        carries it only when it has a hint to offer. \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
         --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
         RESULTS CONVENTIONS: the envelope owns \"total\". When a command repeats \"total\" inside \
@@ -1137,12 +1138,14 @@ pub(crate) enum Commands {
             bare '*' is a user error (exit 1, 'invalid search query').\n\
             - \"quoted phrase\": exact consecutive match after stemming (e.g. '\"javascript promises\"' \
             matches only documents with that exact phrase). Slop: '\"error handling\"~3' matches \
-            the tokens in order with at most 3 extra words between them (max 64).\n\
+            the tokens IN ORDER with at most 3 extra words between them (max 64); for either order \
+            write '\"a b\"~5 OR \"b a\"~5'.\n\
             - -term, -\"phrase\", -(group): exclude matching documents (e.g. 'rust -javascript'; \
             stemming applies, so '-running' also excludes 'run'). A query beginning with '-' or '(' \
             must follow '--' so it is not read as a flag: hyalo find -- '-draft notes', \
             hyalo find -- '(a OR b) -c'.\n\
-            - prefix*: every dictionary term starting with the prefix. Prefixes match STEMS, so \
+            - prefix*: every dictionary term starting with the prefix, accents and case folded \
+            like a bare word ('Résum*' = 'resum*'). Prefixes match STEMS, so \
             'config*' matches 'configuration' (stem 'configur'); the prefix as typed is tried AND its \
             own stem is, unioned, so 'configuration*' also searches 'configur' even when a one-off \
             typo (e.g. 'configurationon') happens to share the raw prefix. Capped at the 256 \
@@ -1150,8 +1153,9 @@ pub(crate) enum Commands {
             dictionary.\n\
             - Terms are words, phrases, prefixes and their boolean combinations; there are no field \
             terms. A 'name:value' token ('title:x', 'foo:bar', URLs, 'std::fs') is plain text. Select \
-            structure with flags: --title, --section, --tag, --glob. A zero-result query holding a \
-            'title:x'-shaped word says so and hints the flag with the rest of the query.\n\
+            structure with flags: --title, --section, --tag, --glob. A query holding a \
+            'title:x'-shaped word warns once on stderr (results or not; -q silences it), and a \
+            zero-result one also hints the flag with the rest of the query.\n\
             - Every term is stemmed in each language present in the vault (frontmatter 'language' \
             plus --language/config), so a 'language: de' note matches its German inflections.\n\
             - Zero results: query words found in no document get up to 3 close dictionary stems \
@@ -1171,7 +1175,7 @@ pub(crate) enum Commands {
             substring query matches, but this is an approximation, not true word segmentation -- it \
             can occasionally over-match (two bigrams from unrelated parts of a document both present) \
             but should not under-match a real substring.\n\
-            TOKENIZATION (snapshot format 4, tokenizer v4): accents are folded before stemming \
+            TOKENIZATION (tokenizer v4): accents are folded before stemming \
             ('résumé' = 'resume'). An identifier emits its joined whole plus its parts \
             (getUserName, get_user_name, get-user-name -> getusername, get, user, name; digits never \
             split), so 'user' finds it and a query identifier matches the whole OR all its parts. \
@@ -1345,7 +1349,8 @@ pub(crate) enum Commands {
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
             Pass --format json to get \
             {\"results\": {\"file\": \"...\", \"size\": N, \"lines\": N, \"content\": \"...\"}, \"hints\": [...]}. \
-            `size` (body bytes) and `lines` (body line count) are the same numbers `find` reports, \
+            `size` (whole-file bytes, frontmatter included) and `lines` (whole-file line count) are \
+            the same numbers `find` reports, \
             so the two commands agree on what a read will cost. Text mode prints the body and \
             nothing else \u{2014} a header line would corrupt `hyalo read x.md > x.txt` and every \
             pipe into another tool \u{2014} so the size shows up there only in the hint below.\n\
@@ -1533,9 +1538,14 @@ pub(crate) enum Commands {
         long_about = "List BM25 dictionary terms (stemmed tokens) with their document frequency.\n\n\
             Reads the same stemming/tokenization pipeline `find` uses for full-text search, so this\n\
             is the way to discover what a `find` query will actually match before running it.\n\
-            PREFIX (optional, lowercased) narrows the listing to terms starting with that stem.\n\n\
+            PREFIX (optional) narrows the listing to terms starting with it, normalized like a\n\
+            query word: accents and case folded, a trailing `*` and an identifier's separators\n\
+            dropped (`rés` = `res`, `get_user` lists the joined `getusernam`). Dropping more than\n\
+            a trailing `*` warns with the effective prefix; a PREFIX with no letter or digit\n\
+            lists the whole dictionary, with a note.\n\n\
             OUTPUT: JSON envelope {results: [{term, docs}], total, hints}. `docs` counts files\n\
-            whose title or body contains the stem (document frequency), not raw occurrences.\n\
+            whose title, headings, body or tags/aliases contain the stem (document frequency, so\n\
+            a tag-only term counts), not raw occurrences.\n\
             Sorted by docs descending, then term alphabetically. Default limit 50.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\n\
@@ -1767,8 +1777,9 @@ writes a YAML null (DEC-314): `hyalo remove --property K` takes the key out inst
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error \
             {\"error\": \"frontmatter would exceed size budget\", \"limit_bytes\": ..., \"would_be_bytes\": ..., \"file\": ...}.\n\
@@ -1859,8 +1870,9 @@ Repeatable (AND).\n\
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
@@ -2131,8 +2143,9 @@ Repeatable (AND).\n\
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
             mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
-            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
-            naming the file and the reason.\n\
+            mixed line endings) is rewritten in full, with a warning on stderr naming the file \
+            and the reason. A frontmatter holding invalid UTF-8 is never rewritten (DEC-370): a \
+            named file exits 1 naming it, a bulk write skips it as `unparsable`.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             UNUSABLE SCHEMA: when [schema] is present but could not be loaded (an uncompilable \

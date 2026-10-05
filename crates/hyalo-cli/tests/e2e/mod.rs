@@ -140,3 +140,4 @@ mod iteration311_link_repair_and_graph_parity;
 mod iteration313_index_honesty;
 mod iteration316_discoverability;
 mod iteration317_backlog_leftovers;
+mod iteration318_regression_dogfood;

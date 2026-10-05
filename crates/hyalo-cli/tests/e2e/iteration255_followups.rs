@@ -331,7 +331,7 @@ fn invalid_utf8_wording_is_shared_by_read_and_find() {
     let quiet_find = run(&tmp, &["find", "needle"]);
     let quiet_err = String::from_utf8_lossy(&quiet_find.stderr);
     assert!(
-        quiet_err.contains("skipped 1 unreadable file"),
+        quiet_err.contains("1 file contains invalid UTF-8 — read lossily"),
         "the collapsed line must still account for it: {quiet_err}"
     );
 }
@@ -421,7 +421,7 @@ fn plain_find_listing_reports_the_non_utf8_file_as_skipped() {
     let quiet = run(&tmp, &["find"]);
     let err = String::from_utf8_lossy(&quiet.stderr);
     assert!(
-        err.contains("skipped 1 unreadable file"),
+        err.contains("1 file contains invalid UTF-8 — read lossily"),
         "a plain listing must now report the skip too: {err}"
     );
 }
@@ -481,7 +481,7 @@ fn non_utf8_skip_warning_is_silenced_by_quiet() {
         .unwrap();
     let loud_stderr = String::from_utf8_lossy(&loud.stderr);
     assert!(
-        loud_stderr.contains("skipped 1 unreadable file"),
+        loud_stderr.contains("1 file contains invalid UTF-8 — read lossily"),
         "without -q the warning must still print: {loud_stderr}"
     );
 }
@@ -514,7 +514,8 @@ fn index_mode_agrees_with_disk_on_the_non_utf8_file() {
         .output()
         .unwrap();
     assert!(
-        String::from_utf8_lossy(&loud.stderr).contains("skipped 1 unreadable file"),
+        String::from_utf8_lossy(&loud.stderr)
+            .contains("1 file contains invalid UTF-8 — read lossily"),
         "find --index must warn like disk does: {}",
         String::from_utf8_lossy(&loud.stderr)
     );

@@ -290,9 +290,14 @@ fn read_open_frame<R: BufRead>(reader: &mut R, mut bytes: Vec<u8>) -> Result<Rea
                 "unclosed frontmatter: file starts with `---` but no closing `---` was found",
             ));
         }
-        let raw =
-            std::str::from_utf8(&bytes[line_start..]).context("frontmatter is not valid UTF-8")?;
-        if super::is_closing_delimiter(raw.trim_end_matches(['\n', '\r'])) {
+        // A line holding invalid UTF-8 cannot be the closing delimiter, but it
+        // is not a framing error either: the frame is bytes, and whether its
+        // YAML decodes is the parser's question (DEC-370). Refusing here made
+        // every frontmatter-only scan (`properties`, `tags`, `find --fields
+        // file`) abort on one bad note while the full-body scan read it lossily.
+        let closes = std::str::from_utf8(&bytes[line_start..])
+            .is_ok_and(|raw| super::is_closing_delimiter(raw.trim_end_matches(['\n', '\r'])));
+        if closes {
             let frame = frame_prefix(&bytes, true)?;
             return Ok(ReadFrame {
                 frame,

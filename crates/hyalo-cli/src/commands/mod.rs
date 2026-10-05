@@ -649,6 +649,20 @@ pub(crate) fn resolve_index_prepared<'a>(
     case_insensitive: bool,
 ) -> Result<IndexResolution<'a>> {
     if let Some(index) = snapshot {
+        // DEC-371 (amends DEC-301): a path the caller named is a promise
+        // about the disk, under `--index` too. Serving a deleted file's stale
+        // snapshot entry (exit 0) or failing on it later while reading
+        // snippets (exit 2) both broke it; resolve each named path exactly as
+        // the disk scan does and answer with the same envelope.
+        if named_policy == NamedFilePolicy::Fatal {
+            for name in selection.names() {
+                if let Err(error) = discovery::resolve_normalized_file_ci(dir, &name, false) {
+                    return Ok(IndexResolution::Outcome(resolve_error_to_outcome(
+                        error, format, dir,
+                    )));
+                }
+            }
+        }
         return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(index)));
     }
     selection.precheck(&hyalo_core::rooted::VaultRoot::new(dir)?)?;
@@ -828,7 +842,7 @@ pub(crate) fn build_scanned_index_with(
     // `find`'s plain listing and `summary` in step with `lint`.
     for w in &build.warnings {
         let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
-            hyalo_core::warn::SkipKind::Other
+            hyalo_core::warn::SkipKind::InvalidUtf8
         } else {
             hyalo_core::warn::SkipKind::Frontmatter
         };

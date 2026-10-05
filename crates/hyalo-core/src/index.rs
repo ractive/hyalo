@@ -1970,7 +1970,7 @@ impl SnapshotIndex {
                     crate::warn::record_skip(
                         entry.rel_path.clone(),
                         "invalid UTF-8 (recorded when the index was built)",
-                        crate::warn::SkipKind::Other,
+                        crate::warn::SkipKind::InvalidUtf8,
                     );
                 }
             }
