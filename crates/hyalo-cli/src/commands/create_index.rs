@@ -4,7 +4,7 @@ use hyalo_core::bm25::{Bm25InvertedIndex, PreTokenizedInput, TOKENIZER_VERSION, 
 use hyalo_core::discovery;
 use hyalo_core::index::{
     IndexEntry, STALENESS_TOLERANCE_SECS, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex,
-    find_stale_indexes, format_mtime, newest_dir_mtime,
+    find_stale_indexes, format_mtime,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -245,19 +245,15 @@ pub fn create_index(
         && reused == file_count
         && previous.as_ref().is_some_and(|prev| {
             let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
-            // DEC-368: `published_at`, not `created_at` — a serialize-fsync-
-            // rename tail slower than the tolerance must not read as a moved
-            // tree on every later run.
-            let published_at = prev.published_at();
             prev.entries().len() == file_count
                 && prev.attachments() == attachments.as_slice()
                 && prev_skipped == current_skipped
                 && prev.scan_excluded() == current_scan_excluded
                 && prev.scan_exclude() == current_scan_exclude
                 && prev.gitignore_dropped() == current_gitignore_dropped
-                && newest_dir_mtime(dir).is_none_or(|newest| {
-                    newest <= published_at.saturating_add(STALENESS_TOLERANCE_SECS)
-                })
+                // DEC-368: the shared rule, so a slow publish tail is not a
+                // moved tree on every later run.
+                && !hyalo_core::index::tree_moved(prev, dir)
         });
 
     if no_op {

@@ -42,6 +42,11 @@ the next `create-index` is still a no-op and `tree_moved` stays false.
 
 ## Outcome
 
-Fixed in [[iterations/iteration-317-backlog-leftovers-before-0250]] (DEC-368):
-the directory-mtime probes compare against the later of `created_at` and the
-snapshot file's own mtime; no format change.
+Fixed in [[iterations/iteration-317-backlog-leftovers-before-0250]] (DEC-368,
+amended in the PR #382 review). The publish re-stamps the snapshot file's
+mtime after the rename. `index::tree_moved`, shared by all three probes,
+compares every directory against `created_at` and excuses only the
+snapshot's own directory, and only when its bump coincides with the file's
+mtime. No format change. Remaining blind spot: a note created or deleted
+directly in the index's own directory within the tolerance of a publish or
+of a later `touch` of the index — the ~2 s window DEC-302 already documents.

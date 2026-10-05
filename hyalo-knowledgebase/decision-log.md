@@ -7931,12 +7931,11 @@ not enough:
   very next rerun is a clean no-op again — one extra write, not a
   permanent regression.
 
-**Amendment (DEC-368, iteration 317): the probe compares against
-`published_at`, not `created_at`.** `created_at` is stamped before the
-serialize-fsync-rename tail and the rename bumps the vault root, so a tail
-slower than the tolerance made the guard above fail on every rerun. The
-guard is now `newest_dir_mtime(dir) <= published_at + tolerance`, where
-`published_at = max(created_at, the snapshot file's own mtime)`.
+**Amendment (DEC-368, iteration 317): one shared rule, `tree_moved`.**
+`created_at` is stamped before the serialize-fsync-rename tail and the
+rename bumps the directory holding the snapshot, so a tail slower than the
+tolerance made the guard above fail on every rerun. The guard now calls
+`index::tree_moved`: every probed directory compares against `created_at` + tolerance, except the directory holding the index file, whose bump is excused only when it coincides (within the tolerance) with the index file's own mtime, which the publish re-stamps right after its rename.
 
 ## DEC-362: an unloadable `[schema]` joins the gate refusal, scoped to gates only (2026-10-05)
 
@@ -8480,31 +8479,46 @@ prose `hint` stays in both cases. A grammar change
 now has to update `find_101.txt`, and gate 3h forces the skill and rule copies
 to follow.
 
-## DEC-368: the directory-mtime staleness probe compares against when the snapshot was published; the authored `.md` suffix stays open (2026-10-05)
+## DEC-368: a directory bump is excused only when it is the snapshot's own publish; the authored `.md` suffix stays open (2026-10-05, amended same day — review round)
 
 **Context.** `create-index` stamps the header's `created_at` before it
 serializes the snapshot (141 MB on MDN), fsyncs it and renames it into
-place, and the rename bumps the vault root's mtime. Three probes compare
-`newest_dir_mtime(dir)` against `created_at + 1 s`: DEC-361's no-op guard
-in `create-index` (the "part two" amendment of DEC-360 above),
-`snapshot_drift`'s `tree_moved` check (DEC-339) and the write path's
-"index older than vault" warning. A tail longer than about two seconds
-(slow disk, Windows, CI) therefore made every later `create-index` rewrite
-the whole snapshot and every `--index` read re-walk the vault, forever.
-The second backlog item of iteration 317 asked whether `[[sub/note.md]]`
-could report `target: "sub/note.md"` as DEC-310 promises.
+place, and the rename bumps the directory holding the snapshot (the vault
+root by default). Three probes compared `newest_dir_mtime(dir)` against
+`created_at + 1 s`: DEC-361's no-op guard in `create-index` (the "part two"
+amendment of DEC-360 above), `snapshot_drift`'s `tree_moved` check (DEC-339)
+and the write path's "index older than vault" warning. A tail longer than
+about two seconds (slow disk, Windows, CI) therefore made every later
+`create-index` rewrite the whole snapshot and every `--index` read re-walk
+the vault, forever. The second backlog item of iteration 317 asked whether
+`[[sub/note.md]]` could report `target: "sub/note.md"` as DEC-310 promises.
 
 **Decision** (iteration 317,
 [[iterations/iteration-317-backlog-leftovers-before-0250]]).
 
-- *Staleness.* The three directory probes compare against
-  `SnapshotIndex::published_at()` — the later of `created_at` and the
-  snapshot file's own whole-second mtime, read from the `stat` the loader
-  already makes. The file's mtime is set by the last write before the
-  rename, so it bounds the tail. The mtime lives in a `#[serde(skip)]`
-  header field: no snapshot format change, the format stays v7. The
-  per-file racily-clean rule (DEC-339) still uses `created_at`, because it
-  has to stay anchored to when the files were scanned.
+- *Stamp.* After the publishing rename (and the session's directory fsync),
+  the snapshot file's mtime is set to now (`stamp_published`, metadata
+  only). The temp file's own mtime is fixed at its last `write()`, before
+  `sync_all` and the rename, so without the stamp a slow fsync still left
+  the directory bump seconds after the file's mtime. Best-effort: if the
+  stamp fails, the probe is merely conservative (it reports a moved tree
+  and re-walks), never blind.
+- *One rule, one helper.* `index::tree_moved(&SnapshotIndex, dir)` is
+  called by all three probes. One bounded walk returns two values: the
+  newest mtime of every probed directory except the snapshot's own, and
+  that directory's mtime. The tree moved when any other directory is newer
+  than `created_at + tolerance`, or when the snapshot's directory is newer
+  than that AND its mtime differs from the snapshot file's own mtime by
+  more than the tolerance. `created_at` stays the anchor everywhere; the
+  file's mtime only explains a bump that coincides with it.
+- *Which directory.* The canonical parent of the snapshot file as loaded
+  (symlinks resolved, so the directory the rename actually hit), recorded
+  by the loader with the file's whole-second mtime in two `#[serde(skip)]`
+  header fields. It is exempt only when it lies inside the probed vault;
+  with `--index-file` outside the vault nothing is exempt. No snapshot
+  format change, the format stays v7.
+- *Racily-clean (DEC-339)* still uses `created_at`, because it has to stay
+  anchored to when the files were scanned.
 - *Authored `.md` suffix.* Not implemented. The audit found more than ten
   user-visible sites (`find --fields links`, HYALO006/008 messages,
   `links fix` `old_target` — which is also `--apply`'s span-matching key —
@@ -8512,16 +8526,28 @@ could report `target: "sub/note.md"` as DEC-310 promises.
   to v8. That is above the iteration's stop rule, so the backlog note keeps
   the audit and a recommended design and stays `planned`.
 
-**Why `max(created_at, file mtime)` and not stamping `created_at` after the
-rename.** `created_at` sits inside the serialized header, so stamping it
-after the rename would need a second write of the header (and a second
-rename) or a format change. The file mtime is already known at load time
-and costs nothing.
+**Why not `max(created_at, file mtime)` (the first version of this
+decision).** Review of PR #382 showed it hid new notes: comparing every
+directory against the file's mtime meant a plain `touch .hyalo-index` (or a
+copy, a sync client, a restored backup, a future-dated mtime) after a note
+was added made `--index` reads skip the missing-files walk, a regression
+against DEC-302 and DEC-339. The coincidence rule excuses one directory and
+only for one instant. A future-dated or much-later mtime coincides with
+nothing, so no clamp is needed.
 
-**Consequences.** Changes made between the walk and the end of the publish
-tail were already in the probe's blind spot when the tail fit inside the
-tolerance. A slow tail now widens that blind spot by the length of the
-tail instead of tripping the probe permanently. A per-file change is still
-caught by DEC-302's per-entry mtime check. Touching the index file by hand
-moves `published_at` forward the same way. Amends DEC-361 (the DEC-360
-no-op amendment) and records the `.md` exception under DEC-310.
+**Why not stamp `created_at` after the rename.** `created_at` sits inside
+the serialized header, so that would need a second write of the header (and
+a second rename) or a format change.
+
+**Remaining blind spots.** Both sit in the snapshot's own directory (the
+vault root by default) and are the same ~2 s window DEC-302 already
+documents:
+
+- a note created or deleted directly in that directory during the publish
+  tail (between the walk and the re-stamp);
+- a note created or deleted directly in that directory within the
+  tolerance of a later `touch` of the index file.
+
+Per-file edits are still caught by DEC-302's per-entry mtime check and
+deletions by the per-entry stat. Amends DEC-361 (the DEC-360 no-op
+amendment) and records the `.md` exception under DEC-310.

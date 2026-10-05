@@ -43,14 +43,15 @@ DEC number reserved: **DEC-368**.
 
 ## Outcome
 
-- `created_at` (DEC-368): fixed. `SnapshotIndex::published_at()` returns the
-  later of `created_at` and the snapshot file's own mtime, recorded by the
-  loader in a `#[serde(skip)]` header field. `create-index`'s no-op guard,
-  `snapshot_drift`'s tree check and the write path's stale warning compare
-  against it. No format change (v7). The racily-clean rule keeps `created_at`.
-  MDN scratch copy: build + three reruns → `true, false, false, false`; with
-  the root and index mtimes pushed two seconds past `created_at` → `false`;
-  a later root bump → `true`.
+- `created_at` (DEC-368, amended in review): fixed. The publish re-stamps the
+  snapshot file's mtime after the rename; `index::tree_moved` (one helper for
+  the no-op guard, `snapshot_drift` and the stale warning) compares every
+  directory against `created_at` and excuses only the index's own directory
+  when its bump coincides with the file's mtime. The first version
+  (`max(created_at, file mtime)` for every directory) hid new notes after a
+  `touch .hyalo-index` and was replaced. No format change (v7).
+  MDN scratch copy: build + three reruns → `true, false, false, false`; slow
+  tail faked → `false`; a later root bump → `true`.
 - Authored `.md` suffix: audit only, not implemented. More than ten reporting
   sites (`find --fields links`, HYALO006/008, `links fix` `old_target` — also
   the `--apply` matching key — `backlinks`, `mv` skip reports, `anchor_fix`)

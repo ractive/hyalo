@@ -392,9 +392,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   A rerun that changed nothing at all — same entry count, frontmatter-skip list,
   `scan_excluded`/`scan_exclude`/`gitignore_dropped` and attachments, *and* a clean
   directory-mtime probe (a dirty one, even `mkdir x; rmdir x`, forces a real write so
-  `created_at` cannot fall permanently behind the vault; the probe compares against the
-  later of `created_at` and the index file's own mtime, so a slow publish is not a moved
-  tree, DEC-368) — leaves the snapshot file
+  `created_at` cannot fall permanently behind the vault; only a bump of the index's own
+  directory that coincides with the index file's mtime, re-stamped after the publishing
+  rename, is excused — DEC-368) — leaves the snapshot file
   untouched and reports `written: false` (iter-313, amended in review). Current-format
   (v7) snapshots only — an older one, or one built under a different `[search] code_blocks`
   than the config (read from the header, never forcing BM25's lazy decode), is refused with
