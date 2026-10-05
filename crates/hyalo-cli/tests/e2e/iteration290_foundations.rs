@@ -883,7 +883,10 @@ fn files_from_keeps_literal_first_identity_membership_and_counters() {
     );
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"][0]["file"], "kb/note.md");
+    // DEC-371: the deleted literal `kb/note.md` is no longer served from its
+    // stale snapshot entry; the prefix-stripped `note.md` (still on disk and
+    // in the snapshot) is what the list names now.
+    assert_eq!(json["results"][0]["file"], "note.md");
     let output = run(
         &project,
         &["find", "--file", "kb/kb/note.md", "--format", "json"],

@@ -285,7 +285,11 @@ const MIGRATION: &str = "field terms were removed from the search grammar";
 #[test]
 fn field_shaped_word_with_results_gets_one_migration_notice_and_keeps_its_results() {
     let tmp = vault();
-    write_md(tmp.path(), "t.md", "# T\n\ntitle and snapshot under a heading with an index\n");
+    write_md(
+        tmp.path(),
+        "t.md",
+        "# T\n\ntitle and snapshot under a heading with an index\n",
+    );
     let (code, out, err) = run_text(
         tmp.path(),
         &["find", "--count", "--", "title:snapshot heading:index"],
@@ -359,4 +363,54 @@ fn a_dash_term_after_double_dash_gets_no_tip() {
     let (code, _, err) = run_text(tmp.path(), &["find", "--count", "--", "-snapshot index"]);
     assert_eq!(code, Some(0), "{err}");
     assert!(!err.contains(DASH_TIP), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// DEC-371 (amends DEC-301): a named file deleted since `create-index`
+// ---------------------------------------------------------------------------
+
+fn vault_with_deleted_indexed_note() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "# note\n\nalpha text\n");
+    write_md(tmp.path(), "note2.md", "# note2\n\nalpha beta\n");
+    let (code, _, err) = run_text(tmp.path(), &["create-index"]);
+    assert_eq!(code, Some(0), "{err}");
+    std::fs::remove_file(tmp.path().join("note2.md")).unwrap();
+    tmp
+}
+
+#[test]
+fn index_read_of_a_named_deleted_file_exits_1_file_not_found() {
+    let tmp = vault_with_deleted_indexed_note();
+    for args in [
+        &["find", "--index", "--file", "note2.md"][..],
+        &["find", "--index", "alpha", "note2.md"][..],
+        &["find", "--index", "alpha", "--file", "note2.md"][..],
+    ] {
+        let (code, _, err) = run_text(tmp.path(), &[args, &["--format", "json"]].concat());
+        assert_eq!(code, Some(1), "{args:?}: {err}");
+        assert!(err.contains("file not found"), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn index_files_from_counts_a_deleted_file_as_missing() {
+    let tmp = vault_with_deleted_indexed_note();
+    let list = tmp.path().join("list.txt");
+    std::fs::write(&list, "note2.md\nnote.md\n").unwrap();
+    let (code, out, err) = run_text(
+        tmp.path(),
+        &[
+            "find",
+            "--index",
+            "--files-from",
+            list.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["files_missing"], 1, "{json}");
+    assert_eq!(json["total"], 1, "{json}");
 }
