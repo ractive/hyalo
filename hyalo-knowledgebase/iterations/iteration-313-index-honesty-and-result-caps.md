@@ -49,7 +49,7 @@ writing an index, plus GitHub Docs (`/Users/james/devel/docs/content`) for the `
 field.
 
 **BUG-7.** `hyalo --dir /Users/james/devel/mdn/files/en-us find --index -q closures` prints
-`warning: index format is older than this binary (index v2, binary v5); falling back to disk
+`warning: index format is older than this binary (index v2, binary v6); falling back to disk
 scan — re-run create-index` on stderr even with `-q` (it was `crate::warn::warn`, now
 `crate::warn::warn_always`).
 
@@ -57,7 +57,7 @@ scan — re-run create-index` on stderr even with `-q` (it was `crate::warn::war
 queried with the config switched to `"skip"`: `find --index -q` warns `index was built with
 [search] code_blocks = "index", this run's config says "skip"; falling back to disk scan` and
 actually serves the disk-under-"skip" answer (the fenced word dropped out). `summary --index`
-on the same refused snapshot reports `index_format_version: 5`, `code_blocks: "index"`,
+on the same refused snapshot reports `index_format_version: 6`, `code_blocks: "index"`,
 `source: "disk"` — previously `index_format_version: null` with no `code_blocks`/`source` key
 at all. On a successful `--index` run, `summary` reports `code_blocks: "index"`,
 `source: "index"`.
@@ -110,11 +110,24 @@ investigated further — out of scope for BUG-7/8/create-index/UX-5.
 `warn_always` fix recorded in the same entry), DEC-361 (no-op `create-index` skips the write;
 `--force` never-loads-first confirmed, not changed).
 
+**Rebase onto main (PR #378 / iteration 314 landed mid-flight).** Iteration 314 merged while
+this branch was in flight, bumping `SNAPSHOT_FORMAT_VERSION` 5 → 6 (DEC-365,
+`IndexEntry.valid_utf8`) and appending DEC-362..365 to `decision-log.md`/`CHANGELOG.md`/the
+`.claude/CLAUDE.md` claims paragraph. Rebased onto `origin/main`; `run.rs`, `args.rs` and the
+two templates auto-merged cleanly, three files needed manual conflict resolution
+(`.claude/CLAUDE.md`, `CHANGELOG.md`, `decision-log.md`) to keep both sides' additions with
+DECs in numeric order (359-361 before 362-365, per the coordinator's instruction, even though
+362-365 landed on main first). No snapshot-format collision — this iteration never touched
+`IndexEntry`'s shape, so v6 stands as-is; the measured numbers above were re-verified against
+the rebased build on the real MDN tree (BUG-7's "index v2, binary v6" and BUG-8/no-op/
+`summary --index` all re-confirmed) and GitHub Docs (`truncated`) after the rebase.
+
 **Gates:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace -q` (2473 e2e + 1123 lib + 1678 doctest-adjacent, all passing),
-`cargo deny check`, `check-help-drift`, `check-jq-recipes`, `check-ts-types` (regenerated
-`Envelope`/`MutationReportEnvelope`/`SearchEnvelope`/`VaultSummary` TS declarations and the
-`pi-package`/`crates/hyalo-cli/templates/pi` `hyalo-api.d.ts` vendored copy via
-`sync-pi-package`), `check-pi-package-sync`, `check-pi-runtime`, `check-typed-output`, and
-`hyalo lint --strict` (exit 0) all green. CI across three platforms is the one box left
+`cargo test --workspace -q` (2499 e2e + 1123 lib + 1688 doctest-adjacent after the rebase, all
+passing), `cargo deny check`, `check-help-drift`, `check-jq-recipes`, `check-ts-types`
+(regenerated `Envelope`/`MutationReportEnvelope`/`SearchEnvelope`/`VaultSummary` TS
+declarations and the `pi-package`/`crates/hyalo-cli/templates/pi` `hyalo-api.d.ts` vendored
+copy via `sync-pi-package`), `check-pi-package-sync`, `check-pi-runtime`, `check-typed-output`,
+and `hyalo lint --strict` (exit 0) all green, re-run and still green after the rebase. CI
+across three platforms is the one box left
 unticked, per instructions — that's the PR's job.
