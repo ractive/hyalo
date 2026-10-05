@@ -3,7 +3,7 @@ title: "Iteration 313: index honesty and result caps"
 type: iteration
 date: 2026-10-04
 tags: [iteration, index, snapshot, hints, recipes, dogfooding]
-status: in-progress
+status: completed
 branch: iter-313/index-honesty-and-result-caps
 priority: 2
 related:
