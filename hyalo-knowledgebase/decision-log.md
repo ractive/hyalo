@@ -7438,6 +7438,7 @@ not the three-line composition fix this one line of the decision covers.
 lookup_stem_all, lookup_all, insert_aliases, lookup_alias, lookup_alias_all}}`,
 `discovery::{nfc_equal, classify_short_form_wikilink, classify_link}`. See
 [[iterations/iteration-311-link-repair-and-graph-parity]].
+
 ## DEC-355: `read --lines` counts from line 1 of the file, not of the body (2026-10-04)
 
 **Decision.** `read --lines A:B` is now file-absolute: `A`/`B` count from the
