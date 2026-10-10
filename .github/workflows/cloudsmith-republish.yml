@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   republish:
-    uses: ractive/release-workflows/.github/workflows/cloudsmith-republish.yml@v0.2.2
+    uses: ractive/release-workflows/.github/workflows/cloudsmith-republish.yml@v0.2.4
     secrets: inherit
     with:
       tag: ${{ inputs.tag }}

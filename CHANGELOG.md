@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The macOS release binaries are signed with a Developer ID certificate and notarised (ractive/release-workflows v0.2.4).
+
 ## [0.25.0] - 2026-10-05
 
 ### Added
