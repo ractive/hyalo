@@ -11,10 +11,10 @@
     "check:bundle": "bun run build.ts --check"
   },
   "devDependencies": {
-    "@types/bun": "1.4.2",
+    "@types/bun": "1.4.3",
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@typesafe-ai/sdk": "0.6.0"
+    "@typesafe-ai/sdk": "0.7.0"
   }
 }
