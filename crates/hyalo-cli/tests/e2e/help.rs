@@ -33,6 +33,36 @@ fn short_help_is_compact() {
     );
 }
 
+/// A bare `hyalo` prints exactly the `-h` page on stdout and exits 0: winget's
+/// validator runs the binary without arguments and fails any non-zero exit.
+#[test]
+fn bare_invocation_prints_short_help_and_exits_zero() {
+    let dir = TempDir::new().unwrap();
+    let bare = super::common::hyalo()
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(bare.status.code(), Some(0), "bare `hyalo` must exit 0");
+    let stdout = String::from_utf8(bare.stdout).unwrap();
+    assert!(stdout.contains("Usage: hyalo"), "stdout: {stdout}");
+    assert!(bare.stderr.is_empty(), "stderr must stay empty");
+
+    let short = super::common::hyalo()
+        .current_dir(dir.path())
+        .arg("-h")
+        .output()
+        .unwrap();
+    assert_eq!(stdout, String::from_utf8(short.stdout).unwrap());
+
+    // A global flag without a command is still a usage error.
+    let flag_only = super::common::hyalo()
+        .current_dir(dir.path())
+        .arg("--no-hints")
+        .output()
+        .unwrap();
+    assert_eq!(flag_only.status.code(), Some(2));
+}
+
 #[test]
 fn long_help_contains_enriched_sections() {
     let output = hyalo_no_hints().arg("--help").output().unwrap();
