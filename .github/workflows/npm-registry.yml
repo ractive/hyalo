@@ -7,7 +7,7 @@ on:
         description: Published hyalo version to verify
         type: string
         required: true
-        default: 0.25.0
+        default: 0.25.1
 
 permissions:
   contents: read
