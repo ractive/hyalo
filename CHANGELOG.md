@@ -9,17 +9,28 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-11-01
+
 ### Changed
 
 - The macOS release binaries are signed with a Developer ID certificate and notarised (ractive/release-workflows v0.2.4).
 - A bare `hyalo` prints the `-h` page on stdout and exits 0 instead of a usage
   error with exit 2; winget's validator runs the binary without arguments and
   fails any non-zero exit.
+- The winget manifest is submitted with komac 2.16.0 (ractive/release-workflows
+  v0.3.2), which keeps the `hyalo` command alias; newer komac drops it on
+  update. The release pipeline also fails a Windows build that imports the
+  dynamic C runtime, and requires every runnable binary to exit 0 without
+  arguments.
+- `cargo deny` ignores RUSTSEC-2024-0449 (`unsafe-libyaml` is unmaintained, no
+  known vulnerability). It comes in through `mdbook-lint-core` → `serde_yaml`,
+  which has no newer release to upgrade to.
 
 ### Fixed
 
-- The Windows binaries link the C runtime statically, so `hyalo.exe` no longer
-  needs the VC++ Redistributable (`VCRUNTIME140.dll`); on a clean Windows the
+- The Windows binaries no longer need the Visual C++ runtime: they link the C
+  runtime statically, so `hyalo.exe` imports neither `VCRUNTIME140.dll` nor the
+  `api-ms-win-crt-*` DLLs. On a Windows without the VC++ Redistributable the
   zip, Scoop and winget installs could not start (STATUS_DLL_NOT_FOUND).
 
 ## [0.25.0] - 2026-10-05
@@ -3226,7 +3237,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.25.1...HEAD
+[0.25.1]: https://github.com/ractive/hyalo/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/ractive/hyalo/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/ractive/hyalo/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/ractive/hyalo/compare/v0.21.0...v0.24.0
