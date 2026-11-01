@@ -53,7 +53,20 @@ jobs:
       # Ship shell completions in archives and deb/rpm. Copies into
       # crates/hyalo-cli/ because cargo-deb/cargo-generate-rpm resolve
       # asset paths relative to the crate directory.
+      # It also guards the shipped Windows binaries: they must not import the
+      # dynamic MSVC C runtime, which a clean Windows lacks (DEC-372; an env
+      # RUSTFLAGS would silently drop .cargo/config.toml's +crt-static), and a
+      # runnable binary must exit 0 without arguments (winget runs it so).
       pre-package-command: |
+        case "$TARGET" in
+          *-windows-msvc)
+            if grep -a -o -i -E '[a-z0-9_.-]+\.dll' "$BIN_PATH" | sort -u -f |
+                grep -i -E '^(vcruntime|msvcp|api-ms-win-crt-)'; then
+              echo "::error::$BIN_PATH imports the dynamic MSVC C runtime"
+              exit 1
+            fi
+            ;;
+        esac
         mkdir -p completions
         if [ "$CROSS" = "true" ] || [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
           # Target binary is not host-runnable: generate with a host build.
@@ -61,6 +74,7 @@ jobs:
           cargo run --release -p hyalo-cli --bin hyalo -- completions zsh  > completions/_hyalo
           cargo run --release -p hyalo-cli --bin hyalo -- completions fish > completions/hyalo.fish
         else
+          "$BIN_PATH" > /dev/null
           "$BIN_PATH" completions bash > completions/hyalo.bash
           "$BIN_PATH" completions zsh  > completions/_hyalo
           "$BIN_PATH" completions fish > completions/hyalo.fish
