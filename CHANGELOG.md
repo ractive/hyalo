@@ -12,6 +12,15 @@ and this project adheres to
 ### Changed
 
 - The macOS release binaries are signed with a Developer ID certificate and notarised (ractive/release-workflows v0.2.4).
+- A bare `hyalo` prints the `-h` page on stdout and exits 0 instead of a usage
+  error with exit 2; winget's validator runs the binary without arguments and
+  fails any non-zero exit.
+
+### Fixed
+
+- The Windows binaries link the C runtime statically, so `hyalo.exe` no longer
+  needs the VC++ Redistributable (`VCRUNTIME140.dll`); on a clean Windows the
+  zip, Scoop and winget installs could not start (STATUS_DLL_NOT_FOUND).
 
 ## [0.25.0] - 2026-10-05
 
