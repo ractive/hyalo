@@ -8701,9 +8701,15 @@ the verdict from `find` alone would have made it a fifth (backlog item
   an alias — and its filename-only sibling `stem_ambiguity` (what `mv` needs: a
   move never resolves a link through an alias). `ambiguous_candidates(target)`
   and `ambiguous_stem_candidates(target)` take an authored target, normalise it
-  with `bare_stem` (trim, drop `#fragment`/`?query`, percent-decode, drop a
-  `.md` suffix; a path-form target names a location and is never ambiguous)
-  and return the files sorted and vault-relative. The private copies in
+  with `bare_stem` (trim, drop `#fragment`/`?query` and leading `./`
+  segments, percent-decode, drop a `.md` suffix; a path-form target names a
+  location and is never ambiguous; the literal stem, `?` included, is tried
+  before the `?query` is stripped, so `What?.md` twins stay ambiguous) and
+  return the files sorted and vault-relative. `links fix`, `mv`'s inbound
+  guard and the catalog behind `backlinks` normalise through the same
+  function. Under `--allow-ambiguous`, and for the moved file's own
+  frontmatter, `mv` rewrites only a link whose authored text is itself the
+  shared stem, so a `[[note?]]` keeps its `?`. The private copies in
   `link_fix`, `link_rewrite` (four), `mdlint`'s HYALO006 and `discovery` are
   gone; `catalog::resolve`'s bare-stem branch and `LinkResolver::resolve_stem`
   call the same function.

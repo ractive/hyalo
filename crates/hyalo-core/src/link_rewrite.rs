@@ -474,8 +474,8 @@ fn validate_move_link_identity<'a>(
                     options,
                 );
                 let permitted_override = if allow_ambiguous && old.kind == LinkKind::Wikilink {
-                    crate::case_index::bare_stem(&old.link.target)
-                        .and_then(|stem| before.stem_ambiguity(&stem))
+                    before
+                        .literal_target_stem_ambiguity(&old.link.target)
                         .and_then(|paths| {
                             paths
                                 .iter()
@@ -1094,63 +1094,75 @@ fn plan_inbound_rewrites(
 
             let mut bare_ambiguous_match = false;
             if dir_index.is_none() && span.kind == LinkKind::Wikilink {
-                let decoded = crate::discovery::percent_decode_path(&span.link.target);
-                let t = decoded.as_deref().unwrap_or(&span.link.target);
-                // Only bare wikilinks (no path separator) need the ambiguity check.
-                let normalized = if let Some(wo) = t.strip_prefix("./") {
-                    std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
+                // iter-319 (DEC-374): the shared target normalisation
+                // (`#`/`?`/`%20`/`./`/`.md`) decides ambiguity, so `[[note?]]`
+                // and `[[./note]]` are listed exactly as `find` and HYALO006
+                // report them. `--allow-ambiguous` rewrites only a link whose
+                // authored text is itself the shared stem — rewriting a
+                // `[[note?]]` would drop its `?`.
+                let shared =
+                    case_index.and_then(|idx| idx.target_stem_ambiguity(&span.link.target));
+                let resolution = if let Some(candidates) = shared {
+                    Some(Resolution::Ambiguous(crate::case_index::sorted_candidates(
+                        candidates,
+                    )))
                 } else {
-                    std::borrow::Cow::Borrowed(t)
-                };
-                let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
-                if is_bare && case_index.is_some() {
-                    let t_norm = normalized.to_ascii_lowercase();
-                    let stem = if std::path::Path::new(&t_norm)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                    {
-                        &t_norm[..t_norm.len() - 3]
+                    let decoded = crate::discovery::percent_decode_path(&span.link.target);
+                    let t = decoded.as_deref().unwrap_or(&span.link.target);
+                    // Only bare wikilinks (no path separator) need the ambiguity check.
+                    let normalized = if let Some(wo) = t.strip_prefix("./") {
+                        std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
                     } else {
-                        &t_norm
+                        std::borrow::Cow::Borrowed(t)
                     };
-                    let res = resolver.resolve_stem(stem);
-                    match res {
-                        Resolution::Hit { ref vault_path } => {
-                            let matches_old = vault_path == old_rel
-                                || vault_path == old_stem
-                                || vault_path.strip_suffix(".md") == Some(old_stem);
-                            if !matches_old {
-                                continue;
-                            }
+                    let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
+                    (is_bare && case_index.is_some()).then(|| {
+                        let t_norm = normalized.to_ascii_lowercase();
+                        let stem = t_norm.strip_suffix(".md").unwrap_or(&t_norm);
+                        resolver.resolve_stem(stem)
+                    })
+                };
+                match resolution {
+                    Some(Resolution::Hit { ref vault_path }) => {
+                        let matches_old = vault_path == old_rel
+                            || vault_path == old_stem
+                            || vault_path.strip_suffix(".md") == Some(old_stem);
+                        if !matches_old {
+                            continue;
                         }
-                        Resolution::Ambiguous(ref candidates) => {
-                            // Check if the moved file is among the ambiguous
-                            // candidates — only then is this link relevant.
-                            let matches_old = candidates.iter().any(|c| {
-                                c == old_rel
-                                    || c == old_stem
-                                    || c.strip_suffix(".md") == Some(old_stem)
-                            });
-                            if !matches_old {
-                                continue;
-                            }
-                            if !allow_ambiguous {
-                                // NEW-3: record the skipped link for the CLI to
-                                // surface (JSON envelope or stderr note).
-                                skipped_ambiguous.push(SkippedAmbiguous {
-                                    source: source_rel.to_string(),
-                                    line: line_num,
-                                    target: span.link.target.clone(),
-                                    candidates: candidates.clone(),
-                                    property: None,
-                                    is_self: false,
-                                });
-                                continue;
-                            }
-                            bare_ambiguous_match = true;
-                        }
-                        Resolution::Broken => continue,
                     }
+                    Some(Resolution::Ambiguous(ref candidates)) => {
+                        // Check if the moved file is among the ambiguous
+                        // candidates — only then is this link relevant.
+                        let matches_old = candidates.iter().any(|c| {
+                            c == old_rel || c == old_stem || c.strip_suffix(".md") == Some(old_stem)
+                        });
+                        if !matches_old {
+                            continue;
+                        }
+                        if !allow_ambiguous {
+                            // NEW-3: record the skipped link for the CLI to
+                            // surface (JSON envelope or stderr note).
+                            skipped_ambiguous.push(SkippedAmbiguous {
+                                source: source_rel.to_string(),
+                                line: line_num,
+                                target: span.link.target.clone(),
+                                candidates: candidates.clone(),
+                                property: None,
+                                is_self: false,
+                            });
+                            continue;
+                        }
+                        if case_index
+                            .and_then(|idx| idx.literal_target_stem_ambiguity(&span.link.target))
+                            .is_none()
+                        {
+                            continue;
+                        }
+                        bare_ambiguous_match = true;
+                    }
+                    Some(Resolution::Broken) => continue,
+                    None => {}
                 }
             }
 
@@ -1331,7 +1343,12 @@ fn plan_outbound_rewrites(
                         });
                         continue;
                     }
-                    self_ambiguous = true;
+                    // Under `--allow-ambiguous` only a link whose authored text
+                    // is itself the shared stem is rewritten: a `[[note?]]`
+                    // would lose its `?`.
+                    self_ambiguous = case_index
+                        .literal_target_stem_ambiguity(&span.link.target)
+                        .is_some();
                 }
                 if (self_ambiguous
                     || link_resolver.matches_target(&span, old_rel, old_rel, old_stem))
@@ -2129,10 +2146,17 @@ fn plan_frontmatter_wikilink_rewrites(
             // layout. An ambiguous stem the moved file is one of the
             // candidates for is this move's business; what happens next is the
             // guard's decision, not this filter's.
-            if idx
-                .ambiguous_stem_candidates(&t_norm)
-                .is_some_and(|candidates| candidates.iter().any(|c| c == old_rel))
-            {
+            //
+            // iter-319 (DEC-374): the shared `?query` fallback only lists a
+            // link; with no guard (the moved file's own frontmatter, or
+            // `--allow-ambiguous`) the link would be rewritten and lose its
+            // `?`, so there only the literal stem counts, as before.
+            let ambiguous = if ambiguity.is_some() {
+                idx.target_stem_ambiguity(&t_norm)
+            } else {
+                idx.literal_target_stem_ambiguity(&t_norm)
+            };
+            if ambiguous.is_some_and(|candidates| candidates.iter().any(|c| c == old_rel)) {
                 true
             } else {
                 let canonical = idx

@@ -141,6 +141,15 @@ pub(crate) fn resolve_with_explicit_paths(
             return resolved;
         }
     }
+    // iter-319 (DEC-374): the shared target normalisation — `?query`, `./`,
+    // `%20` — so `backlinks` agrees with `find` and HYALO006 on what is
+    // ambiguous; the literal `What?` stem is tried before its `?` is stripped.
+    if kind == LinkKind::Wikilink
+        && !absolute
+        && let Some(paths) = index.target_ambiguity(target)
+    {
+        return Resolution::Ambiguous(crate::case_index::sorted_candidates(paths));
+    }
     let bare = raw.trim_end_matches('/');
     if !absolute && !bare.contains('/') {
         let stem = strip_md(bare);

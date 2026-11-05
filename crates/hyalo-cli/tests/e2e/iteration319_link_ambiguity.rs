@@ -349,3 +349,206 @@ fn an_ambiguous_link_is_still_counted_as_broken_by_every_command() {
         "{messages:?}"
     );
 }
+
+/// One authored link and the answer every command must give for it.
+struct Form {
+    /// File holding the link.
+    file: &'static str,
+    /// 1-based line of the link in that file.
+    line: u64,
+    /// The `target` `find` reports for it.
+    target: &'static str,
+    /// The twin to move for `mv`.
+    moved: &'static str,
+    /// The sorted candidates.
+    candidates: &'static [&'static str],
+}
+
+const NOTE_TWINS: &[&str] = &["a/note.md", "b/note.md"];
+const SPACED_TWINS: &[&str] = &["a/my note.md", "b/my note.md"];
+
+/// Every ambiguity-reporting command, asked about one form. Failures name the
+/// command, so a drifting normalisation points at its owner.
+fn assert_form_is_ambiguous_everywhere(tmp: &TempDir, form: &Form) {
+    let want = json!(form.candidates);
+    let who = format!("{}:{} {}", form.file, form.line, form.target);
+
+    // find
+    let found = run(tmp, &["find", "--file", form.file, "--fields", "links"]);
+    let links = found["results"][0]["links"].as_array().unwrap();
+    let hit: Vec<&Value> = links
+        .iter()
+        .filter(|l| l["line"] == form.line && l["target"] == form.target)
+        .collect();
+    assert_eq!(hit.len(), 1, "find {who}: {links:?}");
+    assert_eq!(hit[0]["path"], Value::Null, "find {who}");
+    assert_eq!(hit[0]["ambiguous"], json!(true), "find {who}: {}", hit[0]);
+    assert_eq!(hit[0]["candidates"], want, "find {who}");
+
+    // HYALO006
+    let lint = run(
+        tmp,
+        &[
+            "lint",
+            "--rule",
+            "HYALO006",
+            "--file",
+            form.file,
+            "--max-per-rule",
+            "0",
+        ],
+    );
+    let expected = format!(
+        "matches {} candidates: {}",
+        form.candidates.len(),
+        form.candidates.join(", ")
+    );
+    let messages: Vec<String> = lint["results"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|f| f["rule_groups"].as_array().unwrap().clone())
+        .flat_map(|g| g["violations"].as_array().unwrap().clone())
+        .filter(|v| v["line"] == form.line)
+        .map(|v| v["message"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains(&expected)),
+        "HYALO006 {who}: {messages:?}"
+    );
+
+    // links fix
+    let fix = run(tmp, &["links", "fix", "--dry-run"]);
+    let entry = fix["results"]["ambiguous_links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["source"] == form.file && a["line"] == form.line)
+        .unwrap_or_else(|| panic!("links fix {who} is not in ambiguous_links: {fix}"));
+    assert_eq!(entry["candidates"], want, "links fix {who}");
+
+    // mv
+    let moved = run(
+        tmp,
+        &["mv", form.moved, "--to", "moved/elsewhere.md", "--dry-run"],
+    );
+    let skipped = moved["results"]["skipped_ambiguous"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let entry = skipped
+        .iter()
+        .find(|s| s["source"] == form.file && s["line"] == form.line)
+        .unwrap_or_else(|| panic!("mv {who} is not in skipped_ambiguous: {moved}"));
+    assert_eq!(entry["candidates"], want, "mv {who}");
+
+    // backlinks: an ambiguous link belongs to neither candidate.
+    for candidate in form.candidates {
+        let back = run(tmp, &["backlinks", candidate]);
+        let sources = back["results"]["backlinks"].as_array().unwrap();
+        assert!(
+            !sources
+                .iter()
+                .any(|b| b["source"] == form.file && b["line"] == form.line),
+            "backlinks {candidate} must not claim {who}: {back}"
+        );
+    }
+}
+
+#[test]
+fn every_spelling_of_an_ambiguous_stem_gets_one_answer_from_every_command() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "dir = \".\"\n");
+    for path in ["a/note.md", "b/note.md", "a/my note.md", "b/my note.md"] {
+        write(&tmp, path, "# Twin\n");
+    }
+    write(
+        &tmp,
+        "src.md",
+        "[[note]]\n[[note?]]\n[[my%20note]]\n[[./note]]\n[[note#H]]\n[[note|alias]]\n\
+         [[a/note]]\n[[sub/note]]\n",
+    );
+    write(
+        &tmp,
+        "fm.md",
+        "---\nrelated:\n  - \"[[note]]\"\n  - \"[[note?]]\"\n  - \"[[./note]]\"\n---\n# Fm\n",
+    );
+
+    let forms = [
+        ("src.md", 1, "note", "a/note.md", NOTE_TWINS),
+        ("src.md", 2, "note?", "a/note.md", NOTE_TWINS),
+        ("src.md", 3, "my%20note", "a/my note.md", SPACED_TWINS),
+        ("src.md", 4, "./note", "b/note.md", NOTE_TWINS),
+        ("src.md", 5, "note", "a/note.md", NOTE_TWINS),
+        ("src.md", 6, "note", "b/note.md", NOTE_TWINS),
+        ("fm.md", 3, "note", "a/note.md", NOTE_TWINS),
+        ("fm.md", 4, "note?", "b/note.md", NOTE_TWINS),
+        ("fm.md", 5, "./note", "a/note.md", NOTE_TWINS),
+    ];
+    for (file, line, target, moved, candidates) in forms {
+        assert_form_is_ambiguous_everywhere(
+            &tmp,
+            &Form {
+                file,
+                line,
+                target,
+                moved,
+                candidates,
+            },
+        );
+    }
+
+    // An explicit path asserts a location: `[[a/note]]` resolves, and
+    // `[[sub/note]]` is merely broken. Neither is ever a bare stem.
+    let found = run(&tmp, &["find", "--file", "src.md", "--fields", "links"]);
+    for link in found["results"][0]["links"].as_array().unwrap() {
+        if link["line"] == 7 || link["line"] == 8 {
+            let object = link.as_object().unwrap();
+            assert!(
+                !object.contains_key("ambiguous") && !object.contains_key("candidates"),
+                "{link}"
+            );
+        }
+    }
+}
+
+/// A file really named `What?.md` is ambiguous under its own name; the `?` is
+/// not a query to strip first. (A `?` cannot be in a Windows filename.)
+#[cfg(unix)]
+#[test]
+fn a_literal_question_mark_stem_is_ambiguous_under_its_own_name() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "dir = \".\"\n");
+    write(&tmp, "a/What?.md", "# A\n");
+    write(&tmp, "b/What?.md", "# B\n");
+    write(&tmp, "src.md", "[[What?]]\n");
+    assert_form_is_ambiguous_everywhere(
+        &tmp,
+        &Form {
+            file: "src.md",
+            line: 1,
+            target: "What?",
+            moved: "a/What?.md",
+            candidates: &["a/What?.md", "b/What?.md"],
+        },
+    );
+}
+
+/// The moved file's own `[[note?]]` keeps its text, exactly as on the baseline:
+/// rewriting it would drop the `?`.
+#[test]
+fn mv_keeps_the_moved_files_own_ambiguous_query_link_as_written() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "dir = \".\"\n");
+    write(
+        &tmp,
+        "a/note.md",
+        "---\nrelated:\n  - \"[[note?]]\"\n---\n# A\n",
+    );
+    write(&tmp, "b/note.md", "# B\n");
+    let moved = run(&tmp, &["mv", "a/note.md", "--to", "c/note.md", "--dry-run"]);
+    assert!(
+        !moved.to_string().contains("[[note]]"),
+        "the link must keep its `?`: {moved}"
+    );
+}

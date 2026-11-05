@@ -2156,7 +2156,7 @@ fn classify_short_form_wikilink(
     // two notes declaring it as an alias — the call that also fills `find`'s
     // `candidates` field, HYALO006 and `mv`'s guard. Asked first, so the
     // arms below only ever see unambiguous stems when an index is available.
-    if case_index.is_some_and(|idx| idx.ambiguity(target).is_some()) {
+    if case_index.is_some_and(|idx| idx.target_ambiguity(target).is_some()) {
         return Some(LinkResolution::ShortFormAmbiguous);
     }
 
@@ -2452,6 +2452,16 @@ pub(crate) fn classify_link_from_source(
             // happen; it always returns Some when called with expand_short_form=false).
             // Fall through to the regular path-based classification.
             let res = classify_link(canonical_dir, &link.target, site_prefix, case_index);
+            // iter-319 (DEC-374): a bare stem spelled with a `./` prefix or a
+            // `.md` suffix is the same bare stem to `find` and HYALO006
+            // (`bare_stem`), so a link that resolves nowhere and names an
+            // ambiguous one is `ShortFormAmbiguous` here too.
+            if res == LinkResolution::Broken
+                && !expand_short_form
+                && case_index.is_some_and(|idx| idx.target_ambiguity(&link.target).is_some())
+            {
+                return (link.target.clone(), LinkResolution::ShortFormAmbiguous);
+            }
             (link.target.clone(), res)
         }
         LinkKind::Markdown => {

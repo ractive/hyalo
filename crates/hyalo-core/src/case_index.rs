@@ -466,6 +466,51 @@ impl CaseInsensitiveIndex {
         (by_alias.len() > 1).then_some(by_alias)
     }
 
+    /// The files an authored link `target` is ambiguous between on the
+    /// *reading* side (stems and doubly claimed aliases), borrowed from the
+    /// index, or `None` when it is not a bare, ambiguous target.
+    ///
+    /// A `?` is ambiguous in the file's own name too (`What?.md`), so the
+    /// literal stem is tried before the one with a `?query` stripped off.
+    #[must_use]
+    pub fn target_ambiguity(&self, target: &str) -> Option<&[String]> {
+        self.target_ambiguity_with(target, Self::ambiguity)
+    }
+
+    /// [`Self::target_ambiguity`] for *filename* stems only — what `mv` must
+    /// refuse to rewrite. A moved file's links are never resolved through an
+    /// alias, so an alias claimed twice is not its business.
+    #[must_use]
+    pub fn target_stem_ambiguity(&self, target: &str) -> Option<&[String]> {
+        self.target_ambiguity_with(target, Self::stem_ambiguity)
+    }
+
+    /// [`Self::target_stem_ambiguity`] without the `?query` fallback: ambiguous
+    /// only when the authored text, `?` included, is itself the shared stem.
+    /// `mv` rewrites only such a link under `--allow-ambiguous`, because
+    /// rewriting a `[[note?]]` would drop its `?`.
+    #[must_use]
+    pub fn literal_target_stem_ambiguity(&self, target: &str) -> Option<&[String]> {
+        let stem = bare_stem_with(target, false)?;
+        self.stem_ambiguity(&stem)
+    }
+
+    fn target_ambiguity_with(
+        &self,
+        target: &str,
+        probe: for<'a> fn(&'a Self, &str) -> Option<&'a [String]>,
+    ) -> Option<&[String]> {
+        let literal = bare_stem_with(target, false)?;
+        if let Some(found) = probe(self, &literal) {
+            return Some(found);
+        }
+        if !literal.contains('?') {
+            return None;
+        }
+        let stripped = bare_stem(target)?;
+        probe(self, &stripped)
+    }
+
     /// Sorted, vault-relative candidates an authored link `target` is
     /// ambiguous between (reading side — stems and doubly claimed aliases), or
     /// `None` when it is not a bare, ambiguous target. Path-form targets assert
@@ -475,18 +520,14 @@ impl CaseInsensitiveIndex {
     /// candidates" and `links fix`'s `ambiguous_links` all read this.
     #[must_use]
     pub fn ambiguous_candidates(&self, target: &str) -> Option<Vec<String>> {
-        let stem = bare_stem(target)?;
-        self.ambiguity(&stem).map(sorted_candidates)
+        self.target_ambiguity(target).map(sorted_candidates)
     }
 
     /// Like [`Self::ambiguous_candidates`] but for *filename* stems only —
-    /// what `mv` must refuse to rewrite. A moved file's links are never
-    /// resolved through an alias, so an alias claimed twice is not its
-    /// business.
+    /// what `mv` must refuse to rewrite.
     #[must_use]
     pub fn ambiguous_stem_candidates(&self, target: &str) -> Option<Vec<String>> {
-        let stem = bare_stem(target)?;
-        self.stem_ambiguity(&stem).map(sorted_candidates)
+        self.target_stem_ambiguity(target).map(sorted_candidates)
     }
 
     /// Returns `true` if the index contains no entries.
@@ -501,15 +542,29 @@ impl CaseInsensitiveIndex {
 }
 
 /// The bare stem an authored link `target` names: trimmed, stripped of its
-/// `#fragment`/`?query`, percent-decoded and stripped of a `.md` suffix. `None`
-/// for an empty target and for a path-form one (it contains a separator),
-/// which names a location rather than a stem. Borrows when nothing needs
-/// rewriting.
+/// `#fragment`/`?query` and of leading `./` segments (DEC-310: `[[./note]]` is
+/// `[[note]]`), percent-decoded and stripped of a `.md` suffix. `None` for an
+/// empty target and for a path-form one (it still contains a separator), which
+/// names a location rather than a stem. Borrows when nothing needs rewriting.
 #[must_use]
 pub fn bare_stem(target: &str) -> Option<std::borrow::Cow<'_, str>> {
+    bare_stem_with(target, true)
+}
+
+/// [`bare_stem`], optionally keeping a `?query` in the stem (a file may be
+/// called `What?.md`).
+fn bare_stem_with(target: &str, strip_query: bool) -> Option<std::borrow::Cow<'_, str>> {
     use std::borrow::Cow;
     let target = target.trim();
-    let head = target.split(['#', '?']).next().unwrap_or(target).trim_end();
+    let end = if strip_query {
+        target.find(['#', '?'])
+    } else {
+        target.find('#')
+    };
+    let mut head = end.map_or(target, |pos| &target[..pos]).trim_end();
+    while let Some(rest) = head.strip_prefix("./") {
+        head = rest;
+    }
     let mut head: Cow<'_, str> =
         crate::discovery::percent_decode_path(head).map_or(Cow::Borrowed(head), Cow::Owned);
     if head.contains(['/', '\\']) {
@@ -1627,10 +1682,37 @@ mod tests {
         assert_eq!(bare_stem("sub\\note"), None);
         assert_eq!(bare_stem(""), None);
         assert_eq!(bare_stem(".md"), None);
+        assert_eq!(bare_stem("./note").as_deref(), Some("note"));
+        assert_eq!(bare_stem("././note?x").as_deref(), Some("note"));
+        assert_eq!(bare_stem("./sub/note"), None);
+        assert_eq!(bare_stem("../note"), None);
+        assert_eq!(bare_stem("./"), None);
         assert!(
             matches!(bare_stem("plain"), Some(std::borrow::Cow::Borrowed(_))),
             "the common case must not allocate"
         );
+    }
+
+    #[test]
+    fn a_question_mark_is_tried_in_the_stem_before_it_is_stripped() {
+        let mut idx = CaseInsensitiveIndex::new();
+        for path in ["a/What?.md", "b/What?.md", "a/note.md", "b/note.md"] {
+            idx.insert(path);
+        }
+        let want = Some(vec!["a/What?.md".to_owned(), "b/What?.md".to_owned()]);
+        assert_eq!(idx.ambiguous_candidates("What?"), want);
+        assert_eq!(
+            idx.literal_target_stem_ambiguity("What?").map(<[_]>::len),
+            Some(2)
+        );
+        // Stripped form: `note?x` names the twins only through the fallback.
+        assert_eq!(idx.ambiguous_candidates("note?x").map(|c| c.len()), Some(2));
+        assert!(idx.literal_target_stem_ambiguity("note?x").is_none());
+        assert_eq!(
+            idx.ambiguous_stem_candidates("./note").map(|c| c.len()),
+            Some(2)
+        );
+        assert_eq!(idx.ambiguous_candidates("sub/note"), None);
     }
 
     #[test]
