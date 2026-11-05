@@ -2361,6 +2361,11 @@ fn nfc_equal(a: &str, b: &str) -> bool {
 /// (iter-211 / BUG-12): `Foo.MD` → `foo.md` is a casing fix, `foo.md` →
 /// `sub/foo.md` is a move.
 fn is_case_only_variant(written: &str, canonical: &str) -> bool {
+    // The resolver ignored the `?query`/`#fragment` and decoded `%20` before
+    // it found `canonical`, so the comparison must read the same path (R12,
+    // iter-322): on a case-sensitive volume `SUB/note?x=1` is a casing fix of
+    // `sub/Note.md`, not a relocation.
+    let written = crate::link_target::TargetParts::split(written).resolution_path();
     let w = written.trim_end_matches('/');
     if w.is_empty() {
         return false;
@@ -6153,5 +6158,13 @@ mod tests {
         assert_eq!(discover_files(tmp.path()).unwrap(), files);
         reset_discovery_memo_for_test();
         assert_eq!(discover_files(tmp.path()).unwrap().len(), files.len() + 1);
+    }
+
+    #[test]
+    fn case_only_variant_ignores_query_fragment_and_escapes() {
+        assert!(is_case_only_variant("SUB/note?x=1", "sub/Note.md"));
+        assert!(is_case_only_variant("SUB/note?x=1#H", "sub/Note.md"));
+        assert!(is_case_only_variant("Sub/My%20Note", "sub/my note.md"));
+        assert!(!is_case_only_variant("note?x=1", "sub/note.md"));
     }
 }

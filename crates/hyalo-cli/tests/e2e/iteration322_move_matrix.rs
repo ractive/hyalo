@@ -13,6 +13,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 use tempfile::TempDir;
 
+/// Windows forbids `?` in a file name, so the `?`-named note rows run elsewhere.
+const NAMES_WITH_QUESTION_MARK: bool = !cfg!(windows);
+
 /// Link forms valid from `src/a.md`. `None` frontmatter = body only.
 const FORMS: &[(&str, bool)] = &[
     ("[[x]]", true),
@@ -50,16 +53,20 @@ const ROOT_FORMS: &[(&str, bool)] = &[
 ];
 
 fn source(forms: &[(&str, bool)]) -> String {
+    let forms: Vec<_> = forms
+        .iter()
+        .filter(|(form, _)| NAMES_WITH_QUESTION_MARK || !form.contains("what?"))
+        .collect();
     let mut s = String::from("---\n");
     let mut n = 0;
-    for (form, in_fm) in forms {
+    for (form, in_fm) in forms.iter().copied() {
         if *in_fm {
             n += 1;
             let _ = writeln!(s, "p{n}: \"{}\"", form.replace('"', "\\\""));
         }
     }
     s.push_str("---\n");
-    for (form, _) in forms {
+    for (form, _) in forms.iter().copied() {
         s.push_str(form);
         s.push('\n');
     }
@@ -75,13 +82,17 @@ fn build(twin: bool) -> TempDir {
     write_md(d, "up.md", "# up\n");
     write_md(d, "lib/x/note.md", "# n\n");
     write_md(d, "dir/index.md", "# d\n");
-    write_md(d, "src/what?.md", "# w\n");
+    if NAMES_WITH_QUESTION_MARK {
+        write_md(d, "src/what?.md", "# w\n");
+    }
     if twin {
         write_md(d, "other/x.md", "# H\n");
         write_md(d, "other/up.md", "# up\n");
         write_md(d, "other/x/note.md", "# n\n");
         write_md(d, "other/dir/index.md", "# d\n");
-        write_md(d, "other/what?.md", "# w\n");
+        if NAMES_WITH_QUESTION_MARK {
+            write_md(d, "other/what?.md", "# w\n");
+        }
     }
     tmp
 }
@@ -206,6 +217,15 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
     let mut failures = Vec::new();
     for twin in [false, true] {
         for case in CASES {
+            let moves: Vec<(&str, &str)> = case
+                .moves
+                .iter()
+                .copied()
+                .filter(|(from, _)| NAMES_WITH_QUESTION_MARK || !from.contains('?'))
+                .collect();
+            if moves.is_empty() {
+                continue;
+            }
             let tmp = build(twin);
             let d = tmp.path();
             let before = links(d, &[]);
@@ -225,7 +245,7 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
                 listed.push_str(&v.to_string());
                 listed.push_str(&err);
             } else {
-                for (from, to) in case.moves {
+                for (from, to) in &moves {
                     let (v, err) = run(d, &["mv", from, "--to", to]);
                     listed.push_str(&v.to_string());
                     listed.push_str(&err);
@@ -241,7 +261,7 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
             );
 
             for (file, before_links) in &before {
-                let new_file = map_path(file, case.moves);
+                let new_file = map_path(file, &moves);
                 let Some(after_links) = after.get(&new_file) else {
                     failures.push(format!("{} twin={twin}: {file} vanished", case.label));
                     continue;
@@ -260,7 +280,7 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
                 {
                     let Some(was) = was else { continue };
                     checks += 1;
-                    let expected = map_path(was, case.moves);
+                    let expected = map_path(was, &moves);
                     if now.as_deref() == Some(expected.as_str()) {
                         continue;
                     }
@@ -287,5 +307,8 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
         failures.len(),
         failures.join("\n")
     );
-    assert!(checks > 600, "the matrix shrank: {checks}");
+    assert!(
+        checks > if NAMES_WITH_QUESTION_MARK { 600 } else { 500 },
+        "the matrix shrank: {checks}"
+    );
 }

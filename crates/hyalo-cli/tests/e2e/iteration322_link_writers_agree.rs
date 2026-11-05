@@ -388,6 +388,8 @@ fn padded_relative_wikilinks_agree_across_counters() {
 }
 
 // M1: a `?` in a note name is read, counted and moved like any other.
+// (Windows forbids `?` in a file name.)
+#[cfg(not(windows))]
 #[test]
 fn question_marks_in_note_names_agree_everywhere() {
     let tmp = TempDir::new().unwrap();
