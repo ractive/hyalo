@@ -7,8 +7,15 @@
 # Applies to all binaries built with the MSVC toolchain (the default on
 # the GitHub Actions `windows-latest` runner). MinGW Windows builds are
 # unaffected (their gcc-style linker uses a different flag).
+#
+# `+crt-static` links the C runtime statically, so `hyalo.exe` does not
+# import VCRUNTIME140.dll. That DLL ships with the VC++ Redistributable, not
+# with Windows, and winget/Scoop/zip users without it could not start the
+# binary (STATUS_DLL_NOT_FOUND, 0xC0000135). Crates that compile C through
+# `cc` honour `crt-static`. An env `RUSTFLAGS` would replace this whole list;
+# no CI or release workflow (nor ractive/release-workflows) sets one.
 [target.'cfg(all(target_os = "windows", target_env = "msvc"))']
-rustflags = ["-C", "link-arg=/STACK:8388608"]
+rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "target-feature=+crt-static"]
 
 [env]
 # Ordinary export tests write disposable output. Only generate-ts-types refreshes

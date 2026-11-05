@@ -71,3 +71,9 @@ Findings of the 2026-10-05 regression dogfood that
 - The release skill's step 2 lists three `Cargo.toml` fields and five JSON
   manifests but not the lockfile or the `npm-registry.yml` default; the
   0.24.1 prep commit is the only place that shows the full set of 16 files.
+
+## Seen again while cutting 0.25.1 (2026-11-01)
+
+- `hyalo changelog release 0.25.1 --apply` wrote `[0.25.1]: TBD` and kept
+  `[Unreleased]: …/compare/v0.25.0...HEAD` again; fixed by hand. The
+  footer item above is still open.
