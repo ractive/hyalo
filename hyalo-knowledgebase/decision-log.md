@@ -7109,7 +7109,7 @@ a `.git` worktree file at the root or above takes the crate route up front.
 Every other command still discovers files through the crate alone, but
 `create-index` takes its file **set** from the port, so every `--index`
 command depends on it indirectly. The `ignore` crate is therefore pinned to
-`=0.4.33` in `Cargo.toml` and ignored by Dependabot: a bump must come with a
+`=0.4.33` (since amended below) in `Cargo.toml` and ignored by Dependabot: a bump must come with a
 review of the private precedence logic this port mirrors. Unit
 tests compare the file list and the count with the crate's two-walk result
 for root, ancestor, `.ignore`-only, whitelist-beats-hidden, nested, `.jj`
@@ -7121,6 +7121,20 @@ it. Running the second walk concurrently with parsing: it competes with the
 scan for the same cores and kernel time. Using the port for every command:
 it would make every command's file set depend on it, for no gain outside
 `summary` and `create-index`.
+
+**Amendment (2026-11-05, dependency sweep): `ignore` is now `=0.4.34`.**
+The 0.4.33..0.4.34 diff was read against `ignore_classify.rs`. The precedence
+the port mirrors (`matched_ignore`, the parents' `has_git`) is unchanged for
+hyalo's configuration, where `git_ignore` and `git_exclude` are always toggled
+together: the release only skips absolute-parent rewriting when no parent has
+rules, adds an incremental-walk cache, and probes `.git/info/exclude` in a case
+that is a no-op under `require_git = true`. One change does reach behaviour:
+`pathutil::file_name` no longer returns `None` for a name that ends in `.`, so
+on Unix `.drafts.` is now a hidden name where 0.4.33 let it through. The port
+already hid it, so the bump closes a split in which the crate's walk (`find`,
+`lint`) and the port (`summary`, `--index`) disagreed; a differential test pins
+it (`counting_walk_matches_crate_for_hidden_names_ending_in_a_dot`). Windows
+is unaffected. The next bump starts from 0.4.34.
 
 ## DEC-350: serde-saphyr 1.x, with integer resolution and quoting hyalo owns (2026-10-04)
 

@@ -21,6 +21,15 @@ and this project adheres to
 
 ### Changed
 
+- On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
+  hidden, as every other dot-prefixed name already was (`ignore` 0.4.34).
+  Before, `find` and `lint` listed the notes inside it while `summary` and
+  `--index` already left them out, so a `[[old]]` link to `.drafts./old.md`
+  resolved in one and was broken in the other; now they agree and the link is
+  broken everywhere. Windows is unchanged. Separately, YAML error snippets
+  (the `cause` of an unparsable frontmatter) place their caret by the Unicode 18
+  display width (unicode-width 0.2.3): for `名前: ｶﾞ ｶﾞ: 値` it moves two
+  columns, to the correct position.
 - `--jq`: `scan` now follows jq (jaq-std 3.0.4). `scan(re)` returns every
   match instead of only the first, and a regex with capture groups yields an
   array of the groups per match instead of the whole match. For the old

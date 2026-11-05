@@ -13,6 +13,9 @@
 #   through the `bun` ecosystem. Its bundle is embedded in the skill
 #   distributions, so a jev update PR fails `check-jev-assets` until
 #   `just sync-jev-assets` is run on the branch — that is intended.
+# - npm/hyalo's package.json is generated: its pins live in `main_manifest()` in
+#   crates/xtask/src/npm_package.rs. An npm/hyalo update PR therefore fails
+#   `generate-npm-packages --check` until that pin moves too — that is intended.
 # - The fuzz/ crate's separate Cargo.lock is not covered; it tracks the
 #   workspace manually.
 version: 2
@@ -39,7 +42,7 @@ updates:
       # mdbook-lint-core 0.16.x hands comrak 0.21 AST nodes to hyalo-mdlint's
       # rules, so comrak can only move together with mdbook-lint (PR #366).
       - dependency-name: comrak
-      # Pinned to =0.4.33: hyalo-core's ignore_classify.rs ports this version's
+      # Pinned to =0.4.34: hyalo-core's ignore_classify.rs ports this version's
       # private precedence logic (DEC-349), so a bump needs the differential
       # tests in discovery.rs reviewed by hand.
       - dependency-name: ignore

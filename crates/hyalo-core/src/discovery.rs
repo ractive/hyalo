@@ -5995,6 +5995,25 @@ mod tests {
         assert_matches_crate(tmp.path());
     }
 
+    /// `ignore` 0.4.34 treats a dot-prefixed name that merely ends in `.`
+    /// (`.drafts.`) as hidden on Unix; 0.4.33 saw no file name there and let it
+    /// through. Windows cannot create such a directory, so this is Unix-only.
+    #[cfg(unix)]
+    #[test]
+    fn counting_walk_matches_crate_for_hidden_names_ending_in_a_dot() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_all(
+            tmp.path(),
+            &[
+                (".drafts./old.md", "# o\n"),
+                (".drafts..md", "# t\n"),
+                ("plain.md", "# p\n"),
+            ],
+        );
+        let (files, _) = assert_matches_crate(tmp.path());
+        assert_eq!(files.len(), 1, "only plain.md; `.drafts./` is hidden");
+    }
+
     /// A nested `.gitignore` is discovered mid-walk: the file set falls back
     /// to the crate's walk and the count still agrees.
     #[test]
