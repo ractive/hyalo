@@ -431,12 +431,6 @@ impl CaseInsensitiveIndex {
         !self.lookup_alias_all(alias).is_empty()
     }
 
-    /// Number of distinct declared aliases in the vault.
-    #[must_use]
-    pub fn alias_count(&self) -> usize {
-        self.alias_map.len()
-    }
-
     /// The notes whose path ends in `/<target>.md` — a partially qualified
     /// wikilink target such as `x/note` for `a/x/note.md` (iter-322, C-1).
     /// `target` is path-form: it must contain a `/`, and a `.md` suffix is
@@ -548,7 +542,7 @@ impl CaseInsensitiveIndex {
     /// graph keys an ambiguous link by it (`[[my%20note]]` → `my note`), so
     /// `mv` finds every spelling through the moved file's basename stem.
     #[must_use]
-    pub fn ambiguous_stem_key(&self, target: &str) -> Option<String> {
+    pub(crate) fn ambiguous_stem_key(&self, target: &str) -> Option<String> {
         let literal = bare_stem_with(target, false)?;
         if self.ambiguity(&literal).is_some() {
             return Some(literal.into_owned());

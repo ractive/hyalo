@@ -86,9 +86,10 @@ pub struct AnchorFixReport {
     pub deferred: Vec<AnchorFixDeferral>,
 }
 
+#[cfg(test)]
 /// Build fragment plans using indexed link and heading semantics and exact
 /// parsed source spans. Only source documents carrying broken anchors are read.
-pub fn plan_anchor_fixes(
+pub(crate) fn plan_anchor_fixes(
     dir: &Path,
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,

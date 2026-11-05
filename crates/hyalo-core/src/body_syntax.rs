@@ -342,8 +342,9 @@ impl BodySyntax {
     pub fn line_is_code(&self, line: usize) -> bool {
         Self::at(line, &self.in_code)
     }
+    #[cfg(test)]
     #[must_use]
-    pub fn line_is_indented_code(&self, line: usize) -> bool {
+    pub(crate) fn line_is_indented_code(&self, line: usize) -> bool {
         Self::at(line, &self.indented_code)
     }
     #[must_use]

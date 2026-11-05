@@ -61,6 +61,9 @@ pub(crate) struct ConfigReport {
     pub dir: PathBuf,
     /// `true` when a `--dir` override replaced the config's `dir` value.
     pub dir_overridden: bool,
+    /// The `--index-file` this invocation named, threaded into the hints whose
+    /// command reads a snapshot.
+    pub index_file: Option<String>,
     /// Output format pinned by `.hyalo.toml` (`format = "text"`), or `None`
     /// when the file says nothing.
     pub format: Option<String>,
@@ -221,6 +224,23 @@ pub(crate) struct ScanReport {
     pub verbose_skips: bool,
 }
 
+/// How this `hyalo config` run was invoked, for the report and its hints.
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigInvocation<'a> {
+    /// `--dir` replaced the config's own `dir`.
+    pub(crate) dir_overridden: bool,
+    /// `--site-prefix`, when given.
+    pub(crate) cli_site_prefix: Option<&'a str>,
+    /// `--raw`: include the config file's text.
+    pub(crate) raw: bool,
+    /// The format the run resolved to.
+    pub(crate) effective_format: crate::output::Format,
+    /// `--format` was given on the command line.
+    pub(crate) format_from_flag: bool,
+    /// `--index-file`, when given.
+    pub(crate) index_file: Option<&'a Path>,
+}
+
 /// Build and return the config report for `cwd`.
 ///
 /// `effective` comes from [`crate::config::resolve_effective`] — the same
@@ -231,12 +251,16 @@ pub(crate) struct ScanReport {
 pub(crate) fn collect_config_report(
     cwd: &Path,
     effective: crate::config::EffectiveConfig,
-    dir_overridden: bool,
-    cli_site_prefix: Option<&str>,
-    raw: bool,
-    effective_format: crate::output::Format,
-    format_from_flag: bool,
+    invocation: &ConfigInvocation<'_>,
 ) -> anyhow::Result<ConfigReport> {
+    let ConfigInvocation {
+        dir_overridden,
+        cli_site_prefix,
+        raw,
+        effective_format,
+        format_from_flag,
+        index_file,
+    } = *invocation;
     let crate::config::EffectiveConfig {
         config: resolved,
         dir,
@@ -275,6 +299,7 @@ pub(crate) fn collect_config_report(
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
+        index_file: index_file.map(crate::hints::shorten_index_path_for_hint),
         format: resolved.format,
         effective_format: effective_format.to_string(),
         format_source,
@@ -333,6 +358,20 @@ pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
         )
     } else {
         (summary, types_list)
+    };
+    // B-17: an explicit `--format` is threaded like `--dir`, so a JSON
+    // reader's follow-up commands answer in JSON too.
+    let (summary, types_list) = if report.format_source == "flag" {
+        (
+            summary.flag_value("--format", &report.effective_format),
+            types_list.flag_value("--format", &report.effective_format),
+        )
+    } else {
+        (summary, types_list)
+    };
+    let summary = match &report.index_file {
+        Some(path) => summary.flag_value("--index-file", path),
+        None => summary,
     };
     vec![
         crate::hints::Hint::new(

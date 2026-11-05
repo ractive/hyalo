@@ -28,7 +28,7 @@ pub fn run() -> Result<bool> {
 
 /// Only an explicit test-only condition excludes a node. Unknown cfg values
 /// remain eligible, so platform/feature-gated production cannot escape checks.
-fn test_only(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn test_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         attr.path().is_ident("cfg")
             && attr

@@ -1334,13 +1334,12 @@ pub(crate) fn find_prepared(
         }
 
         // --- Content search: regex path only (BM25 is handled via score_map) ---
-        let content_matches: Option<Vec<ContentMatch>> = if has_regex_search {
+        let content_matches: Option<Vec<ContentMatch>> = if let Some(re) = compiled_regex.as_ref() {
             let root = hyalo_core::rooted::VaultRoot::new(dir)?;
             let name = hyalo_core::rooted::RelativeName::new(&entry.rel_path)?;
             let bytes = root
                 .open(&name)?
                 .read_bounded(hyalo_core::scanner::MAX_FILE_SIZE)?;
-            let re = compiled_regex.as_ref().unwrap(); // has_regex_search == compiled_regex.is_some()
 
             let mut content_visitor = ContentSearchVisitor::from_compiled(re.clone());
             let scan_result =

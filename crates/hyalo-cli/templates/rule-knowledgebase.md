@@ -122,7 +122,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   iter-314). Every other read, and a plain write without `--validate`, still answers/proceeds,
   with the `-q`-proof warning.
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
-  `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
+  `.hyalo.toml`; `->` hints are read-only and safe to run unattended. A hint with no command
+  (JSON `"cmd": ""`) is advice and prints as `note:`; there is nothing to run.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
 - **`--index` reaches the bare group** (iter-266): `hyalo properties --index` and
   `hyalo tags --index` are accepted just like `hyalo properties summary --index`, so every
@@ -271,7 +272,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.
 - **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone. A fragment also resolves against an explicit HTML anchor in the target — `<a id="x">`, `<a name="x">`, `<h1 id="x">`…`<h6 id="x">` — matched byte-for-byte (case-sensitive) against the id/name value, not just an ATX heading (DEC-353); HYALO008 and `links fix` take the same combined check.
 - **Link kinds (iter-261/262)**: every entry in `find --fields links` carries `kind` —
-  `wikilink` | `embed` (`![[…]]`) | `markdown` | `frontmatter` (a `[[wikilink]]` in a YAML
+  `wikilink` | `embed` (`![[…]]` or a markdown image `![alt](…)`) | `markdown` | `frontmatter` (a `[[wikilink]]` in a YAML
   frontmatter value) | `external` (any `scheme:` URI: `https:`, `obsidian://`, `mailto:`,
   `file://`) | `attachment` (resolved to a non-`.md` vault file — an image, a PDF, an Obsidian
   `.base`). `external` and `attachment` links are never broken: they stay out of
@@ -539,7 +540,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `hyalo find --fields links --limit 0 --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
   counts every link by kind (`wikilink`, `embed`, `markdown`, `frontmatter`, `external`,
   `attachment`), and
-  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\(.line) \(.target)"'`
   lists every image or embed that resolves to nothing, as `file:line target`.
 - **Anchor fix writes the right fragment form** (DEC-351, iter-311): a wikilink anchor fix gets
   the heading TEXT (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug

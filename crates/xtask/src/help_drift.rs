@@ -1,6 +1,6 @@
 //! Gate 3 — Help-text drift check.
 //!
-//! 3a. Every subcommand listed in the SUBCOMMANDS constant must have an
+//! 3a. Every subcommand page the binary lists, nested ones included, must have an
 //!     `EXAMPLES:` section in its `--help` output containing at least 2
 //!     example lines.
 //!
@@ -45,49 +45,44 @@ use std::process::Command;
 
 use crate::workspace::workspace_root;
 
-/// Commands (and nested sub-actions) whose `--help` must have an EXAMPLES block.
+/// Every subcommand page of the binary, nested ones included, as the argv
+/// passed after `hyalo` (the root page, `[]`, is not in the list).
 ///
-/// Each entry is the argv slice passed after `hyalo` (mirrors examples_contract.rs).
-const SUBCOMMANDS: &[&[&str]] = &[
-    &["find"],
-    &["read"],
-    &["set"],
-    &["remove"],
-    &["append"],
-    &["summary"],
-    &["backlinks"],
-    &["terms"],
-    &["task"],
-    &["properties"],
-    &["tags"],
-    &["links"],
-    &["views"],
-    &["init"],
-    &["create-index"],
-    &["lint-rules"],
-    &["types"],
-    &["lint"],
-    &["mv"],
-    &["new"],
-    &["task", "read"],
-    &["task", "toggle"],
-    &["task", "set"],
-    // iter-192: commands that reached the COMMAND REFERENCE but had never been
-    // held to the EXAMPLES / stale-wording bar.
-    &["changelog"],
-    &["config"],
-    &["madr"],
-    &["okf"],
-];
+/// L-18: the list used to be hand-maintained, so `deinit`, `drop-index` and
+/// every nested action (`links fix`, `tags rename`, ...) went unchecked and a
+/// new command was exempt until someone remembered it. It is now read from
+/// the binary's own `Commands:` blocks, recursively.
+static PAGES: std::sync::OnceLock<Vec<Vec<String>>> = std::sync::OnceLock::new();
 
-/// Commands scanned for stale wording (3b) on top of [`SUBCOMMANDS`].
-///
-/// The empty argv is `hyalo --help` itself. It carries the OUTPUT paragraph,
-/// the global-flags block, and the OUTPUT SHAPES note — the three places
-/// iter-192 found contradicting the binary — but has no `EXAMPLES:` header of
-/// its own (its examples live in the `-h` short help), so it is excluded from
-/// the 3a check rather than allowlisted out of it.
-const STALE_ONLY_COMMANDS: &[&[&str]] = &[&[]];
+fn pages(root: &std::path::Path) -> Result<&'static [Vec<String>]> {
+    if let Some(found) = PAGES.get() {
+        return Ok(found);
+    }
+    let mut found: Vec<Vec<String>> = Vec::new();
+    let mut queue: Vec<Vec<String>> = vec![Vec::new()];
+    while let Some(argv) = queue.pop() {
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let help = help_text(root, &refs)?;
+        for name in crate::command_reference::extract_subcommands(&help) {
+            if name == "help" {
+                continue;
+            }
+            let mut next = argv.clone();
+            next.push(name);
+            queue.push(next.clone());
+            found.push(next);
+        }
+    }
+    found.sort();
+    Ok(PAGES.get_or_init(|| found))
+}
+
+fn page_refs(pages: &[Vec<String>]) -> Vec<Vec<&str>> {
+    pages
+        .iter()
+        .map(|argv| argv.iter().map(String::as_str).collect())
+        .collect()
+}
 
 /// Commands allowed to skip the EXAMPLES requirement (no-op / meta commands).
 const EXAMPLES_ALLOWLIST: &[&str] = &["help", "completions"];
@@ -128,28 +123,35 @@ fn load_stale_patterns(workspace_root: &std::path::Path) -> Result<Vec<StalePatt
 }
 
 /// Get the `--help` output for a given argv (the args passed after `hyalo`).
-fn help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Option<String> {
+///
+/// Fails on a non-zero exit status or empty stdout: a build failure's compiler
+/// output on stderr used to be returned as "help", which made every content
+/// check over it vacuous (L-18).
+fn help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Result<String> {
+    page_text(workspace_root, argv, "--help")
+}
+
+fn page_text(workspace_root: &std::path::Path, argv: &[&str], flag: &str) -> Result<String> {
     let mut args = vec!["run", "-q", "-p", "hyalo-cli", "--"];
     args.extend_from_slice(argv);
-    args.push("--help");
+    args.push(flag);
 
     let out = Command::new("cargo")
         .args(&args)
         .current_dir(workspace_root)
         .output()
-        .ok()?;
-
+        .context("running `cargo run -p hyalo-cli`")?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    if stdout.trim().is_empty() {
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        if stderr.trim().is_empty() {
-            None
-        } else {
-            Some(stderr)
-        }
-    } else {
-        Some(stdout)
+    if !out.status.success() || stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!(
+            "`hyalo {} {flag}` exited with {}: {}",
+            argv.join(" "),
+            out.status,
+            stderr.lines().take(3).collect::<Vec<_>>().join(" | ")
+        );
     }
+    Ok(stdout)
 }
 
 /// Count example lines in a help text.
@@ -177,30 +179,16 @@ pub fn count_examples(help: &str) -> usize {
 }
 
 /// Get the `-h` (short help) output for a given argv.
-fn short_help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Option<String> {
-    let mut args = vec!["run", "-q", "-p", "hyalo-cli", "--"];
-    args.extend_from_slice(argv);
-    args.push("-h");
-
-    let out = Command::new("cargo")
-        .args(&args)
-        .current_dir(workspace_root)
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    if stdout.trim().is_empty() {
-        None
-    } else {
-        Some(stdout)
-    }
+fn short_help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Result<String> {
+    page_text(workspace_root, argv, "-h")
 }
 
 /// 3c + 3d: short help stays short, and stands in one line for the globals.
-fn check_short_help(root: &std::path::Path) -> Vec<String> {
+fn check_short_help(root: &std::path::Path, pages: &[Vec<String>]) -> Vec<String> {
     let mut failures = Vec::new();
 
     match short_help_text(root, &[]) {
-        Some(help) => {
+        Ok(help) => {
             if help.len() > TOP_SHORT_HELP_MAX {
                 failures.push(format!(
                     "Help drift (3c): 'hyalo -h' is {} bytes; ceiling is {TOP_SHORT_HELP_MAX}. \
@@ -216,16 +204,21 @@ fn check_short_help(root: &std::path::Path) -> Vec<String> {
                 );
             }
         }
-        None => failures.push("Help drift (3c): could not get 'hyalo -h' output".to_owned()),
+        Err(error) => failures.push(format!(
+            "Help drift (3c): could not get 'hyalo -h' output: {error:#}"
+        )),
     }
 
-    for argv in SUBCOMMANDS {
+    for argv in page_refs(pages) {
         let cmd_label = argv.join(" ");
-        let Some(help) = short_help_text(root, argv) else {
-            failures.push(format!(
-                "Help drift (3c): could not get help output for 'hyalo {cmd_label} -h'"
-            ));
-            continue;
+        let help = match short_help_text(root, &argv) {
+            Ok(help) => help,
+            Err(error) => {
+                failures.push(format!(
+                    "Help drift (3c): could not get help output for 'hyalo {cmd_label} -h': {error:#}"
+                ));
+                continue;
+            }
         };
         if help.len() > SUB_SHORT_HELP_MAX {
             failures.push(format!(
@@ -245,24 +238,46 @@ fn check_short_help(root: &std::path::Path) -> Vec<String> {
     failures
 }
 
+/// Whether `parent_help` has an example line running `hyalo <command>` (the
+/// nested action's full argv, e.g. `links fix`).
+fn parent_shows_example(parent_help: &str, command: &str) -> bool {
+    let prefix = format!("hyalo {command}");
+    parent_help.lines().any(|line| {
+        let line = line.trim().trim_start_matches("$ ");
+        line.strip_prefix(&prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
 /// 3a: Check EXAMPLES blocks.
-fn check_examples(root: &std::path::Path) -> Vec<String> {
+fn check_examples(root: &std::path::Path, pages: &[Vec<String>]) -> Vec<String> {
     let mut failures = Vec::new();
-    for argv in SUBCOMMANDS {
+    for argv in page_refs(pages) {
         // Skip allowlisted commands.
         if argv.iter().any(|a| EXAMPLES_ALLOWLIST.contains(a)) {
             continue;
         }
 
         let cmd_label = argv.join(" ");
-        let Some(help) = help_text(root, argv) else {
-            failures.push(format!(
-                "Help drift (3a): could not get help output for 'hyalo {cmd_label} --help'"
-            ));
-            continue;
+        let help = match help_text(root, &argv) {
+            Ok(help) => help,
+            Err(error) => {
+                failures.push(format!(
+                    "Help drift (3a): could not get help output for 'hyalo {cmd_label} --help': {error:#}"
+                ));
+                continue;
+            }
         };
 
         if !help.contains("EXAMPLES:") && !help.contains("Examples:") {
+            // A nested action may leave its examples to the parent page when
+            // the parent actually shows one that runs it.
+            if argv.len() > 1
+                && let Ok(parent) = help_text(root, &argv[..argv.len() - 1])
+                && parent_shows_example(&parent, &cmd_label)
+            {
+                continue;
+            }
             failures.push(format!(
                 "Help drift (3a): 'hyalo {cmd_label} --help' has no EXAMPLES block."
             ));
@@ -296,16 +311,22 @@ fn check_examples(root: &std::path::Path) -> Vec<String> {
 const MAX_HELP_BODY_INDENT: usize = 7;
 
 /// 3f: no rendered `--help` body line carries leaked source indentation.
-fn check_help_body_indentation(root: &std::path::Path) -> Vec<String> {
+fn check_help_body_indentation(root: &std::path::Path, pages: &[Vec<String>]) -> Vec<String> {
     let mut failures = Vec::new();
-    for argv in SHORT_HELP_PAGES {
+    for argv in with_root_page(pages) {
         let cmd_label = if argv.is_empty() {
             "hyalo".to_owned()
         } else {
             format!("hyalo {}", argv.join(" "))
         };
-        let Some(help) = help_text(root, argv) else {
-            continue;
+        let help = match help_text(root, &argv) {
+            Ok(help) => help,
+            Err(error) => {
+                failures.push(format!(
+                    "Help drift (3f): could not get help output for '{cmd_label} --help': {error:#}"
+                ));
+                continue;
+            }
         };
         for line in help.lines() {
             if line.starts_with("Usage:") {
@@ -327,16 +348,26 @@ fn check_help_body_indentation(root: &std::path::Path) -> Vec<String> {
 }
 
 /// 3b: Check for stale wording patterns.
-fn check_stale_patterns(root: &std::path::Path, patterns: &[StalePattern]) -> Vec<String> {
+fn check_stale_patterns(
+    root: &std::path::Path,
+    pages: &[Vec<String>],
+    patterns: &[StalePattern],
+) -> Vec<String> {
     if patterns.is_empty() {
         return Vec::new();
     }
 
     let mut failures = Vec::new();
-    for argv in SUBCOMMANDS.iter().chain(STALE_ONLY_COMMANDS.iter()) {
+    for argv in with_root_page(pages) {
         let cmd_label = argv.join(" ");
-        let Some(help) = help_text(root, argv) else {
-            continue;
+        let help = match help_text(root, &argv) {
+            Ok(help) => help,
+            Err(error) => {
+                failures.push(format!(
+                    "Help drift (3b): could not get help output for 'hyalo {cmd_label} --help': {error:#}"
+                ));
+                continue;
+            }
         };
 
         // Collapse whitespace so a pattern still matches when clap wraps the
@@ -358,67 +389,17 @@ fn check_stale_patterns(root: &std::path::Path, patterns: &[StalePattern]) -> Ve
     failures
 }
 
-/// Every `-h` page gate 3e walks — the root, every subcommand, and every
-/// nested sub-action.
+/// The root page (`hyalo --help`) followed by every subcommand page.
 ///
-/// Deliberately separate from [`SUBCOMMANDS`]: a nested action like
-/// `links fix` is not held to the EXAMPLES bar (its parent's `--help` carries
-/// them) but its short help still has to read as sentences.
-const SHORT_HELP_PAGES: &[&[&str]] = &[
-    &[],
-    &["find"],
-    &["read"],
-    &["properties"],
-    &["properties", "summary"],
-    &["properties", "rename"],
-    &["tags"],
-    &["tags", "summary"],
-    &["tags", "rename"],
-    &["task"],
-    &["task", "read"],
-    &["task", "toggle"],
-    &["task", "set"],
-    &["summary"],
-    &["backlinks"],
-    &["mv"],
-    &["set"],
-    &["remove"],
-    &["append"],
-    &["init"],
-    &["deinit"],
-    &["create-index"],
-    &["drop-index"],
-    &["views"],
-    &["views", "list"],
-    &["views", "set"],
-    &["views", "remove"],
-    &["views", "run"],
-    &["links"],
-    &["links", "fix"],
-    &["links", "auto"],
-    &["lint"],
-    &["lint-rules"],
-    &["lint-rules", "list"],
-    &["lint-rules", "show"],
-    &["lint-rules", "set"],
-    &["lint-rules", "remove"],
-    &["types"],
-    &["types", "list"],
-    &["types", "show"],
-    &["types", "set"],
-    &["types", "remove"],
-    &["new"],
-    &["okf"],
-    &["okf", "index"],
-    &["okf", "log"],
-    &["madr"],
-    &["madr", "toc"],
-    &["changelog"],
-    &["changelog", "release"],
-    &["changelog", "add"],
-    &["config"],
-    &["completions"],
-];
+/// The root page carries the OUTPUT paragraph, the global-flags block and the
+/// OUTPUT SHAPES note -- the places iter-192 found contradicting the binary --
+/// but has no `EXAMPLES:` header of its own, so gate 3a walks only the
+/// subcommand pages.
+fn with_root_page(pages: &[Vec<String>]) -> Vec<Vec<&str>> {
+    let mut all: Vec<Vec<&str>> = vec![Vec::new()];
+    all.extend(page_refs(pages));
+    all
+}
 
 /// Words a short-help line must not end on: cutting a doc comment at a line
 /// break rather than a sentence boundary almost always leaves one of these
@@ -579,16 +560,22 @@ fn tail(text: &str) -> String {
 }
 
 /// 3e: no short-help entry ends mid-sentence or overflows two rendered lines.
-fn check_short_help_fragments(root: &std::path::Path) -> Vec<String> {
+fn check_short_help_fragments(root: &std::path::Path, pages: &[Vec<String>]) -> Vec<String> {
     let mut failures = Vec::new();
-    for argv in SHORT_HELP_PAGES {
+    for argv in with_root_page(pages) {
         let cmd_label = if argv.is_empty() {
             "hyalo".to_owned()
         } else {
             format!("hyalo {}", argv.join(" "))
         };
-        let Some(help) = short_help_text(root, argv) else {
-            continue;
+        let help = match short_help_text(root, &argv) {
+            Ok(help) => help,
+            Err(error) => {
+                failures.push(format!(
+                    "Help drift (3e): could not get help output for '{cmd_label} -h': {error:#}"
+                ));
+                continue;
+            }
         };
         for (flag, reason) in dangling_short_help(&help) {
             failures.push(format!(
@@ -763,7 +750,7 @@ fn check_help_section_references(root: &std::path::Path) -> Vec<String> {
             }
             let help = helps.entry(reference.command.clone()).or_insert_with(|| {
                 let argv: Vec<&str> = reference.command.iter().map(String::as_str).collect();
-                help_text(root, &argv)
+                help_text(root, &argv).ok()
             });
             let label = format!("hyalo {} --help", reference.command.join(" "));
             let ok = help
@@ -801,8 +788,13 @@ pub fn find_101_block(text: &str) -> Option<String> {
 
 /// 3h: `find --help`, the skill and the rule carry one identical block.
 fn check_find_101(root: &std::path::Path) -> Vec<String> {
-    let Some(help) = help_text(root, &["find"]) else {
-        return vec!["Help drift (3h): could not run `hyalo find --help`".to_owned()];
+    let help = match help_text(root, &["find"]) {
+        Ok(help) => help,
+        Err(error) => {
+            return vec![format!(
+                "Help drift (3h): could not run `hyalo find --help`: {error:#}"
+            )];
+        }
     };
     let Some(expected) = find_101_block(&help) else {
         return vec![format!(
@@ -840,19 +832,20 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
 
     let mut all_failures: Vec<String> = Vec::new();
 
-    let examples_failures = check_examples(root);
+    let pages = pages(root)?;
+    let examples_failures = check_examples(root, pages);
     all_failures.extend(examples_failures);
 
-    let stale_failures = check_stale_patterns(root, &stale_patterns);
+    let stale_failures = check_stale_patterns(root, pages, &stale_patterns);
     all_failures.extend(stale_failures);
 
-    let short_help_failures = check_short_help(root);
+    let short_help_failures = check_short_help(root, pages);
     all_failures.extend(short_help_failures);
 
-    let fragment_failures = check_short_help_fragments(root);
+    let fragment_failures = check_short_help_fragments(root, pages);
     all_failures.extend(fragment_failures);
 
-    let indent_failures = check_help_body_indentation(root);
+    let indent_failures = check_help_body_indentation(root, pages);
     all_failures.extend(indent_failures);
 
     all_failures.extend(check_help_section_references(root));
@@ -884,6 +877,15 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parent_example_covers_a_nested_action() {
+        let parent = "EXAMPLES:\n  hyalo tags rename --from a --to b\n  $ hyalo tags summary\n";
+        assert!(parent_shows_example(parent, "tags rename"));
+        assert!(parent_shows_example(parent, "tags summary"));
+        assert!(!parent_shows_example(parent, "tags renamed"));
+        assert!(!parent_shows_example(parent, "tags remove"));
+    }
 
     #[test]
     fn section_references_are_found_across_continuations() {

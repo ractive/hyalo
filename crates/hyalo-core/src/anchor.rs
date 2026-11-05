@@ -98,7 +98,7 @@ static EXPLICIT_ANCHOR_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// they appear. The id/name attribute VALUE is matched byte-for-byte
 /// (case-sensitive): unlike a heading slug, an HTML `id` is a literal
 /// identifier, not prose to be folded.
-pub fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &str> {
     EXPLICIT_ANCHOR_RE
         .captures_iter(line)
         .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()))
@@ -109,7 +109,10 @@ pub fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &str> {
 /// value stored in the index — no percent-decoding, no case fold, matching
 /// how a browser (and GitHub/MDN) resolves an explicit id.
 #[must_use]
-pub fn fragment_matches_explicit_anchor(fragment: &str, explicit_anchor_ids: &[String]) -> bool {
+pub(crate) fn fragment_matches_explicit_anchor(
+    fragment: &str,
+    explicit_anchor_ids: &[String],
+) -> bool {
     explicit_anchor_ids.iter().any(|id| id == fragment)
 }
 
@@ -146,7 +149,7 @@ impl ExplicitAnchorScanner {
 
     /// Consume and return the collected ids/names.
     #[must_use]
-    pub fn into_ids(self) -> Vec<String> {
+    pub(crate) fn into_ids(self) -> Vec<String> {
         self.ids
     }
 }

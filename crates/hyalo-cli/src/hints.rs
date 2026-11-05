@@ -639,7 +639,13 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     if !eligible {
         return None;
     }
-    if ctx.quiet || ctx.has_index {
+    // B-18: `lint --fix` has just rewritten the files an index would have
+    // cached, so "create an index for faster queries" is advice about the
+    // wrong moment.
+    if ctx.quiet
+        || ctx.has_index
+        || (matches!(ctx.source, HintSource::Lint) && ctx.lint_is_fix && !ctx.dry_run)
+    {
         return None;
     }
     let elapsed = ctx.elapsed_ms?;
@@ -652,9 +658,8 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     // `--dir` one the user is actually querying (BUG-7).
     // iter-267 (UX-18): when the vault already HAS a `.hyalo-index`, the
     // actionable advice is to USE it, not to rebuild what is already there.
-    // `find`, `lint` and `summary` get a runnable command with their scope
-    // preserved; the remaining eligible commands get advice only, because
-    // they take no `--index` flag of their own.
+    // Every eligible command re-runs with `--index` and its scope preserved;
+    // a `read`/`backlinks` run over several files gets advice only.
     if ctx.snapshot_on_disk && ctx.snapshot_stale {
         // iter-313: the cheap mtime probe thinks the on-disk snapshot is
         // behind the vault — pointing at `--index` here would serve a stale
@@ -678,6 +683,22 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
             HintSource::Find => build_find_command_preserving_filters(ctx, &["--index"]),
             HintSource::Lint => build_command_with_glob_and_files(ctx, &["lint", "--index"]),
             HintSource::Summary => build_command_with_glob(ctx, &["summary", "--index"]),
+            HintSource::PropertiesSummary => {
+                build_command_no_glob(ctx, &["properties", "summary", "--index"])
+            }
+            HintSource::TagsSummary => build_command_no_glob(ctx, &["tags", "summary", "--index"]),
+            HintSource::Backlinks | HintSource::Read => {
+                // These read one file; without it there is nothing to re-run.
+                let name = if matches!(ctx.source, HintSource::Read) {
+                    "read"
+                } else {
+                    "backlinks"
+                };
+                match ctx.file_targets.as_slice() {
+                    [file] => build_command_with_file(ctx, &[name, "--index"], file, &[]),
+                    _ => String::new(),
+                }
+            }
             _ => String::new(),
         };
         return Some(Hint::new(description, cmd));

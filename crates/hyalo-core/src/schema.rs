@@ -122,7 +122,7 @@ impl SchemaBind {
     /// binding matches. First declared match wins. Paths are normalized to
     /// forward slashes so Windows-style separators match the same globs.
     #[must_use]
-    pub fn type_for(&self, rel_path: &str) -> Option<&str> {
+    pub(crate) fn type_for(&self, rel_path: &str) -> Option<&str> {
         let normalized = rel_path.replace('\\', "/");
         for (idx, set) in self.sets.iter().enumerate() {
             if let Some(set) = set

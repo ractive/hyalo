@@ -653,6 +653,71 @@ struct SnapshotDataRef<'a> {
 // the raw bytes of its (unread) value so the section can be decoded later if a
 // command actually needs it. Nothing about the on-disk format changes.
 
+/// How much of a snapshot file [`peek_format_version`] reads. The header is the
+/// first envelope key and carries a path, a few counters and the exclusion
+/// globs, far below this.
+const HEADER_PEEK_BYTES: u64 = 64 * 1024;
+
+/// The format version in the header of the snapshot at `path`, read without
+/// decoding entries, graph or search index (B-15): a hint that wants to know
+/// whether `--index` would be refused cannot afford the load that refuses it.
+/// `None` for a missing, unreadable or undecodable header.
+#[must_use]
+pub fn peek_format_version(path: &Path) -> Option<u32> {
+    use serde::de::DeserializeSeed as _;
+    use std::io::Read as _;
+
+    /// Reads the header out of the envelope map and then stops with an error:
+    /// the truncated read does not hold the rest, and the format version has
+    /// already been stored by then.
+    struct Seed<'a>(&'a std::cell::Cell<Option<u32>>);
+
+    impl<'de> serde::de::Visitor<'de> for Seed<'_> {
+        type Value = ();
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a snapshot envelope")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> std::result::Result<(), A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            match map.next_key::<String>()? {
+                Some(key) if key == "header" => {
+                    self.0
+                        .set(Some(map.next_value::<SnapshotHeader>()?.format_version));
+                    Err(serde::de::Error::custom("header read"))
+                }
+                _ => Err(serde::de::Error::custom(
+                    "snapshot does not start with a header",
+                )),
+            }
+        }
+    }
+
+    impl<'de> serde::de::DeserializeSeed<'de> for Seed<'_> {
+        type Value = ();
+
+        fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_map(self)
+        }
+    }
+
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(HEADER_PEEK_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let version = std::cell::Cell::new(None);
+    let _ = Seed(&version).deserialize(&mut rmp_serde::Deserializer::from_read_ref(&bytes));
+    version.get()
+}
+
 /// Which envelope field a top-level map key names.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SnapshotField {
@@ -4753,6 +4818,22 @@ Content.
     }
 
     /// A snapshot without a BM25 section must load, and stay BM25-less.
+    #[test]
+    fn peeking_the_format_version_reads_only_the_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snap.idx");
+        let entries: Vec<IndexEntry> = (0..2000)
+            .map(|i| test_entry(&format!("note-{i}.md")))
+            .collect();
+        let bytes = snapshot_bytes(&entries, Some(&sample_bm25()));
+        assert!(bytes.len() as u64 > HEADER_PEEK_BYTES);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(peek_format_version(&path), Some(SNAPSHOT_FORMAT_VERSION));
+        std::fs::write(&path, b"not a snapshot").unwrap();
+        assert_eq!(peek_format_version(&path), None);
+        assert_eq!(peek_format_version(&dir.path().join("missing")), None);
+    }
+
     #[test]
     fn load_inner_without_bm25_section_reports_absent() {
         let bytes = snapshot_bytes(&[test_entry("doc.md")], None);

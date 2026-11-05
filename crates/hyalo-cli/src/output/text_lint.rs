@@ -773,6 +773,10 @@ pub(super) fn format_lint_rules_mutation_text(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("warn");
 
+    let wrote = map
+        .get("wrote")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
     let mut s = String::new();
 
     if action == "remove" {
@@ -824,15 +828,18 @@ pub(super) fn format_lint_rules_mutation_text(
             let _ = write!(s, " {before_severity} → {after_severity}");
         }
         if !en_changed && !sev_changed {
-            s.push_str(" (no change)");
+            // N1: an unusable stored override (`severity = "warning"`) already
+            // behaved as the default, so the effective state is unchanged while
+            // the file still changes; "(no change)" next to a write lied.
+            s.push_str(if wrote {
+                " (effective state unchanged; the stored override was rewritten)"
+            } else {
+                " (no change)"
+            });
         }
     }
 
     // Indicate write vs dry-run vs no-op.
-    let wrote = map
-        .get("wrote")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
     s.push('\n');
     if dry_run {
         if wrote {

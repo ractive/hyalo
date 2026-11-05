@@ -325,7 +325,9 @@ the results. `.hints` under `--jq` is therefore always `[]` — read hints from 
 
 **Check the `writes` marker before running a hint.** Read-only suggestions are prefixed `->`;
 a suggestion that modifies the vault or `.hyalo.toml` is prefixed `=>` and tagged `[writes]`
-(JSON: `"writes": true` on the hint object). Only the `->` ones are safe to run unattended:
+(JSON: `"writes": true` on the hint object). Only the `->` ones are safe to run unattended. A
+hint with an empty `cmd` is advice, printed as `note:` and never as `->`; skip it when looping
+over `cmd`:
 
 ```bash
 hyalo find --tag rust --format json    # read `.hints[]`; each carries `cmd` and `writes`
@@ -588,7 +590,7 @@ Flags that only `--help` mentions, worth knowing:
   actually touched with its file count.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
   `--strict` promotes the schema's missing-`type` and undeclared-property warnings and HYALO003/004/006/007/008 to errors (a HYALO rule keeps an explicitly configured severity).
-- **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
+- **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]` or a markdown image `![alt](…)`),
   `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
   or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
   `![alt](img.png)` is an embed too (DEC-297), so a missing image is visible. A same-file anchor
@@ -706,7 +708,7 @@ Flags that only `--help` mentions, worth knowing:
 - **Link-kind histogram, and missing images** — no flag, two `--jq` recipes:
   `hyalo find --fields links --limit 0 --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
   and
-  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\(.line) \(.target)"'`
 - **`find --broken-links --format text` prints only the broken links** of each matched file
   (iter-277). JSON is unchanged: it carries every link with its own `path` / `broken_anchor`
   verdict.

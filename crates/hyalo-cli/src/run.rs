@@ -1255,11 +1255,14 @@ fn run_inner() -> Result<(), AppError> {
         let report = crate::commands::config::collect_config_report(
             &cwd,
             effective,
-            dir_override.is_some(),
-            cli.site_prefix.as_deref(),
-            raw,
-            format,
-            cli.format.is_some(),
+            &crate::commands::config::ConfigInvocation {
+                dir_overridden: dir_override.is_some(),
+                cli_site_prefix: cli.site_prefix.as_deref(),
+                raw,
+                effective_format: format,
+                format_from_flag: cli.format.is_some(),
+                index_file: cli.index_file.as_deref(),
+            },
         )
         .map_err(AppError::Internal)?;
 
@@ -2203,21 +2206,29 @@ fn run_inner() -> Result<(), AppError> {
         // (dogfood UX-8: "summary hints create-index while a 10 MB
         // .hyalo-index already exists and 19 files drifted" — the wording
         // never distinguished a fresh snapshot from a stale one at all).
-        ctx.snapshot_stale = ctx.snapshot_on_disk
-            && std::fs::metadata(dir.join(".hyalo-index"))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|index_mtime| {
-                    let index_secs = index_mtime
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                        .ok()?
-                        .as_secs();
-                    hyalo_core::index::newest_dir_mtime(&dir).map(|newest| {
-                        newest
-                            > index_secs.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+        // B-15: a snapshot written by another format is refused by `--index`,
+        // so it is "behind" whatever the mtimes say; the header peek reads a
+        // few hundred bytes, not the snapshot.
+        let refused_format = ctx.snapshot_on_disk
+            && hyalo_core::index::peek_format_version(&dir.join(".hyalo-index"))
+                != Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION);
+        ctx.snapshot_stale = refused_format
+            || ctx.snapshot_on_disk
+                && std::fs::metadata(dir.join(".hyalo-index"))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|index_mtime| {
+                        let index_secs = index_mtime
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .ok()?
+                            .as_secs();
+                        hyalo_core::index::newest_dir_mtime(&dir).map(|newest| {
+                            newest
+                                > index_secs
+                                    .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                        })
                     })
-                })
-                .unwrap_or(false);
+                    .unwrap_or(false);
         // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
         // existing `.md` path is a body search for that literal text. Record
         // it so `find`'s hints can offer `--file`.
@@ -2237,7 +2248,10 @@ fn run_inner() -> Result<(), AppError> {
         // default `<vault>/.hyalo-index` re-emits as bare `--index`; any other
         // path re-emits as `--index-file <path>`. Hints whose command does not
         // accept the flag drop it — see `command_accepts_index`.
-        if let Some(ref p) = index_path_buf {
+        // B-17: a command that reads no snapshot (`types`, `views`,
+        // `lint-rules`) still hands its explicit `--index-file` on to the
+        // hints that do.
+        if let Some(p) = index_path_buf.as_ref().or(cli.index_file.as_ref()) {
             let default_path = dir.join(".hyalo-index");
             ctx.find_index = if *p == default_path {
                 HintContext::default_find_index()
@@ -2412,6 +2426,19 @@ fn run_inner() -> Result<(), AppError> {
     } else {
         None
     };
+
+    // B-15: an index this run asked for but refused (older format, other
+    // settings) serves nothing, so no derived hint may promise `--index`; they
+    // point at rebuilding it instead.
+    if snapshot_index.is_none()
+        && index_path_buf.is_some()
+        && let Some(ctx) = hint_ctx.as_mut()
+    {
+        ctx.find_index = crate::hints::FindIndexHint::None;
+        ctx.has_index = false;
+        ctx.snapshot_on_disk = true;
+        ctx.snapshot_stale = true;
+    }
 
     let config_language_owned = config.search_language.clone();
     let config_default_limit = config.default_limit;

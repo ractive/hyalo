@@ -128,7 +128,7 @@ fn anchor_only_preview_offers_the_normal_apply_hint() {
     let hints = value["hints"].as_array().unwrap();
     let apply: Vec<_> = hints.iter().filter(|hint| hint["writes"] == true).collect();
     assert_eq!(apply.len(), 1, "{value}");
-    assert_eq!(apply[0]["description"], "Apply 1 fixes");
+    assert_eq!(apply[0]["description"], "Apply 1 fix");
     let command = apply[0]["cmd"].as_str().unwrap();
     assert!(command.contains("links fix --apply"), "{command}");
     assert!(!command.contains("--apply-anchors"), "{command}");

@@ -12,6 +12,12 @@ use serde_json::Value;
 // Output shaping
 // ---------------------------------------------------------------------------
 
+/// A mutation result as JSON, with the serializer's error as an error rather
+/// than a panic (L-11); the derived `Serialize` impls cannot fail today.
+pub fn result_value<T: serde::Serialize>(result: &T) -> anyhow::Result<Value> {
+    serde_json::to_value(result).map_err(anyhow::Error::from)
+}
+
 /// Collapse a `results` vec to a bare JSON object when it contains exactly one
 /// entry, or return it as a JSON array otherwise.
 ///

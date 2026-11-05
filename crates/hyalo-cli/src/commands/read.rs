@@ -147,7 +147,9 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<(usize
             }
 
             if filter.matches(level, text) {
-                current_section = Some((level, index + 1, vec![line.clone()]));
+                // N3: the BOM marks the file, not the excerpt; a plain `read` still prints it.
+                current_section =
+                    Some((level, index + 1, vec![without_bom(index, line).to_owned()]));
             }
         } else if let Some((_, _, ref mut lines)) = current_section {
             lines.push(line.clone());
@@ -1074,6 +1076,16 @@ mod tests {
     }
 
     // -- extract_sections --
+
+    #[test]
+    fn a_section_excerpt_does_not_carry_the_files_bom() {
+        let lines: Vec<String> = vec!["\u{feff}# Title".into(), "intro".into()];
+        let sections = extract_sections(&lines, &SectionFilter::parse("Title").unwrap());
+        assert_eq!(
+            sections[0].1,
+            vec!["# Title".to_owned(), "intro".to_owned()]
+        );
+    }
 
     #[test]
     fn extract_section_exact_match() {

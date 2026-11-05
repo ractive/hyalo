@@ -565,8 +565,9 @@ fn append_hint_lines(text: &mut String, hints: &[crate::hints::Hint]) {
         }
         if hint.cmd.is_empty() {
             // Advice-only hint (no follow-up command). Render the
-            // description directly without the `cmd  # desc` layout.
-            text.push_str("  -> ");
+            // description directly without the `cmd  # desc` layout, and
+            // without the `->` arrow: that one promises a command to run.
+            text.push_str("  note: ");
             text.push_str(&hint.description);
         } else if hint.writes {
             text.push_str("  => ");

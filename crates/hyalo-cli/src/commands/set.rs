@@ -720,8 +720,7 @@ pub fn set(
             list_collapsed,
             note,
         };
-        results
-            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+        results.push(mutation::result_value(&result)?);
     }
 
     for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results) {
@@ -740,8 +739,7 @@ pub fn set(
             scanned,
             dry_run,
         };
-        results
-            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+        results.push(mutation::result_value(&result)?);
     }
 
     // Return array if multiple mutations, single object if one

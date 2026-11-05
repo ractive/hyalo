@@ -438,10 +438,13 @@ fn collect_files_with(
             }
             if resolved.is_empty() {
                 // All files failed — return error for the first one (no warning needed)
-                let (_, first_err) = errors.into_iter().next().expect("at least one error");
-                return Ok(FilesOrOutcome::Outcome(resolve_error_to_outcome(
-                    first_err, format, dir,
-                )));
+                return Ok(match errors.into_iter().next() {
+                    Some((_, first_err)) => {
+                        FilesOrOutcome::Outcome(resolve_error_to_outcome(first_err, format, dir))
+                    }
+                    // `files` is non-empty here, so a failure was recorded.
+                    None => FilesOrOutcome::Files(resolved),
+                });
             }
             // Some succeeded — warn about the ones that didn't
             for (path, err) in &errors {
@@ -865,13 +868,14 @@ pub fn require_file_or_glob(
     format: Format,
 ) -> Option<CommandOutcome> {
     if files.is_empty() && globs.is_empty() {
+        let hint = format!(
+            "name a file (`hyalo {command_name} FILE …`), pass --file <path>, or use --glob <pattern> to target multiple files"
+        );
         let out = crate::output::user_diagnostic(
             format,
-            &format!("{command_name} requires --file or --glob"),
+            &format!("{command_name} requires a FILE, --file or --glob"),
             None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
+            Some(&hint),
             None,
         );
         Some(CommandOutcome::UserError(out))

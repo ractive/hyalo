@@ -16,8 +16,6 @@
 //!
 //! The parser is shared with `hyalo types set --filename-template`.
 
-use std::path::Path;
-
 use crate::util::is_iso8601_date;
 
 /// A single parsed segment of a filename template.
@@ -158,15 +156,6 @@ impl FilenameTemplate {
     pub fn matches(&self, rel_path: &str) -> bool {
         let normalized: String = rel_path.replace('\\', "/");
         self.match_segments(&normalized, 0, 0)
-    }
-
-    /// Returns `true` if the given `Path` matches this template. The path is
-    /// converted to a slash-normalized string first.
-    pub fn matches_path(&self, rel_path: &Path) -> bool {
-        let Some(s) = rel_path.to_str() else {
-            return false;
-        };
-        self.matches(s)
     }
 
     /// Backtracking match: try to consume `input[pos..]` against `segments[seg_idx..]`.

@@ -1117,17 +1117,17 @@ impl Document {
 
     /// Get a property value by name.
     #[must_use]
-    pub fn get_property(&self, name: &str) -> Option<&Value> {
+    pub(crate) fn get_property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
     }
 
     /// Set a property value.
-    pub fn set_property(&mut self, name: String, value: Value) {
+    pub(crate) fn set_property(&mut self, name: String, value: Value) {
         self.properties.insert(name, value);
     }
 
     /// Remove a property, returning the old value if it existed.
-    pub fn remove_property(&mut self, name: &str) -> Option<Value> {
+    pub(crate) fn remove_property(&mut self, name: &str) -> Option<Value> {
         self.properties.shift_remove(name)
     }
 }
