@@ -42,9 +42,9 @@ One canonical split of an authored target into path, `?query`, `#fragment` and `
 | --- | --- |
 | C-13 | Fixed: one split, DEC-384 |
 | A-4 | Reproduced, fixed: all 5 links of the repro followed the move |
-| C-12 | Reproduced, fixed: `[[../t]]` is in-vault, counted, rewritten |
+| C-12 | Reproduced, fixed: `[[../t]]` is in-vault, counted, rewritten, and re-aimed when its source moves (R1) |
 | C-1 | Reproduced, fixed: path-suffix wikilinks resolve; shared suffix is ambiguous |
-| A-7 | Reproduced, fixed for the over-count and the relocation under-count; the third disagreement (backlinks of an ambiguous link) is recorded, not changed (DEC-384) |
+| A-7 | Reproduced, fixed, including the third disagreement: ambiguous links have their own graph key (R4, DEC-384) |
 | A-1 | Reproduced, fixed (LF and CRLF share one path) |
 | A-2 | Reproduced, fixed |
 | B-12 | Reproduced, fixed (frontmatter fixes carry `emitted_target`) |
@@ -58,7 +58,6 @@ One canonical split of an authored target into path, `?query`, `#fragment` and `
 ## Follow-ups
 
 - GitHub Docs headings written as `## Title {#custom-id}` are not recognised as anchors, so `[x](page#custom-id)` is reported as a broken anchor; found while checking B-16 (4 of the 5 changed suggestions). Not in this iteration.
-- A root note's `backlinks` still lists an ambiguous `[[./note]]` (DEC-384, needs a separate ambiguous-link map in the graph).
 
 ## Proof
 
@@ -86,4 +85,12 @@ An earlier GitHub Docs `links auto` check counted 1998 matches as "resolved to a
 
 - Obsidian itself was not run. B-9 stays open (DEC-386); C-1 and C-12 follow Obsidian's `getFirstLinkpathDest` behaviour as I know it, which the Help pages do not document.
 - Windows and Linux were not run locally; the code is path-separator neutral and CI covers both.
-- A literal `?` in a note name (`What?.md`) moved with a wikilink to it was not re-tested end to end beyond the unit paths that keep the literal-stem lookup first.
+- A markdown destination with a literal `?` (`[b](<What is this?.md>)`) stays a URL query and is not resolved (DEC-387).
+
+## Review round (PR 403)
+
+Fixed after review, each with a failing test first: R1 `./x` and `../x` wikilinks are re-aimed when their source moves; R2 a frontmatter directory link keeps naming the directory; R3 a partial path folds case only when `[links] case_insensitive` does; R4 a shared partial path is listed by `mv` (and the same ambiguous-link key closes A-7's third disagreement); R5 `--allow-ambiguous` rewrites body and frontmatter alike; R6 `links fix` keeps a body `?query`; R7 `emitted_target` is the whole bracket text everywhere; R9 the C-12 arms read the trimmed target; R10 the suffix lookup is a `parent/stem` map (12000 notes: `summary` user time 0.28 s base, 0.29 s new); R11/G1 dead `tail_len` removed, the `?` guards are now live (DEC-387); R8/M1 a literal `?` in a note name wins over the query split and wikilinks write `?`, `%`, `:` literally (DEC-387, unverified against Obsidian).
+
+The move matrix (DEC-388) runs 9 moves with and without a twin, 630 link checks: 0 failures, 4 links listed as skipped-ambiguous, disk and `--index` readings equal before and after each move. With the R1 rebase disabled it fails 10 checks.
+
+Corpus proof, what changed from the first round: `find --fields links`, `backlinks`, full `summary` (orphans included), `find --orphan` and HYALO006 are identical to the baseline on all three corpora; `links fix` JSON is identical except two Hub `emitted_target` values that now include their label (R7). Round trip, fuzzy round trip, `mv` samples and idempotence: the same numbers as above.

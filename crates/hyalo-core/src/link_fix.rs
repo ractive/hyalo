@@ -38,6 +38,7 @@ use crate::link_rewrite::{
     find_frontmatter_wikilinks, rewrite_frontmatter_alias_text, rewrite_frontmatter_wikilink_text,
 };
 use crate::link_score::{self, candidate_confidence_with_claim};
+use crate::link_target::TargetParts;
 use crate::links::{
     LinkKind, extract_link_spans_with_original, parse_wikilink, strip_wikilink_md_suffix,
 };
@@ -141,7 +142,9 @@ pub struct FixPlan {
     /// Similarity confidence in `[0.0, 1.0]`.
     pub confidence: f64,
     /// The link-target text `--apply` actually writes for this plan
-    /// (iter-272 Part F / CASE-2).
+    /// (iter-272 Part F / CASE-2). For a wikilink, body or frontmatter, it is
+    /// the whole text between the brackets — `?query`, `#fragment` and
+    /// `|label` included (R7, iter-322); for a markdown link, the destination.
     ///
     /// [`new_target`](Self::new_target) is always the *vault-relative path*,
     /// which is the coordinate system detection works in — but the writer
@@ -2069,6 +2072,15 @@ fn build_replacements_for_file(
                         LinkKind::Wikilink,
                     );
                     let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
+                    // R6 (iter-322): the `?query` the reader strips stays as
+                    // written, exactly as `mv` and the frontmatter writer keep it.
+                    let raw_target = &line[span.target_start..span.target_end];
+                    let query_tail = if path_text.contains('?') {
+                        ""
+                    } else {
+                        &raw_target[TargetParts::split(raw_target).path.len()..]
+                    };
+                    let path_text = format!("{path_text}{query_tail}");
                     // ALIAS-2 (iter-275, DEC-308): an alias fix writes what
                     // Obsidian's own link suggester writes — the note over the
                     // alias as display text — so `[[Leah]]` becomes
@@ -2136,9 +2148,20 @@ fn build_replacements_for_file(
                 }
             };
 
+            // R7 (iter-322): `emitted_target` is the whole text between the
+            // brackets of a wikilink, body and frontmatter alike — fragment,
+            // label and all; a markdown fix reports its destination.
             emitted_by_fix
                 .entry(fix_idx)
-                .or_insert_with(|| new_target_text.clone());
+                .or_insert_with(|| match span.kind {
+                    LinkKind::Wikilink => {
+                        format!(
+                            "{new_target_text}{}",
+                            suffix.strip_suffix("]]").unwrap_or(suffix)
+                        )
+                    }
+                    LinkKind::Markdown => new_target_text.clone(),
+                });
 
             // A fix whose emitted target would not resolve is never written:
             // it is consumed (so a duplicate plan is not re-matched) and

@@ -3376,7 +3376,9 @@ pub(crate) enum LinksAction {
             candidates. With `[links] aliases = true` the link resolves instead and no plan\n\
             is produced.\n\n\
             EMITTED TARGET: every reported plan carries emitted_target — the exact link text\n\
-            --apply writes — beside the vault-relative new_target. Both are filled by the\n\
+            --apply writes (a wikilink: everything between the brackets, `?query`, `#fragment`\n\
+            and `|label` included; a markdown link: its destination) — beside the vault-relative\n\
+            new_target. Both are filled by the\n\
             same planning pass in --dry-run and --apply, so the preview is byte-accurate.\n\
             This includes the below-floor entries in fuzzy_fixes, which are precisely the ones\n\
             a reader inspects before opting in (iter-277, BUG-17).\n\n\

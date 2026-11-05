@@ -555,11 +555,11 @@ fn mv_keeps_the_moved_files_own_ambiguous_query_link_as_written() {
     );
 }
 
-/// `--allow-ambiguous` rewrites only a link whose authored text is itself the
-/// shared stem: `[[note]]` follows the move, `[[note?]]` (inbound or in the
-/// moved file's own body) keeps its `?` and is left alone.
+/// `--allow-ambiguous` rewrites every spelling the reader calls ambiguous: the
+/// writers keep a `?query`, so `[[note?]]` follows the move as `[[renamed?]]`
+/// (R5, iter-322) — inbound and in the moved file's own body.
 #[test]
-fn allow_ambiguous_rewrites_only_the_literal_stem() {
+fn allow_ambiguous_rewrites_every_ambiguous_spelling_and_keeps_the_query() {
     let tmp = TempDir::new().unwrap();
     write(&tmp, ".hyalo.toml", "dir = \".\"\n");
     write(&tmp, "a/note.md", "# A\n\n[[note?]]\n");
@@ -573,13 +573,16 @@ fn allow_ambiguous_rewrites_only_the_literal_stem() {
             "--to",
             "a/renamed.md",
             "--allow-ambiguous",
-            "--dry-run",
         ],
     );
-    assert_eq!(moved["results"]["total_links_updated"], json!(1), "{moved}");
-    let text = moved.to_string();
+    assert_eq!(moved["results"]["total_links_updated"], json!(3), "{moved}");
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("src.md")).unwrap(),
+        "[[renamed]]\n[[renamed?]]\n"
+    );
     assert!(
-        !text.contains("[[note?]]\""),
-        "no `?` link is rewritten: {moved}"
+        std::fs::read_to_string(tmp.path().join("a/renamed.md"))
+            .unwrap()
+            .contains("[[renamed?]]")
     );
 }

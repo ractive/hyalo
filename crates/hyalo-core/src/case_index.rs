@@ -63,6 +63,10 @@ pub struct CaseInsensitiveIndex {
     /// Map from lowercased filename stem → list of real (original-casing) paths.
     /// Used for Obsidian-style bare wikilink resolution.
     stem_map: HashMap<String, Vec<String>>,
+    /// Map from the lowercased last two path segments (`parent/stem`) → real
+    /// paths, so a partially qualified wikilink target (`x/note`) finds its
+    /// candidates without scanning every note that shares the stem (R10).
+    tail_map: HashMap<String, Vec<String>>,
     /// When `false`, [`lookup_unique`] and [`lookup_all`] return empty results.
     /// Stem lookups are unaffected. Set by [`set_case_insensitive_paths`] from
     /// the resolved `[links] case_insensitive` mode.
@@ -136,6 +140,7 @@ impl CaseInsensitiveIndex {
         Self {
             map: HashMap::with_capacity(capacity),
             stem_map: HashMap::with_capacity(capacity),
+            tail_map: HashMap::new(),
             case_insensitive_paths: false,
             alias_map: HashMap::new(),
             complete: false,
@@ -286,6 +291,13 @@ impl CaseInsensitiveIndex {
             fname
         };
         let stem_key = fold_key(stem).into_owned();
+        if let Some((parent, _)) = rel_path.rsplit_once('/') {
+            let parent = parent.rsplit('/').next().unwrap_or(parent);
+            self.tail_map
+                .entry(fold_key(&format!("{parent}/{stem}")).into_owned())
+                .or_default()
+                .push(rel_path.to_owned());
+        }
         self.stem_map
             .entry(stem_key)
             .or_default()
@@ -425,29 +437,39 @@ impl CaseInsensitiveIndex {
         self.alias_map.len()
     }
 
-    /// The notes whose path ends in `/<target>.md` (case-insensitive) — a
-    /// partially qualified wikilink target such as `x/note` for `a/x/note.md`
-    /// (iter-322, C-1). `target` is path-form: it must contain a `/`, and a
-    /// `.md` suffix is optional. Empty for a bare stem.
+    /// The notes whose path ends in `/<target>.md` — a partially qualified
+    /// wikilink target such as `x/note` for `a/x/note.md` (iter-322, C-1).
+    /// `target` is path-form: it must contain a `/`, and a `.md` suffix is
+    /// optional. Empty for a bare stem. Case folds only when the vault's
+    /// `[links] case_insensitive` mode folds (DEC-315).
     #[must_use]
     pub fn lookup_path_suffix(&self, target: &str) -> Vec<String> {
         let target = target.trim_matches('/');
         let target = target
-            .get(..target.len().saturating_sub(3))
-            .map_or(target, |head| {
-                if target.as_bytes()[head.len()..].eq_ignore_ascii_case(b".md") {
-                    head
-                } else {
-                    target
-                }
-            });
-        let Some((_, stem)) = target.rsplit_once('/') else {
+            .get(target.len().saturating_sub(3)..)
+            .filter(|ext| ext.eq_ignore_ascii_case(".md"))
+            .map_or(target, |_| &target[..target.len() - 3]);
+        let mut segments = target.rsplit('/');
+        let (Some(stem), Some(parent)) = (segments.next(), segments.next()) else {
             return Vec::new();
         };
-        let wanted = fold_key(&format!("/{target}.md")).into_owned();
-        self.lookup_stem_all(stem)
+        let Some(candidates) = self
+            .tail_map
+            .get(fold_key(&format!("{parent}/{stem}")).as_ref())
+        else {
+            return Vec::new();
+        };
+        let wanted = format!("/{target}.md");
+        candidates
             .iter()
-            .filter(|path| fold_key(&format!("/{path}")).ends_with(&wanted))
+            .filter(|path| {
+                let full = format!("/{path}");
+                if self.case_insensitive_paths {
+                    fold_key(&full).ends_with(fold_key(&wanted).as_ref())
+                } else {
+                    full.ends_with(&wanted)
+                }
+            })
             .cloned()
             .collect()
     }

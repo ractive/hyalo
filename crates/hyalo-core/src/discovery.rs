@@ -1889,11 +1889,16 @@ fn normalize_link_target<'a>(
         // folder in every reader — the catalog resolves them that way — so a
         // wikilink spelled with either is normalised here too instead of being
         // rooted (`./`) or rejected (`../`).
-        LinkKind::Wikilink if target.starts_with("./") || target.starts_with("../") => {
+        LinkKind::Wikilink => {
+            // R9: trimmed and `\`-normalised first, as the catalog reads it,
+            // so `[[ ./x ]]` takes the arm too.
             let target_path = crate::link_target::TargetParts::split(target).resolution_path();
-            std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), &target_path))
+            if target_path.starts_with("./") || target_path.starts_with("../") {
+                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), &target_path))
+            } else {
+                std::borrow::Cow::Borrowed(target)
+            }
         }
-        LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
         LinkKind::Markdown => {
             if target.starts_with('/') {
                 std::borrow::Cow::Borrowed(target)
@@ -2410,7 +2415,13 @@ pub(crate) fn classify_link_from_source(
     }
 
     match link.kind {
-        LinkKind::Wikilink if link.target.starts_with("./") || link.target.starts_with("../") => {
+        LinkKind::Wikilink
+            if {
+                let target_path =
+                    crate::link_target::TargetParts::split(&link.target).resolution_path();
+                target_path.starts_with("./") || target_path.starts_with("../")
+            } =>
+        {
             // iter-322 (C-12, DEC-384): a relative wikilink is judged from its
             // source folder, as the catalog reads it — not rooted (`./`) or
             // reported out of the vault (`../`).

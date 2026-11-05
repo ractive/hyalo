@@ -16,17 +16,27 @@ use crate::link_target::TargetParts;
 use crate::links::{LinkKind, LinkSpan, PreserveForm, WrittenForm};
 
 /// Encode path bytes before inserting them into a link. The catalog decodes once,
-/// after splitting authored fragment/query delimiters. Wiki spaces and parentheses
-/// stay prose; Markdown destinations additionally encode URL syntax delimiters.
+/// after splitting authored fragment/query delimiters. Wiki spaces, parentheses,
+/// `?`, `%` and `:` stay literal; Markdown destinations additionally encode URL syntax delimiters.
 #[must_use]
 pub(crate) fn encode_destination(path: &str, kind: LinkKind) -> String {
     use std::fmt::Write as _;
     let mut encoded = String::with_capacity(path.len());
-    for ch in path.chars() {
+    let chars: Vec<char> = path.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        // A wikilink is a vault path, not a URL (M1, iter-322): `?` and `:`
+        // are written literally, and so is a `%` the reader would not take
+        // for an escape. Only what a wikilink cannot carry is encoded, plus
+        // a `%` that a percent-decoding reader would swallow (`%23`).
+        let starts_escape = ch == '%'
+            && chars.get(i + 1).is_some_and(char::is_ascii_hexdigit)
+            && chars.get(i + 2).is_some_and(char::is_ascii_hexdigit);
         let reserved = ch.is_control()
-            || matches!(ch, '#' | '?' | '%' | '[' | ']' | '|' | ':' | '\\')
+            || matches!(ch, '#' | '[' | ']' | '|' | '\\')
+            || starts_escape
             || (kind == LinkKind::Markdown
-                && (ch.is_whitespace() || matches!(ch, '(' | ')' | '<' | '>' | '\"' | '\'')));
+                && (ch.is_whitespace()
+                    || matches!(ch, '?' | '%' | ':' | '(' | ')' | '<' | '>' | '\"' | '\'')));
         if reserved {
             for byte in ch.to_string().as_bytes() {
                 let _ = write!(encoded, "%{byte:02X}");
@@ -293,7 +303,7 @@ impl LinkWriter {
     }
 
     /// Emit a wikilink target in the given form.
-    fn emit_wikilink_with_form(
+    pub(crate) fn emit_wikilink_with_form(
         form: WrittenForm,
         _new_vault_rel: &str,
         new_stem: &str,

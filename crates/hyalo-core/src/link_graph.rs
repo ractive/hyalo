@@ -612,6 +612,18 @@ fn insert_file_links(
     );
 }
 
+/// The graph key of a link that names two or more notes (R4, A-7, iter-322).
+/// A NUL byte cannot occur in a path, so it never collides with a note's key;
+/// `mv` probes it with the moved note's basename stem.
+pub(crate) fn ambiguous_key(stem: &str) -> String {
+    format!("\u{0}ambiguous:{stem}")
+}
+
+fn basename_stem(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.strip_suffix(".md").unwrap_or(name)
+}
+
 fn insert_file_links_with_options(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
     file_links: FileLinks,
@@ -634,12 +646,24 @@ fn insert_file_links_with_options(
                 // iter-319 (DEC-374): an ambiguous wikilink is keyed by the
                 // bare stem it is ambiguous on, not its spelling, so `mv`'s
                 // basename-stem probe reaches `[[note?]]`, `[[my%20note]]` and
-                // `[[./note]]` as it does `[[note]]`.
-                let ambiguous_key = (link.kind == LinkKind::Wikilink)
-                    .then(|| case_index.ambiguous_stem_key(&link.target))
+                // `[[./note]]` as it does `[[note]]`. iter-322 (R4, A-7): the
+                // key lives in its own namespace, so a note's `backlinks` never
+                // lists a link that names two notes; a partial path two notes
+                // share (`[[x/note]]`) is keyed the same way, by its stem.
+                let ambiguous_stem = (link.kind == LinkKind::Wikilink)
+                    .then(|| {
+                        case_index
+                            .ambiguous_stem_key(&link.target)
+                            .or_else(|| match &resolved {
+                                Resolution::Ambiguous(paths) => {
+                                    paths.first().map(|path| basename_stem(path).to_owned())
+                                }
+                                _ => None,
+                            })
+                    })
                     .flatten();
-                if let Some(stem) = ambiguous_key {
-                    stem
+                if let Some(stem) = ambiguous_stem {
+                    ambiguous_key(&stem)
                 } else if link.kind == LinkKind::Markdown && !link.target.starts_with('/') {
                     normalize_target(&file_links.source, &link.target)
                 } else {

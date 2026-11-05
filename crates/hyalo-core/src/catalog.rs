@@ -95,12 +95,47 @@ pub(crate) fn resolve_with_explicit_paths(
     options: ResolutionOptions<'_>,
     explicit_path: impl Fn(&str) -> Option<String>,
 ) -> Resolution {
+    // M1 (iter-322): a note may be called `What is this?.md`. A wikilink's
+    // literal path, `?` included, wins over the `?query` split, so a reader
+    // and `backlinks` agree with the file system; `[[plain?x=1]]` still falls
+    // through to `plain.md` when no note carries the `?` in its name.
+    if kind == LinkKind::Wikilink {
+        let parts = TargetParts::split(target);
+        if !parts.query.is_empty() {
+            let literal = &target[..parts.path.len() + parts.query.len()];
+            let found = resolve_core(index, source, kind, literal, false, options, &explicit_path);
+            if matches!(
+                found,
+                Resolution::Resolved(_)
+                    | Resolution::Attachment(Some(_))
+                    | Resolution::Ambiguous(_)
+            ) {
+                return found;
+            }
+        }
+    }
+    resolve_core(index, source, kind, target, true, options, &explicit_path)
+}
+
+fn resolve_core(
+    index: &CaseInsensitiveIndex,
+    source: &str,
+    kind: LinkKind,
+    target: &str,
+    split_query: bool,
+    options: ResolutionOptions<'_>,
+    explicit_path: &impl Fn(&str) -> Option<String>,
+) -> Resolution {
     if crate::links::is_external_target(target) {
         return Resolution::External;
     }
     // iter-322 (DEC-384): the one canonical split of an authored target.
     let parts = TargetParts::split(target);
-    let raw = parts.resolution_path();
+    let raw = if split_query {
+        parts.resolution_path()
+    } else {
+        crate::link_target::resolution_path(target)
+    };
     let raw = raw.as_ref();
     if raw.is_empty() {
         return Resolution::Missing;
@@ -137,7 +172,7 @@ pub(crate) fn resolve_with_explicit_paths(
         if crate::discovery::normalized_target_escapes_vault(candidate) {
             return Resolution::External;
         }
-        let resolved = resolve_path(index, candidate, trailing, &explicit_path);
+        let resolved = resolve_path(index, candidate, trailing, explicit_path);
         if !matches!(resolved, Resolution::Missing) {
             return resolved;
         }
@@ -473,6 +508,7 @@ mod tests {
     #[test]
     fn partial_paths_and_parent_relative_wikilinks_resolve() {
         let mut index = CaseInsensitiveIndex::new();
+        index.set_case_insensitive_paths(true);
         for path in [
             "a/x/note.md",
             "b/y/note.md",
@@ -500,5 +536,11 @@ mod tests {
         assert_eq!(wiki("sub/s.md", "../t").path(), Some("t.md"));
         assert_eq!(wiki("sub/s.md", "../o/o").path(), Some("o/o.md"));
         assert_eq!(wiki("s.md", "../t"), Resolution::External);
+        // `[links] case_insensitive = "false"` means exact bytes (R3).
+        let mut exact = index.clone();
+        exact.set_case_insensitive_paths(false);
+        let strict = |target: &str| resolve(&exact, "s.md", LinkKind::Wikilink, target, options);
+        assert_eq!(strict("y/note").path(), Some("b/y/note.md"));
+        assert_eq!(strict("Y/Note"), Resolution::Missing);
     }
 }

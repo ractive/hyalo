@@ -548,8 +548,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   fix carries that `suggested_fragment`, and the `Fixable:` text line prints link plus anchor fixes and spells out the split (`Fixable: 5 (0 links + 5 anchor repairs)`; JSON `fixable` stays the link bucket, DEC-376).
 - **`mv` and `links fix` write what the reader reads** (DEC-384, DEC-385, iter-322): one split of
   a target into path, `?query`, `#fragment` and `|alias`. `mv` rewrites only the path portion
-  (`[[note?x=1]]` -> `[[moved?x=1]]`, a frontmatter `[[./note]]` too); `[[./x]]`/`[[../x]]` are
-  relative to the source folder; `[[x/note]]` matches a path suffix; an alias fix writes
+  (`[[note?x=1]]` -> `[[moved?x=1]]`, a frontmatter `[[./note]]` or `[[sub]]` too); `[[./x]]`/`[[../x]]` are
+  relative to the source folder, so moving a note re-aims its own; a link naming two notes is
+  listed by `mv`, never a backlink; a `?` in a note name is part of the name (DEC-387); `[[x/note]]` matches a path suffix; an alias fix writes
   `[[sub/Target#Second|AKA]]` in body and frontmatter. `links fix` text lists the case-mismatch,
   relocation and alias fixes plain `--apply` also writes beside `Fixable:`.
 - **`mv` rewrites bare attachment/embed links too** (DEC-352, iter-311): `[img](img.png)`,

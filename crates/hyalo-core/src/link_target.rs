@@ -70,13 +70,6 @@ impl<'a> TargetParts<'a> {
     pub fn resolution_path(&self) -> Cow<'a, str> {
         resolution_path(self.path)
     }
-
-    /// Everything after the path (`?query#fragment|alias`) — what a writer
-    /// that replaces only the path keeps verbatim.
-    #[must_use]
-    pub fn tail_len(&self) -> usize {
-        self.query.len() + self.fragment.len() + self.alias.len()
-    }
 }
 
 /// Trim, read `\` as `/` and percent-decode a target's path portion. Borrows

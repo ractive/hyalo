@@ -219,6 +219,9 @@ pub fn plan_mv(
     if old_basename_stem != old_stem {
         backlinks.extend(graph.backlinks_ci(old_basename_stem));
     }
+    // R4 / A-7 (iter-322): links that name two or more notes live under their
+    // own key, whatever the moved note's folder.
+    backlinks.extend(graph.backlinks_ci(&crate::link_graph::ambiguous_key(old_basename_stem)));
     let old_rel_norm = crate::discovery::native_separator_to_forward_slash(old_rel).into_owned();
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
@@ -474,20 +477,30 @@ fn validate_move_link_identity<'a>(
                     &old.link.target,
                     options,
                 );
+                // R5 (iter-322): the writers keep a `?query`, so under
+                // `--allow-ambiguous` every spelling the reader calls ambiguous
+                // is rewritten alike (body, frontmatter, partial path).
                 let permitted_override = if allow_ambiguous && old.kind == LinkKind::Wikilink {
-                    before
-                        .literal_target_stem_ambiguity(&old.link.target)
-                        .and_then(|paths| {
-                            paths
-                                .iter()
-                                .filter_map(|path| {
-                                    forward
-                                        .get(path.as_str())
-                                        .map(|(_, order)| (path.as_str(), *order))
-                                })
-                                .min_by_key(|(_, order)| *order)
-                                .map(|(path, _)| path)
-                        })
+                    // A bare stem two notes share is `mv`'s to refuse even when
+                    // a root-level note wins it on a read, so the stem probe
+                    // comes first; a partial path is ambiguous per the catalog.
+                    let candidates: Option<&[String]> = before
+                        .target_stem_ambiguity(&old.link.target)
+                        .or(match &resolved {
+                            crate::catalog::Resolution::Ambiguous(paths) => Some(paths.as_slice()),
+                            _ => None,
+                        });
+                    candidates.and_then(|paths| {
+                        paths
+                            .iter()
+                            .filter_map(|path| {
+                                forward
+                                    .get(path.as_str())
+                                    .map(|(_, order)| (path.as_str(), *order))
+                            })
+                            .min_by_key(|(_, order)| *order)
+                            .map(|(path, _)| path)
+                    })
                 } else {
                     None
                 };
@@ -596,6 +609,133 @@ pub(crate) fn rewrite_frontmatter_alias_text(occ_target: &str, new_ref: &str) ->
     };
     let new_text = format!("[[{new_target}{}{}{label}]]", parts.query, parts.fragment);
     (new_text != format!("[[{occ_target}]]")).then_some(new_text)
+}
+
+/// Whether a wikilink target is written relative to its source folder
+/// (`./x`, `../x`, DEC-384).
+fn is_relative_wikilink(target: &str) -> bool {
+    let target = target.trim();
+    target.starts_with("./") || target.starts_with("../")
+}
+
+/// The note a relative wikilink in the moved file `old_rel` names, and where
+/// that note lives after the move; `None` when the link needs no rewrite.
+///
+/// A `./x` or `../x` wikilink is relative to the folder of the file that
+/// holds it, so moving that file re-aims it (R1, iter-322). `rename_map` holds
+/// the other files of a batch that move with it.
+fn relative_wikilink_target_after_move(
+    target_path: &str,
+    old_rel: &str,
+    dir_changed: bool,
+    case_index: &CaseInsensitiveIndex,
+    rename_map: Option<&HashMap<String, String>>,
+) -> Option<String> {
+    let resolution = crate::catalog::resolve(
+        case_index,
+        old_rel,
+        LinkKind::Wikilink,
+        target_path,
+        crate::catalog::ResolutionOptions {
+            aliases: false,
+            site_prefix: None,
+        },
+    );
+    let resolved = resolution.path()?;
+    // A self-link is rewritten by the self-link pass.
+    if resolved == old_rel {
+        return None;
+    }
+    match rename_map.and_then(|map| map.get(resolved)) {
+        Some(moved) => Some(moved.clone()),
+        None => dir_changed.then(|| resolved.to_owned()),
+    }
+}
+
+/// Body half of R1: re-aim a relative wikilink of the moved file.
+#[allow(clippy::too_many_arguments)]
+fn rebase_relative_wikilink(
+    span: &crate::links::LinkSpan,
+    line: &str,
+    line_num: usize,
+    old_rel: &str,
+    new_rel: &str,
+    dir_changed: bool,
+    case_index: &CaseInsensitiveIndex,
+    rename_map: Option<&HashMap<String, String>>,
+    site_prefix: Option<&str>,
+) -> Option<Replacement> {
+    if span.kind != LinkKind::Wikilink || !is_relative_wikilink(&span.link.target) {
+        return None;
+    }
+    let after = relative_wikilink_target_after_move(
+        &span.link.target,
+        old_rel,
+        dir_changed,
+        case_index,
+        rename_map,
+    )?;
+    let SpanReplacement {
+        byte_offset,
+        old_text,
+        new_text,
+    } = LinkWriter::rewrite(
+        span,
+        line,
+        &after,
+        new_rel,
+        PreserveForm::Preserve,
+        site_prefix,
+    )?;
+    Some(Replacement {
+        line: line_num,
+        byte_offset,
+        old_text,
+        new_text,
+    })
+}
+
+/// Frontmatter half of R1.
+#[allow(clippy::too_many_arguments)]
+fn rebase_relative_frontmatter_wikilinks(
+    line: &str,
+    line_num: usize,
+    old_rel: &str,
+    new_rel: &str,
+    dir_changed: bool,
+    case_index: &CaseInsensitiveIndex,
+    rename_map: Option<&HashMap<String, String>>,
+) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    for occ in find_frontmatter_wikilinks(line) {
+        let parts = TargetParts::split_with_alias(occ.target);
+        if !is_relative_wikilink(parts.path) {
+            continue;
+        }
+        let Some(after) = relative_wikilink_target_after_move(
+            parts.path,
+            old_rel,
+            dir_changed,
+            case_index,
+            rename_map,
+        ) else {
+            continue;
+        };
+        let after_stem = after.strip_suffix(".md").unwrap_or(&after);
+        let form = crate::link_resolve::detect_wikilink_form(parts.path.trim());
+        let emitted = LinkWriter::emit_wikilink_with_form(form, &after, after_stem, new_rel);
+        let emitted = crate::link_write::encode_destination(&emitted, LinkKind::Wikilink);
+        let new_text = format!("[[{emitted}{}]]", &occ.target[parts.path.len()..]);
+        if new_text != format!("[[{}]]", occ.target) {
+            replacements.push(Replacement {
+                line: line_num,
+                byte_offset: occ.full_start,
+                old_text: format!("[[{}]]", occ.target),
+                new_text,
+            });
+        }
+    }
+    replacements
 }
 
 /// How a markdown-link target classifies for outbound rewriting when a file
@@ -1096,9 +1236,8 @@ fn plan_inbound_rewrites(
                 // iter-319 (DEC-374): the shared target normalisation
                 // (`#`/`?`/`%20`/`./`/`.md`) decides ambiguity, so `[[note?]]`
                 // and `[[./note]]` are listed exactly as `find` and HYALO006
-                // report them. `--allow-ambiguous` rewrites only a link whose
-                // authored text is itself the shared stem — rewriting a
-                // `[[note?]]` would drop its `?`.
+                // report them. `--allow-ambiguous` rewrites them all, `?query`
+                // kept (R5, iter-322).
                 let shared =
                     case_index.and_then(|idx| idx.target_stem_ambiguity(&span.link.target));
                 let resolution = if let Some(candidates) = shared {
@@ -1124,11 +1263,34 @@ fn plan_inbound_rewrites(
                         t
                     };
                     let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
-                    (is_bare && case_index.is_some()).then(|| {
-                        let by_literal = (!parts.query.is_empty())
-                            .then(|| resolver.resolve_stem(&stem_of(literal)))
-                            .filter(|found| !matches!(found, Resolution::Broken));
-                        by_literal.unwrap_or_else(|| resolver.resolve_stem(&stem_of(&normalized)))
+                    // R4 (iter-322): a partial path two notes share is as
+                    // ambiguous as a bare stem; the catalog says so.
+                    let path_form_ambiguity =
+                        (!is_bare).then_some(case_index).flatten().and_then(|idx| {
+                            match crate::catalog::resolve(
+                                idx,
+                                source_rel,
+                                LinkKind::Wikilink,
+                                &span.link.target,
+                                crate::catalog::ResolutionOptions {
+                                    aliases: false,
+                                    site_prefix,
+                                },
+                            ) {
+                                crate::catalog::Resolution::Ambiguous(paths) => {
+                                    Some(Resolution::Ambiguous(paths))
+                                }
+                                _ => None,
+                            }
+                        });
+                    path_form_ambiguity.or_else(|| {
+                        (is_bare && case_index.is_some()).then(|| {
+                            let by_literal = (!parts.query.is_empty())
+                                .then(|| resolver.resolve_stem(&stem_of(literal)))
+                                .filter(|found| !matches!(found, Resolution::Broken));
+                            by_literal
+                                .unwrap_or_else(|| resolver.resolve_stem(&stem_of(&normalized)))
+                        })
                     })
                 };
                 match resolution {
@@ -1160,12 +1322,6 @@ fn plan_inbound_rewrites(
                                 property: None,
                                 is_self: false,
                             });
-                            continue;
-                        }
-                        if case_index
-                            .and_then(|idx| idx.literal_target_stem_ambiguity(&span.link.target))
-                            .is_none()
-                        {
                             continue;
                         }
                         bare_ambiguous_match = true;
@@ -1333,6 +1489,15 @@ fn plan_outbound_rewrites(
                     None,
                 );
                 replacements.extend(fm_repls);
+                replacements.extend(rebase_relative_frontmatter_wikilinks(
+                    &visible_line,
+                    scanner.line_num(),
+                    old_rel,
+                    new_rel,
+                    dir_changed,
+                    case_index,
+                    None,
+                ));
                 continue;
             }
             LineClass::Body(body) => body,
@@ -1351,6 +1516,20 @@ fn plan_outbound_rewrites(
             // file (self-link). In that case we rewrite it via LinkWriter so
             // the form is preserved and the target points to new_rel.
             if span.kind == LinkKind::Wikilink {
+                if let Some(replacement) = rebase_relative_wikilink(
+                    &span,
+                    line,
+                    line_num,
+                    old_rel,
+                    new_rel,
+                    dir_changed,
+                    case_index,
+                    None,
+                    site_prefix,
+                ) {
+                    replacements.push(replacement);
+                    continue;
+                }
                 // BUG-8 (dogfood v0.22.0), iter-275 MV-2: `matches_target`
                 // answers `false` for a bare stem two files share, so the
                 // moved file's own `[[a]]` was left untouched *and* unreported
@@ -1373,12 +1552,7 @@ fn plan_outbound_rewrites(
                         });
                         continue;
                     }
-                    // Under `--allow-ambiguous` only a link whose authored text
-                    // is itself the shared stem is rewritten: a `[[note?]]`
-                    // would lose its `?`.
-                    self_ambiguous = case_index
-                        .literal_target_stem_ambiguity(&span.link.target)
-                        .is_some();
+                    self_ambiguous = true;
                 }
                 if (self_ambiguous
                     || link_resolver.matches_target(&span, old_rel, old_rel, old_stem))
@@ -1634,7 +1808,9 @@ pub fn plan_batch_mv(
         HashMap::new();
 
     for (old_rel, old_stem, new_rel, new_stem, _, _) in &rename_info {
-        let backlinks = graph.backlinks_ci(old_rel);
+        let mut backlinks = graph.backlinks_ci(old_rel);
+        let old_basename_stem = old_stem.rsplit('/').next().unwrap_or(old_stem);
+        backlinks.extend(graph.backlinks_ci(&crate::link_graph::ambiguous_key(old_basename_stem)));
         let old_rel_norm =
             crate::discovery::native_separator_to_forward_slash(old_rel).into_owned();
         for entry in backlinks {
@@ -2164,49 +2340,49 @@ fn plan_frontmatter_wikilink_rewrites(
         let resolution_path = parts.resolution_path();
         let target_path = resolution_path.as_ref();
 
+        // iter-322 (DEC-384): the one catalog resolver, with the link's own
+        // source — so `[[./note]]`, `[[../t]]`, `[[x/note]]` and a bare stem
+        // naming a file in a subdirectory (iter-262) resolve here exactly as
+        // they do on a read.
+        let resolved = case_index.map(|idx| {
+            crate::catalog::resolve(
+                idx,
+                source_rel,
+                LinkKind::Wikilink,
+                parts.path,
+                crate::catalog::ResolutionOptions {
+                    aliases: false,
+                    site_prefix: None,
+                },
+            )
+        });
+        // BUG-3 (dogfood v0.22.0), iter-275 MV-1: a bare frontmatter stem
+        // shared by two files resolves to neither, yet the moved file is one
+        // of its candidates and that is this move's business; what happens
+        // next is the guard's decision, not this filter's. iter-322 (R4): a
+        // partial path two notes share is the same case. The `?query` is kept
+        // by the writers, so `--allow-ambiguous` rewrites it like any other.
+        let ambiguous_candidates: Option<Vec<String>> = case_index.and_then(|idx| {
+            idx.ambiguous_stem_candidates(target_path)
+                .or_else(|| match &resolved {
+                    Some(crate::catalog::Resolution::Ambiguous(paths))
+                        if target_path.contains('/') =>
+                    {
+                        Some(paths.clone())
+                    }
+                    _ => None,
+                })
+        });
+
         let matches = if target_path == old_stem || target_path == old_rel {
             true
         } else if let Some(idx) = case_index {
-            let t_norm = target_path.to_ascii_lowercase();
-            // BUG-3 (dogfood v0.22.0), iter-275 MV-1: a bare frontmatter stem
-            // shared by two files resolves to neither, so every lookup below
-            // answers `None` and the link used to be dropped before it could
-            // reach the ambiguity guard. It reached the guard only when the
-            // moved file sat at the vault root, because then — and only then —
-            // `old_stem` *is* the bare stem and the first comparison above
-            // matched. `--allow-ambiguous` therefore rewrote the body link and
-            // silently left the frontmatter one dangling for every other
-            // layout. An ambiguous stem the moved file is one of the
-            // candidates for is this move's business; what happens next is the
-            // guard's decision, not this filter's.
-            //
-            // iter-319 (DEC-374): the shared `?query` fallback only lists a
-            // link; with no guard (the moved file's own frontmatter, or
-            // `--allow-ambiguous`) the link would be rewritten and lose its
-            // `?`, so there only the literal stem counts, as before.
-            let ambiguous = if ambiguity.is_some() {
-                idx.target_stem_ambiguity(&t_norm)
-            } else {
-                idx.literal_target_stem_ambiguity(&t_norm)
-            };
-            if ambiguous.is_some_and(|candidates| candidates.iter().any(|c| c == old_rel)) {
+            if ambiguous_candidates
+                .as_ref()
+                .is_some_and(|candidates| candidates.iter().any(|c| c == old_rel))
+            {
                 true
             } else {
-                // iter-322 (DEC-384): the one catalog resolver, with the link's
-                // own source — so `[[./note]]`, `[[../t]]`, `[[x/note]]` and a
-                // bare stem naming a file in a subdirectory (iter-262) resolve
-                // here exactly as they do on a read. Only an unambiguous
-                // target resolves; guessing there would rewrite the wrong link.
-                let resolved = crate::catalog::resolve(
-                    idx,
-                    source_rel,
-                    LinkKind::Wikilink,
-                    parts.path,
-                    crate::catalog::ResolutionOptions {
-                        aliases: false,
-                        site_prefix: None,
-                    },
-                );
                 // A file may be called `What?.md`: the literal stem counts too.
                 let literal = (!parts.query.is_empty())
                     .then(|| {
@@ -2214,7 +2390,8 @@ fn plan_frontmatter_wikilink_rewrites(
                         idx.lookup_stem(literal.strip_suffix(".md").unwrap_or(literal))
                     })
                     .flatten();
-                resolved.path() == Some(old_rel) || literal == Some(old_rel)
+                resolved.as_ref().and_then(crate::catalog::Resolution::path) == Some(old_rel)
+                    || literal == Some(old_rel)
             }
         } else {
             false
@@ -2232,8 +2409,7 @@ fn plan_frontmatter_wikilink_rewrites(
         // own stem, rewrote it. The same `mv` therefore both refused and
         // performed the guess, in the same file.
         if let Some(guard) = ambiguity.as_deref_mut()
-            && let Some(candidates) =
-                case_index.and_then(|idx| idx.ambiguous_stem_candidates(target_path))
+            && let Some(candidates) = ambiguous_candidates
         {
             guard.skipped.push(SkippedAmbiguous {
                 source: guard.source.to_owned(),
@@ -2246,7 +2422,12 @@ fn plan_frontmatter_wikilink_rewrites(
             continue;
         }
 
-        if let Some(new_text) = rewrite_frontmatter_wikilink_text(target, new_rel) {
+        // R2 (iter-322): a link that spells the *directory* of a moving
+        // `index.md` (`[[sub]]`) keeps naming the directory, as it does in a
+        // body, instead of becoming a bare `[[index]]`.
+        let destination = frontmatter_directory_spelling(target_path, source_rel, old_rel, new_rel)
+            .unwrap_or_else(|| new_rel.to_owned());
+        if let Some(new_text) = rewrite_frontmatter_wikilink_text(target, &destination) {
             replacements.push(Replacement {
                 line: line_num,
                 byte_offset: occ.full_start,
@@ -2258,6 +2439,32 @@ fn plan_frontmatter_wikilink_rewrites(
 
     drop_recompositions(&mut replacements);
     replacements
+}
+
+/// The new destination to write for a frontmatter wikilink that spells the
+/// directory of the moved `index.md` (`[[sub]]`, `[[../sub]]`), or `None` when
+/// the link names the file itself. Falls back to the file when the new path is
+/// no longer a directory index.
+fn frontmatter_directory_spelling(
+    target_path: &str,
+    source_rel: &str,
+    old_rel: &str,
+    new_rel: &str,
+) -> Option<String> {
+    let old_dir = crate::discovery::directory_for_index_file(old_rel)?;
+    let spelled = target_path.trim_end_matches('/');
+    if spelled.is_empty() || spelled.to_ascii_lowercase().ends_with(".md") {
+        return None;
+    }
+    let normalized = if spelled.starts_with("./") || spelled.starts_with("../") {
+        normalize_target(Path::new(source_rel), spelled)
+    } else {
+        spelled.to_owned()
+    };
+    if !normalized.eq_ignore_ascii_case(old_dir) {
+        return None;
+    }
+    crate::discovery::directory_for_index_file(new_rel).map(str::to_owned)
 }
 
 /// The ambiguity guard state a frontmatter rewrite pass carries (iter-271
@@ -2336,6 +2543,15 @@ fn plan_outbound_rewrites_batch(
                     None,
                 );
                 replacements.extend(fm_repls);
+                replacements.extend(rebase_relative_frontmatter_wikilinks(
+                    &visible_line,
+                    scanner.line_num(),
+                    old_rel,
+                    new_rel,
+                    dir_changed,
+                    case_index,
+                    Some(rename_map),
+                ));
                 continue;
             }
             LineClass::Body(body) => body,
@@ -2346,6 +2562,20 @@ fn plan_outbound_rewrites_batch(
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
+            if let Some(replacement) = rebase_relative_wikilink(
+                &span,
+                line,
+                line_num,
+                old_rel,
+                new_rel,
+                dir_changed,
+                case_index,
+                Some(rename_map),
+                site_prefix,
+            ) {
+                replacements.push(replacement);
+                continue;
+            }
             if span.kind != LinkKind::Markdown {
                 continue;
             }

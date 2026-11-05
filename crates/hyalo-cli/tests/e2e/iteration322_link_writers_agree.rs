@@ -235,3 +235,186 @@ fn links_fix_text_names_the_plain_apply_fixes() {
         "{text}"
     );
 }
+
+// R2: a frontmatter link spelling a moved directory index keeps naming the
+// directory, even with another `index.md` in the vault.
+#[test]
+fn frontmatter_directory_links_follow_a_moved_index() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "index.md", "#\n");
+    write_md(tmp.path(), "sub/index.md", "#\n");
+    write_md(
+        tmp.path(),
+        "s.md",
+        "---\nr: \"[[sub]]\"\nq: \"[[sub?x=1#H|l]]\"\n---\n[[sub]]\n",
+    );
+    let moved = json(&run(
+        tmp.path(),
+        &["mv", "sub/index.md", "--to", "other/index.md"],
+    ));
+    assert_eq!(moved["results"]["total_links_updated"], 3, "{moved}");
+    let after = read(tmp.path(), "s.md");
+    assert!(after.contains("r: \"[[other]]\""), "{after}");
+    assert!(after.contains("q: \"[[other?x=1#H|l]]\""), "{after}");
+    assert_eq!(broken_total(tmp.path()), 0);
+}
+
+// R3: `[links] case_insensitive = "false"` means exact bytes for a partial path.
+#[test]
+fn partial_paths_honour_exact_case_mode() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"false\"\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "a/x/note.md", "#\n");
+    write_md(tmp.path(), "s.md", "[[x/note]] [[X/Note]] [[A/X/NOTE]]\n");
+    // The reader (not `links fix`'s file-system probe, which a case-folding
+    // volume answers differently) is what must keep exact bytes.
+    let found = json(&run(
+        tmp.path(),
+        &[
+            "find",
+            "--fields",
+            "links",
+            "--file",
+            "s.md",
+            "--jq",
+            ".results[0].links | map(.path)",
+        ],
+    ));
+    assert_eq!(found, serde_json::json!(["a/x/note.md", null, null]));
+}
+
+// R4: a partial path two notes share is listed by `mv`, not silently re-aimed.
+#[test]
+fn mv_lists_a_shared_partial_path_and_backlinks_ignores_it() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a/x/note.md", "#\n");
+    write_md(tmp.path(), "b/x/note.md", "#\n");
+    write_md(tmp.path(), "s.md", "[[x/note]]\n");
+    assert_eq!(
+        json(&run(tmp.path(), &["backlinks", "a/x/note.md"]))["total"],
+        0
+    );
+    let moved = json(&run(
+        tmp.path(),
+        &["mv", "a/x/note.md", "--to", "a/y/moved.md"],
+    ));
+    assert_eq!(moved["results"]["total_links_updated"], 0);
+    assert_eq!(
+        moved["results"]["skipped_ambiguous"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(read(tmp.path(), "s.md"), "[[x/note]]\n");
+}
+
+// A-7 (third disagreement): an ambiguous `[[./note]]` is not a backlink.
+#[test]
+fn an_ambiguous_dot_slash_link_is_not_a_backlink() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "#\n");
+    write_md(tmp.path(), "b/note.md", "#\n");
+    write_md(tmp.path(), "s/src.md", "[[./note]]\n");
+    assert_eq!(
+        json(&run(tmp.path(), &["backlinks", "note.md"]))["total"],
+        0
+    );
+    assert_eq!(broken_total(tmp.path()), 1);
+}
+
+// R5: under --allow-ambiguous body and frontmatter rewrite identical text alike.
+#[test]
+fn allow_ambiguous_rewrites_body_and_frontmatter_alike() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a/note.md", "#\n");
+    write_md(tmp.path(), "b/note.md", "#\n");
+    write_md(
+        tmp.path(),
+        "s.md",
+        "---\nf: \"[[note?x=1]]\"\n---\n[[note?x=1]]\n",
+    );
+    run(
+        tmp.path(),
+        &["mv", "a/note.md", "--to", "a/moved.md", "--allow-ambiguous"],
+    );
+    assert_eq!(
+        read(tmp.path(), "s.md"),
+        "---\nf: \"[[moved?x=1]]\"\n---\n[[moved?x=1]]\n"
+    );
+}
+
+// R6 + R7: links fix keeps the query in the body, and reports the whole text.
+#[test]
+fn links_fix_keeps_query_and_reports_full_text_in_body_and_frontmatter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "sub/Note.md", "# H\n");
+    write_md(
+        tmp.path(),
+        "s.md",
+        "---\nr: \"[[SUB/note?x=1#H]]\"\n---\n[[SUB/note?x=1#H]]\n[[SUB/note?x=1]]\n",
+    );
+    let out = json(&run(tmp.path(), &["links", "fix", "--apply"]));
+    assert_eq!(
+        read(tmp.path(), "s.md"),
+        "---\nr: \"[[sub/Note?x=1#H]]\"\n---\n[[sub/Note?x=1#H]]\n[[sub/Note?x=1]]\n"
+    );
+    let emitted: Vec<&str> = out["results"]["case_mismatch_fixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["emitted_target"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        emitted,
+        ["sub/Note?x=1#H", "sub/Note?x=1#H", "sub/Note?x=1"]
+    );
+}
+
+// R9: a padded relative wikilink counts the way the reader reads it.
+#[test]
+fn padded_relative_wikilinks_agree_across_counters() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "sub/sib.md", "#\n");
+    write_md(tmp.path(), "other/sib.md", "#\n");
+    write_md(tmp.path(), "sub/src.md", "[[ ./sib ]]\n");
+    assert_eq!(broken_total(tmp.path()), 0);
+    let fix = json(&run(tmp.path(), &["links", "fix"]));
+    assert_eq!(fix["results"]["ambiguous"], 0, "{fix}");
+}
+
+// M1: a `?` in a note name is read, counted and moved like any other.
+#[test]
+fn question_marks_in_note_names_agree_everywhere() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "What is this?.md", "#\n");
+    write_md(tmp.path(), "Why?.md", "# Head\n");
+    write_md(tmp.path(), "sub/deep?.md", "#\n");
+    write_md(tmp.path(), "plain.md", "#\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "[[What is this?]] [[Why?#Head]] [[Why?|alias]] [[sub/deep?]] [[plain?x=1]]\n",
+    );
+    assert_eq!(broken_total(tmp.path()), 0);
+    assert_eq!(
+        json(&run(tmp.path(), &["links", "fix"]))["results"]["broken"],
+        0
+    );
+    let moved = json(&run(
+        tmp.path(),
+        &["mv", "sub/deep?.md", "--to", "other/deep?.md"],
+    ));
+    assert_eq!(moved["results"]["total_links_updated"], 1);
+    assert!(read(tmp.path(), "src.md").contains("[[other/deep?]]"));
+    // A wikilink to a new `?` name is written literally, not as `%3F`.
+    write_md(tmp.path(), "note.md", "#\n");
+    write_md(tmp.path(), "s2.md", "[[note]]\n");
+    run(tmp.path(), &["mv", "note.md", "--to", "sub/What2?.md"]);
+    assert_eq!(read(tmp.path(), "s2.md"), "[[What2?]]\n");
+    assert_eq!(broken_total(tmp.path()), 0);
+}

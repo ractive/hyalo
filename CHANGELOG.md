@@ -125,6 +125,9 @@ and this project adheres to
 - `mv` rewrites the links it counts as backlinks: `[[note?x=1]]`, `[[note?]]` and a frontmatter `[[./note]]` or `[[note?]]` follow a moved note and keep their `?query` (DEC-384).
 - `links fix` writes an alias fix as `[[sub/Target#Second|AKA]]` (fragment on the target) in the body and in frontmatter, where the alias and the declaring note's folder were dropped; frontmatter fixes now report `emitted_target` (DEC-385).
 - `summary.links.broken` and `links fix` agree with `find --broken-links` on short forms the reader resolves (`[[note?]]`, `[[my%20note]]`) and on path-form links relocated to another folder (DEC-384).
+- Moving a note re-aims its own `./x` and `../x` wikilinks (single and batch, body and frontmatter); before, they broke or silently pointed at another note. A frontmatter link spelling a moved directory index keeps naming the directory (DEC-384).
+- A link that names two notes (`[[./note]]`, a shared partial path `[[x/note]]`) is no longer a backlink of either; `mv` lists it in `skipped_ambiguous` instead of leaving it to resolve to the twin. `--allow-ambiguous` rewrites body and frontmatter alike, `?query` kept (DEC-384).
+- A `?` in a note name is part of the name for every reader and for `mv`; wikilinks write `?`, `%` and `:` literally instead of `%3F`. `links fix` keeps a body wikilink's `?query` and reports the whole bracket text as `emitted_target`; a partial path folds case only when `[links] case_insensitive` does (DEC-387, DEC-385).
 
 ### Security
 
