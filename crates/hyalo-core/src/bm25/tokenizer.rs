@@ -41,6 +41,11 @@ use unicode_normalization::char::is_combining_mark;
 /// v4 (iter-304, DEC-336): diacritic folding, identifier splitting (whole
 /// plus parts), the optional `[search] code_blocks = "skip"` filter, and a
 /// field-aware stream (title, headings, tags) for BM25F.
+///
+/// Not bumped for a Unicode table update in `unicode-normalization` (DEC-373):
+/// a new combining mark only moves the split around a code point that was
+/// unassigned before that Unicode version, which does not justify re-tokenizing
+/// every persisted entry.
 pub const TOKENIZER_VERSION: u32 = 4;
 
 // ---------------------------------------------------------------------------
