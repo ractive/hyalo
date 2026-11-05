@@ -6,74 +6,36 @@ status: planned
 priority: low
 origin: regression dogfood 2026-10-05 (three explorers), deferred from iteration 318
 ---
+
 # Regression dogfood 2026-10-05 leftovers
 
-Findings of the 2026-10-05 regression dogfood that
-[[iterations/iteration-318-regression-dogfood-fixes]] did not fix. None blocks
-0.25.0.
+Everything else on this list was closed by
+[[iterations/iteration-320-dogfood-leftovers]] (fixed, already fixed, or decided
+against in DEC-376 to DEC-380). Two items remain.
 
-## Deferred from iteration 318's own task list
+## Backslash links
 
-- `mv` rewrites a bare `[[Café]]` (precomposed) to the decomposed bytes of
-  `notes/Café.md` after a directory move, although a bare link needs no
-  change; the rewrite decision should compare NFC-normalized stems (DEC-354).
-- `new --dry-run` emits no hints; it should hint the real
-  `=> hyalo new … [writes]`.
+`backlinks` and `find` disagree on a literal `\` in a link target. Reproduced
+2026-11-05 on macOS with a file named `back\slash.md` and `[[back\slash]]`:
+`backlinks 'back\slash.md'` lists the link, `find --fields links` reports it
+unresolved (`path: null`), because resolution replaces `\` with `/` in a link
+target unconditionally (`discovery.rs`, DEC-363 only protects *selection* text).
+`[[sub\t]]` (a Windows-authored path) resolves to `sub/t.md` in both, and
+`[[sub%5Ct]]` / `[x](sub%5Ct.md)` resolve in neither, consistently. The fix means
+deciding whether a link target may name a literal backslash off Windows and
+touching the resolver shared by `find`, `backlinks`, `mv` and `links fix`: too
+risky to bundle with a cleanup pass; needs its own DEC and a corpus run.
 
-## Other findings
+## No-op `create-index` on MDN
 
-- Backslash links: `backlinks` and `find` disagree on a `\` in a link
-  target, and a `%5C` in a wikilink is not decoded the same way everywhere.
-- YAML 1.2 core: signed hex/octal (`-0x1F`, `+0o17`) and the `.NaN`
-  spelling are not resolved per the core schema.
-- `types show` under an unloadable `[schema]` does not say the schema is
-  unusable.
-- `init`: the "updated" wording when nothing changed; a user's edits inside
-  the managed block are overwritten without notice.
-- `read --frontmatter` on a file without frontmatter returns an empty
-  result without saying there is none.
-- `lint-rules show SCHEMA` reports `autofixable: true` for a pass that has
-  no autofix of its own.
-- `find --facet` with `--limit 0`-style facets-only use has no compact
-  text output.
-- Hint objects serialize their keys in an unstable order relative to the
-  documented `{description, cmd, writes}`.
-- HYALO006 counts out-of-vault links that `find`/`summary` exclude
-  (GitHub Docs 7409 vs 7406; `README.md:104` `../contributing/redirects.md`).
-- `find --broken-links` suggests `#Intro-duction` where `links fix` plans
-  `#1. Intro`: the two anchor choosers still disagree on a
-  prefix-vs-numbered case.
-- `links fix` JSON `fixable: 0` next to text `Fixable: 5`.
-- `--index-file <missing outside vault>`: the hint omits
-  `--allow-outside-vault`.
-- The stale-index note says "changed" for added and deleted files.
-- `lint --rule HYALO008 -q` still prints unknown-markdownlint-rule warnings
-  for unrelated directives.
-- A `--jq` output over the 10 MiB limit exits 2 with no way out named; it
-  should exit 1 with "use --format json or a narrower filter".
-- Disk `summary` has no `source` key (the indexed one does).
-- A no-op `create-index` on MDN still takes 1.09 s (2.5× `summary --index`).
-
-## Found while cutting 0.25.0 (2026-10-05)
-
-- `hyalo changelog release 0.25.0 --apply` rotated the section correctly but
-  left the footer wrong: it wrote `[0.25.0]: TBD` and kept
-  `[Unreleased]: …/compare/v0.24.1...HEAD`. Both had to be fixed by hand to
-  `…/compare/v0.24.1...v0.25.0` and `…/compare/v0.25.0...HEAD`. The previous
-  version's link is right there in the footer, so the command has what it
-  needs to write both; `docs/releasing.md` already tells the maintainer to
-  check for `TBD`, which is a workaround, not a contract.
-- `xtask generate-npm-packages --generate` bumps `npm/hyalo/package.json` and
-  the seven platform manifests but not `npm/hyalo/package-lock.json` (the root
-  version, the seven optional dependencies and their `resolved` URLs — 23
-  occurrences); `--check` does not notice the stale lockfile either. Either
-  the generator owns the lockfile entries or the check fails on a mismatch.
-- The release skill's step 2 lists three `Cargo.toml` fields and five JSON
-  manifests but not the lockfile or the `npm-registry.yml` default; the
-  0.24.1 prep commit is the only place that shows the full set of 16 files.
-
-## Seen again while cutting 0.25.1 (2026-11-01)
-
-- `hyalo changelog release 0.25.1 --apply` wrote `[0.25.1]: TBD` and kept
-  `[Unreleased]: …/compare/v0.25.0...HEAD` again; fixed by hand. The
-  footer item above is still open.
+Measured 2026-11-05 (release build, 14 375 files, 141 MB snapshot, user CPU, not
+wall): a no-op `create-index` takes **0.78 s user + 2.5 s sys, 550 MB RSS**;
+`summary --index` takes 0.39 s user + 0.1 s sys. A BM25-decoding read
+(`find zebra --index`) costs 0.56 s user, so the eager decode of the postings
+(`take_bm25_index`, needed only when an entry is re-scanned) is about 0.35 s of
+the difference and 175 MB of RSS. The rest, including nearly all of the sys time,
+is not attributed: the sampled stack is dominated by `malloc` under
+`reusable_entry`'s `entry.clone()` of every `IndexEntry` and the graph build in
+`ScannedIndex::build_reusing`, but the release binary is stripped and no single
+cause was confirmed. Candidate fixes: decode the postings only when something was
+re-scanned; move entries out of the previous snapshot instead of cloning them.

@@ -362,7 +362,7 @@ fn jq_output_over_the_cap_exits_one_and_names_the_way_out() {
         ],
     );
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    assert!(out.stdout.is_empty());
+    assert_eq!(out.stdout, Vec::<u8>::new());
     let err = stderr(&out);
     assert!(err.contains("exceeds 10 MiB"), "{err}");
     assert!(err.contains("--format json"), "{err}");
@@ -388,4 +388,14 @@ fn yaml_signed_radix_integers_and_nan_spellings() {
     // fallback; the uppercase-prefix hex is a YAML 1.1 extension, a string.
     assert_eq!(props["f"], ".nan", "{props}");
     assert_eq!(props["upper"], "0X1F", "{props}");
+}
+
+#[test]
+fn lint_rules_show_schema_is_not_autofixable() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "x\n");
+    let out = run(tmp.path(), &["lint-rules", "show", "SCHEMA"]);
+    let v = json(&out);
+    assert_eq!(v["results"]["autofixable"], false, "{v}");
+    assert_eq!(v["results"]["configurable"], false, "{v}");
 }

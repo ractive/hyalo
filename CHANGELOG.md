@@ -81,6 +81,13 @@ and this project adheres to
   only the body is sent and frontmatter stays in the local manifest. A section
   selection was never affected.
 
+### Fixed
+
+- `links fix` and `find --broken-links` name the same heading for a broken anchor (the numbered-heading repair `--apply` writes wins over a prefix match), and the text `Fixable:` line spells out its split, `Fixable: 5 (0 links + 5 anchor repairs)`, beside the unchanged JSON `fixable` and `anchor_fixable` (DEC-376).
+- `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter and `types list`/`types show` under an unusable `[schema]` say so; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).
+- A `--jq` result over the 10 MiB cap exits 1 and names `--format json` or a narrower filter on a read-only run; a mutation that already wrote keeps exit 2 with its effects (DEC-378).
+- `hyalo changelog release` writes the footer links (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`) instead of `[X.Y.Z]: TBD`; `xtask generate-npm-packages --generate` rewrites the versions in `npm/hyalo/package-lock.json`, `--check` fails on a stale one, and the release docs list all 16 files a bump touches (DEC-379).
+
 ## [0.25.1] - 2026-11-01
 
 ### Changed

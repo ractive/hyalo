@@ -538,7 +538,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   the heading TEXT (`[[note#3. Deploy Steps]]`), a markdown anchor fix keeps the GFM slug
   (`note.md#3-deploy-steps`) — Obsidian only matches a wikilink fragment against heading text.
   `links fix` and `find --broken-links` share one anchor-suggestion chooser, a deferred anchor
-  fix carries that `suggested_fragment`, and the `Fixable:` text line counts anchor fixes too.
+  fix carries that `suggested_fragment`, and the `Fixable:` text line prints link plus anchor fixes and spells out the split (`Fixable: 5 (0 links + 5 anchor repairs)`; JSON `fixable` stays the link bucket, DEC-376).
 - **`mv` rewrites bare attachment/embed links too** (DEC-352, iter-311): `[img](img.png)`,
   `![embed](img.png)` and `[cfg](.gitignore)` are rebased on a cross-directory move exactly
   like the `.md` sibling, when they resolve to a real file. The vault-wide bare-attachment
