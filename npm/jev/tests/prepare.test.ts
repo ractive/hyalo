@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, readdir } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { policy, hash } from "../src/protocol.ts";
+import { policy, hash, payload } from "../src/protocol.ts";
 import { prepare, selection } from "../src/prepare.ts";
 import { hyaloReader } from "../src/io.ts";
 import { p, fixture } from "./fixtures.ts";
@@ -108,5 +108,23 @@ test("oversized and empty sections defer with explicit reasons", async () => {
       "section empty",
       "document too large; select a relevant section",
     ]);
+  } finally { process.chdir(oldCwd); await rm(root, { recursive: true, force: true }); }
+});
+test("only body text reaches the provider; frontmatter stays in the local manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hyalo-jev-test-")), oldCwd = process.cwd();
+  try {
+    await mkdir(join(root, "vault"), { recursive: true });
+    await writeFile(join(root, ".hyalo.toml"), 'dir = "vault"\n[schema.types.research]\nrequired = ["title", "type"]\n[schema.types.docs]\nrequired = ["title", "type"]\n');
+    await writeFile(join(root, "vault/note.md"), "---\ntitle: Experiment\nprivate_contact: jane@example.com\n---\n# Results\nWe measured latency.\n");
+    await writeFile(join(root, "vault/bare.md"), "---\ntitle: Bare\n---\n");
+    process.chdir(root);
+    const m = await prepare(selection(["note.md", "bare.md"]), p, hyaloReader(binary));
+    expect(m.documents.map(d => d.file)).toEqual(["note.md"]);
+    const doc = m.documents[0]!;
+    expect(doc.current.private_contact).toBe("jane@example.com");
+    expect(doc.content).toContain("We measured latency.");
+    const sent = JSON.stringify(payload(doc, p).request);
+    for (const local of ["private_contact", "jane@example.com", "title: Experiment"]) { expect(doc.content).not.toContain(local); expect(sent).not.toContain(local); }
+    expect(m.deferred.find(d => d.file === "bare.md")?.reason).toBe("document empty");
   } finally { process.chdir(oldCwd); await rm(root, { recursive: true, force: true }); }
 });

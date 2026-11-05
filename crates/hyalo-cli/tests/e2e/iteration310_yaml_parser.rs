@@ -5,6 +5,8 @@
 //! - `.nan` keeps its string fallback; the words `NaN` / `Infinity` stay
 //!   as written.
 //! - A value with an inner `#` is written double-quoted, as before.
+//! - serde-saphyr 2.1 (DEC-375): a null-document block reads as no
+//!   properties; wrong-case spellings and Unicode-padded scalars are strings.
 use super::common::{hyalo_no_hints, write_md};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -200,4 +202,172 @@ fn set_writes_hash_values_quoted_and_dates_plain() {
         text,
         "---\ntitle: t\nlang: \"C#\"\ndate: 2026-01-01\nflag: \"yes\"\n---\nbody\n"
     );
+}
+
+#[test]
+fn null_document_frontmatter_reads_as_no_properties() {
+    // serde-saphyr 2.1 rejects a null document where a mapping is expected
+    // (#233). A block holding only comments, `~` or `null` is frontmatter
+    // with no properties, as it was before (DEC-375): it must neither be
+    // skipped by a scan, flagged by HYALO005, nor refuse a write.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "comment.md",
+        "---\n# only a comment\n---\nbody\n",
+    );
+    write_md(tmp.path(), "tilde.md", "---\n~\n---\nbody\n");
+    write_md(tmp.path(), "null.md", "---\nnull\n---\nbody\n");
+    write_md(tmp.path(), "ok.md", "---\ntitle: ok\n---\nbody\n");
+
+    let find = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--fields", "properties", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(find.status.success());
+    let stderr = String::from_utf8_lossy(&find.stderr);
+    assert!(!stderr.contains("unparsable"), "no skip warning: {stderr}");
+    let json: Value = serde_json::from_slice(&find.stdout).unwrap();
+    assert_eq!(json["total"], json!(4));
+
+    let summary = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["summary", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(summary.status.success());
+    let json: Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(json["results"]["files"]["total"], json!(4));
+    assert_eq!(json["results"]["files"]["skipped"], json!(0));
+
+    hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["lint", "--rule", "HYALO005"])
+        .assert()
+        .success();
+
+    for file in ["comment.md", "tilde.md", "null.md"] {
+        assert_eq!(properties(tmp.path(), file), json!({}), "{file}");
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["set", file, "--property", "status=draft"])
+            .assert()
+            .success();
+        assert_eq!(
+            properties(tmp.path(), file),
+            json!({"status": "draft"}),
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn spellings_outside_the_yaml_12_core_schema_read_as_strings() {
+    // DEC-375: serde-saphyr 2.1 matches the core schema's bool, null and
+    // non-finite spellings exactly, so a wrong-case one is a string, and a
+    // no-break space (or any other Unicode space) around a number or bool
+    // makes it one too.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\nflag: tRUE\nnone: nuLL\nnan: .nAn\ninf: -.iNF\nnbsp: 1\u{a0}\nlist: [true\u{a0}, 2]\nnuLL: key\nreal: True\nreal_null: Null\n---\nbody\n",
+    );
+    let props = properties(tmp.path(), "a.md");
+    assert_eq!(props["flag"], json!("tRUE"));
+    assert_eq!(props["none"], json!("nuLL"));
+    assert_eq!(props["nan"], json!(".nAn"));
+    assert_eq!(props["inf"], json!("-.iNF"));
+    assert_eq!(props["nbsp"], json!("1\u{a0}"));
+    assert_eq!(props["list"], json!(["true\u{a0}", 2]));
+    assert_eq!(props["nuLL"], json!("key"));
+    assert_eq!(props["real"], json!(true));
+    assert_eq!(props["real_null"], json!(null));
+}
+
+#[test]
+fn explicit_key_tab_and_one_column_quoted_continuation_parse() {
+    // DEC-375: both were unparsable frontmatter under serde-saphyr 1.x.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "key.md", "---\n?\ta\n: b\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "quoted.md",
+        "---\ntitle: \"one\n two\"\nn: 1\n---\nbody\n",
+    );
+    assert_eq!(properties(tmp.path(), "key.md"), json!({"a": "b"}));
+    assert_eq!(
+        properties(tmp.path(), "quoted.md"),
+        json!({"title": "one two", "n": 1})
+    );
+}
+
+#[test]
+fn keep_chomped_block_scalars_survive_two_writes_with_comments_and_quoting() {
+    // serde-saphyr 2.1 writes the kept trailing blank lines of a `|+` / `>+`
+    // body at column 0 (upstream #249). They are value bytes: if the splice
+    // treated them as trivia, the second write would fall back to a whole
+    // block rewrite and drop the comment and the quoting.
+    for (indicator, value) in [("|+", "a\n\n"), (">+", "a\n\n"), ("|+", "\n")] {
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            "a.md",
+            &format!("---\n# keep me\nq: \"quoted\"\nk: {indicator}\n  a\n---\nbody\n"),
+        );
+        for property in [format!("k={value}"), "w=1".to_owned()] {
+            hyalo_no_hints()
+                .arg("--dir")
+                .arg(tmp.path())
+                .args(["set", "a.md", "--property", &property])
+                .assert()
+                .success()
+                .stderr(predicates::str::is_empty());
+        }
+        let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(text.contains("# keep me"), "{value:?}: {text}");
+        assert!(text.contains("q: \"quoted\""), "{value:?}: {text}");
+        assert_eq!(
+            properties(tmp.path(), "a.md")["k"],
+            json!(value),
+            "{value:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn an_unindented_blank_line_in_a_hand_written_keep_scalar_stays_with_its_key() {
+    for indicator in ["|+", ">+"] {
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            "a.md",
+            &format!(
+                "---\n# keep me\nq: \"quoted\"\nk: {indicator}\n  a\n\n# next\nz: 1\n---\nbody\n"
+            ),
+        );
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["set", "a.md", "--property", "w=1"])
+            .assert()
+            .success()
+            .stderr(predicates::str::is_empty());
+        let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(
+            text.contains("# keep me") && text.contains("# next"),
+            "{indicator}: {text}"
+        );
+        assert!(text.contains("q: \"quoted\""), "{indicator}: {text}");
+        assert_eq!(
+            properties(tmp.path(), "a.md")["k"],
+            json!("a\n\n"),
+            "{indicator}"
+        );
+    }
 }

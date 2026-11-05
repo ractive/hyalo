@@ -156,6 +156,7 @@ Only HTTP 429/529 receive one retry; transport/authentication failures do not.
 Report selected and transmitted document counts, local findings, suggestions,
 deferrals/unavailable batches, actual changes, elapsed time and returned token
 usage. Cost is an estimate using USD 0.042 per million input tokens; output is
-free at that model's recorded rate. `usageUnknown` means failed/retried attempts
-may have incurred additional unreported usage. Do not claim measured savings in
-agent context or latency without a baseline.
+free at that model's recorded rate; `estimatedCostUsd` is `null` when the API did
+not report input tokens. `usageUnknown` means failed/retried attempts may have
+incurred additional unreported usage, or that the API left a count `null`. Do not
+claim measured savings in agent context or latency without a baseline.

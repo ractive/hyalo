@@ -500,3 +500,48 @@ fn v4_snapshot_without_explicit_anchor_ids_is_refused_not_silently_served() {
     let rebuilt: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(rebuilt["total"], 0, "{rebuilt}");
 }
+
+/// serde-saphyr 2.1 (DEC-375): `flag: tRUE` read as a bool on 1.3 and is a
+/// string now. A v7 snapshot carries the old reading and incremental
+/// `create-index` would reuse the unchanged entry, so the format bumped to 8
+/// and a v7 snapshot must be refused and rebuilt, not trusted.
+#[test]
+fn v7_snapshot_is_refused_and_rebuilt_not_reused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\nflag: tRUE\n---\nbody\n");
+    backdate(&tmp.path().join("a.md"));
+    let (_, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+
+    let index_path = tmp.path().join(".hyalo-index");
+    let mut snapshot = load_snapshot(&index_path);
+    snapshot["header"]["format_version"] = serde_json::json!(7);
+    save_snapshot(&index_path, &snapshot);
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "--fields",
+            "properties",
+            "--index",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"][0]["properties"]["flag"], "tRUE", "{json}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index format is older than this binary") && stderr.contains("v7"),
+        "{stderr}"
+    );
+
+    let (json, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["results"]["rebuilt"], true, "{json}");
+    assert_eq!(json["results"]["reused"], 0, "{json}");
+}

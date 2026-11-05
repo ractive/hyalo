@@ -2,7 +2,9 @@
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
-use serde_saphyr::{Budget, DuplicateKeyPolicy, Options, SerializerOptions, Spanned};
+use serde_saphyr::{
+    Budget, DuplicateKeyPolicy, NonFiniteFloatPolicy, Options, SerializerOptions, Spanned,
+};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -57,7 +59,7 @@ pub fn hyalo_options() -> Options {
     options.duplicate_keys = DuplicateKeyPolicy::Error;
     options.strict_booleans = true;
     options.emit_comments = false;
-    options.reject_non_finite_typeless_float = false;
+    options.non_finite_float_policy = NonFiniteFloatPolicy::AsString;
     options
 }
 
@@ -88,12 +90,19 @@ pub fn hyalo_options() -> Options {
 /// the string as written. A written `12.0` stays a float; an explicitly
 /// tagged scalar (`!!int 0x10`) is never re-resolved either way.
 pub fn parse_yaml_map(yaml: &str) -> Result<IndexMap<String, Value>, serde_saphyr::Error> {
-    let fast: IndexMap<String, Value> = serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+    // Both parses go through `Option`: since serde-saphyr 2.1 a null document
+    // (comments only, `~`, `null`, `!Tag null`) is no longer read as an empty
+    // mapping but fails with "expected mapping start". A block holding nothing
+    // but comments is frontmatter with no properties, as it always was (DEC-375).
+    let fast: IndexMap<String, Value> =
+        serde_saphyr::from_str_with_options::<Option<_>>(yaml, hyalo_options())?
+            .unwrap_or_default();
     if !fast.values().any(has_integral_float) && !might_have_yaml11_int_form(yaml) {
         return Ok(fast);
     }
     let spanned: IndexMap<String, Spanned<Node>> =
-        serde_saphyr::from_str_with_options(yaml, hyalo_options())?;
+        serde_saphyr::from_str_with_options::<Option<_>>(yaml, hyalo_options())?
+            .unwrap_or_default();
     Ok(spanned
         .into_iter()
         .map(|(key, node)| (key, node_to_value(node, yaml)))
@@ -2245,6 +2254,138 @@ mod yaml_tests {
         for line in ["t: x|", "t: -", "t: a |b", "|"] {
             assert!(!opens_block_scalar(line), "{line:?}");
         }
+    }
+
+    /// serde-saphyr 2.1 stopped reading a null document as an empty mapping
+    /// (#233); `parse_yaml_map` restores that (DEC-375), so a block that holds
+    /// nothing but comments is frontmatter with no properties, as before.
+    #[test]
+    fn null_documents_read_as_no_properties() {
+        for yaml in [
+            "# only a comment\n",
+            "# a\n# b\n",
+            "~\n",
+            "null\n",
+            "Null\n",
+            "NULL\n",
+            "!Foo null\n",
+            "!!null ~\n",
+            // These carry a YAML 1.1 integer form, so they take the
+            // span-aware second pass; its `Option` wrapper must hold too.
+            "# 0x1F\n",
+            "# 1_000\n",
+            "~ # 0b1\n",
+        ] {
+            let props = parse_yaml_map(yaml).unwrap_or_else(|e| panic!("{yaml:?}: {e}"));
+            assert!(props.is_empty(), "{yaml:?}: {props:?}");
+        }
+        // The same wrapper sits in front of the span-aware re-parse, which a
+        // leading-zero number triggers; it must not change the outcome.
+        let props = parse_yaml_map("# c\nzip: 01234\n").unwrap();
+        assert_eq!(props["zip"], json!(1234));
+    }
+
+    #[test]
+    fn a_non_mapping_document_is_still_an_error() {
+        for yaml in ["hello\n", "1\n", "- a\n- b\n", "[a, b]\n", "nuLL\n"] {
+            assert!(parse_yaml_map(yaml).is_err(), "{yaml:?}");
+        }
+    }
+
+    /// DEC-375: only the spellings the YAML 1.2 core schema lists are a bool,
+    /// a null or a non-finite float. A wrong-case spelling is a string, and a
+    /// non-finite one keeps the text as written.
+    #[test]
+    fn wrong_case_spellings_read_as_strings() {
+        let props = parse_yaml_map(
+            "a: tRUE\nb: TRuE\nc: FAlse\nd: fALSE\ne: nuLL\nf: nULL\ng: NUlL\nh: .nAn\ni: .iNf\nj: -.iNF\n",
+        )
+        .unwrap();
+        for (key, text) in [
+            ("a", "tRUE"),
+            ("b", "TRuE"),
+            ("c", "FAlse"),
+            ("d", "fALSE"),
+            ("e", "nuLL"),
+            ("f", "nULL"),
+            ("g", "NUlL"),
+            ("h", ".nAn"),
+            ("i", ".iNf"),
+            ("j", "-.iNF"),
+        ] {
+            assert_eq!(props[key], json!(text), "{key}");
+        }
+        // The three spellings core does list keep their meaning.
+        let props = parse_yaml_map(
+            "a: true\nb: True\nc: TRUE\nd: false\ne: False\nf: null\ng: Null\nh: NULL\ni: ~\nj: .NaN\nk: .INF\nl: -.inf\nm: +.nan\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Value::Object(props.into_iter().collect()),
+            json!({
+                "a": true, "b": true, "c": true,
+                "d": false, "e": false,
+                "f": null, "g": null, "h": null, "i": null,
+                "j": ".nan", "k": ".inf", "l": "-.inf", "m": ".nan",
+            })
+        );
+        // A wrong-case `null` key is a string key now, not a null one.
+        let props = parse_yaml_map("nuLL: v\nz: 1\n").unwrap();
+        assert_eq!(props["nuLL"], json!("v"));
+    }
+
+    /// DEC-375: a scalar is trimmed of space, tab, CR and LF only, so a
+    /// number, bool or `.nan` carrying a no-break space or another Unicode
+    /// space is a string, at every depth.
+    #[test]
+    fn unicode_whitespace_around_a_scalar_makes_it_a_string() {
+        for space in ['\u{a0}', '\u{2003}', '\u{3000}', '\u{85}'] {
+            for scalar in ["1", "1.5", "true", "0x1F", "01234", ".nan", "null"] {
+                for text in [format!("{scalar}{space}"), format!("{space}{scalar}")] {
+                    for yaml in [
+                        format!("k: {text}\n"),
+                        format!("k: [{text}, x]\n"),
+                        format!("k:\n  - {text}\n"),
+                        format!("k: {{m: {text}}}\n"),
+                        format!("k:\n  m:\n    n: {text}\n"),
+                    ] {
+                        let props = parse_yaml_map(&yaml).unwrap();
+                        let mut leaf = &props["k"];
+                        loop {
+                            leaf = match leaf {
+                                Value::Array(items) => &items[0],
+                                Value::Object(map) => map.values().next().unwrap(),
+                                _ => break,
+                            };
+                        }
+                        assert_eq!(leaf, &json!(text), "{yaml:?}");
+                    }
+                }
+            }
+        }
+        // Space, tab, CR and LF padding is still trimmed before a scalar is
+        // resolved.
+        let props = parse_yaml_map("a: 1   \nb: true\t\nc: [ 2 , 3 ]\n").unwrap();
+        assert_eq!(props["a"], json!(1));
+        assert_eq!(props["b"], json!(true));
+        assert_eq!(props["c"], json!([2, 3]));
+    }
+
+    /// DEC-375: two shapes that were parse errors now parse.
+    #[test]
+    fn a_tab_after_an_explicit_key_marker_and_one_column_quoted_continuations_parse() {
+        let props = parse_yaml_map("?\ta\n: b\n").unwrap();
+        assert_eq!(props["a"], json!("b"));
+        for (yaml, key, expected) in [
+            ("a: \"one\n two\"\n", "a", json!("one two")),
+            ("a: 'one\n two'\n", "a", json!("one two")),
+            ("a: \"one\n two\"\nb: 1\n", "b", json!(1)),
+        ] {
+            let props = parse_yaml_map(yaml).unwrap_or_else(|e| panic!("{yaml:?}: {e}"));
+            assert_eq!(props[key], expected, "{yaml:?}");
+        }
+        let props = parse_yaml_map("a:\n  b: \"one\n   two\"\n").unwrap();
+        assert_eq!(props["a"], json!({"b": "one two"}));
     }
 
     #[test]

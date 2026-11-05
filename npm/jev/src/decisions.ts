@@ -12,7 +12,8 @@ export function decisions(value: unknown, questions: Questions, bindings: Record
   const response = object(value);
   insist(response.model === MODEL, "unexpected response model");
   const answers = object(response.answers), usage = object(response.usage);
-  for (const field of ["input_tokens", "output_tokens"]) insist(Number.isSafeInteger(usage[field]) && (usage[field] as number) >= 0, "invalid usage");
+  // A null count means the API did not report it; anything else must be a real count.
+  for (const field of ["input_tokens", "output_tokens"]) insist(usage[field] === null || (Number.isSafeInteger(usage[field]) && (usage[field] as number) >= 0), "invalid usage");
   insist(Object.keys(answers).length === Object.keys(questions).length && Object.keys(questions).every(id => Object.hasOwn(answers, id)), "answer IDs differ from request");
   const results: Decision[] = Object.entries(questions).map(([id, q]) => {
     const answer = object(answers[id]), binding = bindings[id];
@@ -33,5 +34,5 @@ export function decisions(value: unknown, questions: Questions, bindings: Record
     const accepted = result !== undefined && confidence >= .85 && p >= .9;
     return { field: binding.field, status: accepted ? "suggestion" : "defer", ...(accepted ? { value: result } : { reason: result === undefined ? "unknown" : "uncertain" }), confidence, probability: p };
   });
-  return { decisions: results, usage: { input_tokens: usage.input_tokens as number, output_tokens: usage.output_tokens as number } };
+  return { decisions: results, usage: { input_tokens: usage.input_tokens as number | null, output_tokens: usage.output_tokens as number | null } };
 }

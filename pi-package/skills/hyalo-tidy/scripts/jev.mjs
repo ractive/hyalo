@@ -1,6 +1,6 @@
 // hyalo:managed
 // Generated from npm/jev; do not edit.
-/*! @typesafe-ai/sdk 0.6.0
+/*! @typesafe-ai/sdk 0.7.0
 MIT License
 
 Copyright (c) 2026 TypeSafe
@@ -32,6 +32,7 @@ import { isAbsolute } from "node:path";
 // src/protocol.ts
 import { createHash } from "node:crypto";
 var MODEL = "jev-1.13.0";
+var IMAGE_REFERENCE = /<image:[0-9a-f]{32}>/;
 var LIMITS = { documents: 25, request: 24000, questions: 48, input: 1048576, response: 1048576, deadline: 12000 };
 
 class Invalid extends Error {
@@ -164,8 +165,9 @@ function payload(doc, p) {
     questions[id] = { type: "noul", instructions: preamble + "Does this document clearly qualify for this tag?", criteria: { true: candidate.description, false: "The described tag does not apply, or there is insufficient evidence." } };
     bindings[id] = { field: "tag", value: candidate.value, options: {} };
   });
-  const request = { model: MODEL, state: doc.content, questions };
-  insist(Object.keys(questions).length <= LIMITS.questions && Buffer.byteLength(JSON.stringify(request)) <= LIMITS.request, "request exceeds limits");
+  const request = { model: MODEL, state: doc.content, questions }, json = JSON.stringify(request);
+  insist(Object.keys(questions).length <= LIMITS.questions && Buffer.byteLength(json) <= LIMITS.request, "request exceeds limits");
+  insist(!Object.keys(questions).length || !IMAGE_REFERENCE.test(json), "text resembles an SDK image reference");
   return { request, bindings };
 }
 
@@ -323,12 +325,12 @@ async function prepare(files, p, read) {
       const entry = object(found.results[0]);
       insist(entry.file === selected.file, "file resolution differs from selection");
       insist(typeof entry.size === "number" && entry.size <= LIMITS.input && (selected.section !== null || entry.size <= 18000), "document too large; select a relevant section");
-      const readArgs = selected.section === null ? ["--lines", "1:"] : ["--section", selected.section];
-      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
-      insist(evidence.file === selected.file, "file resolution differs from selection");
+      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...selected.section === null ? [] : ["--section", selected.section]])).results);
+      const text = selected.section === null ? object((await read(["read", "--file", selected.file])).results) : evidence;
+      insist(evidence.file === selected.file && text.file === selected.file, "file resolution differs from selection");
       const current = object(evidence.frontmatter ?? {});
-      insist(typeof evidence.content === "string" && !evidence.content.includes("\x00"), "invalid evidence content");
-      const content = evidence.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
+      insist(typeof text.content === "string" && !text.content.includes("\x00"), "invalid evidence content");
+      const content = text.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
       const body = selected.section === null ? content : content.replace(/^#[^\n]*\n?/, "");
       insist(body.trim().length > 0, `${what} empty`);
       insist(bytes <= 18000, `${what} too large (${bytes} bytes > 18000)`);
@@ -409,18 +411,6 @@ var APIPromise = class APIPromise extends Promise {
     return this.#parse().finally(onfinally);
   }
 };
-var ENV = {
-  apiKey: "TYPESAFE_API_KEY",
-  baseURL: "TYPESAFE_BASE_URL",
-  defaultModel: "TYPESAFE_DEFAULT_MODEL",
-  logLevel: "TYPESAFE_LOG_LEVEL"
-};
-var readEnv = (name) => {
-  if (typeof process === "undefined" || !process.env)
-    return;
-  return process.env[name]?.trim() || undefined;
-};
-var fromCodeOrEnv = (fromCode, envVar) => fromCode ?? readEnv(envVar);
 var range = (from, to) => Array.from({ length: to - from }, (_, i) => from + i);
 var DEFAULT_RETRY_POLICY = {
   maxRetries: 2,
@@ -582,6 +572,264 @@ var APIUserAbortError = class extends TypeSafeError {
     super(message, options);
   }
 };
+var CONTENT_TYPES = [["image/png", [
+  137,
+  80,
+  78,
+  71,
+  13,
+  10,
+  26,
+  10
+]], ["image/jpeg", [
+  255,
+  216,
+  255
+]]];
+var REFERENCE = /<image:[0-9a-f]{32}>/g;
+var IMAGE = Symbol.for("@typesafe-ai/sdk/image");
+var TEXT_WITH_ASSETS = Symbol.for("@typesafe-ai/sdk/text-with-assets");
+var randomHex = () => Array.from(crypto.getRandomValues(/* @__PURE__ */ new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+var isImage = (value) => (IMAGE in value);
+var isTextWithAssets = (value) => (TEXT_WITH_ASSETS in value);
+var typeName = (value) => {
+  if (value === null)
+    return "null";
+  if (typeof value !== "object")
+    return typeof value;
+  return Object.prototype.toString.call(value).slice(8, -1);
+};
+var toBytes = (data) => {
+  if (!ArrayBuffer.isView(data) && Object.prototype.toString.call(data) !== "[object ArrayBuffer]")
+    throw new TypeSafeError(`Image data must be file bytes or a Blob; got ${typeName(data)}.`);
+  return ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+};
+var contentTypeOf = (bytes) => {
+  for (const [contentType, signature] of CONTENT_TYPES)
+    if (signature.every((byte, i) => bytes[i] === byte))
+      return contentType;
+  return "application/octet-stream";
+};
+var Image = class Image {
+  type = "image";
+  data;
+  #reference = `<image:${randomHex()}>`;
+  constructor(data) {
+    this.data = data instanceof Blob ? data : toBytes(data);
+    if ((this.data instanceof Blob ? this.data.size : this.data.byteLength) === 0)
+      throw new TypeSafeError("Image data is empty.");
+  }
+  static fromBase64(text) {
+    let binary;
+    try {
+      binary = atob(text);
+    } catch (err) {
+      throw new TypeSafeError("Image data must contain valid base64 text.", { cause: err });
+    }
+    return new Image(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+  }
+  toString() {
+    return this.#reference;
+  }
+  toJSON() {
+    return this.#reference;
+  }
+};
+Object.defineProperty(Image.prototype, IMAGE, { value: true });
+var TextWithAssets = class {
+  text;
+  assets;
+  constructor(text, assets) {
+    this.text = text;
+    this.assets = assets;
+  }
+  toString() {
+    return this.text;
+  }
+  toJSON() {
+    return this.text;
+  }
+};
+Object.defineProperty(TextWithAssets.prototype, TEXT_WITH_ASSETS, { value: true });
+var textWithAssets = (text, values) => {
+  const interpolated = /* @__PURE__ */ new Map;
+  collectAssets(values, interpolated, /* @__PURE__ */ new Set);
+  const assets = /* @__PURE__ */ new Map;
+  for (const [reference] of text.matchAll(REFERENCE)) {
+    const asset = interpolated.get(reference);
+    if (asset !== undefined)
+      assets.set(reference, asset);
+  }
+  return new TextWithAssets(text, [...assets.values()]);
+};
+var withAssets = Object.assign((strings, ...values) => textWithAssets(strings.reduce((joined, piece, i) => joined + String(values[i - 1]) + piece), values), { join: (values, separator) => textWithAssets(values.join(separator), values) });
+var collectAssets = (value, found, visited) => {
+  if (typeof value !== "object" || value === null || visited.has(value))
+    return;
+  visited.add(value);
+  if (isImage(value))
+    found.set(String(value), value);
+  else if (isTextWithAssets(value))
+    for (const asset of value.assets)
+      found.set(String(asset), asset);
+  else
+    for (const item of Object.values(value))
+      collectAssets(item, found, visited);
+};
+var serializeRequest = (payload, assets = {}) => {
+  const names = new Map(Object.entries(assets).map(([name, asset]) => [asset, name]));
+  const known = new Map(Object.values(assets).map((asset) => [String(asset), asset]));
+  const json = JSON.stringify(payload, function(key, value) {
+    if (typeof value === "number" && !Number.isFinite(value))
+      return String(value);
+    const original = this[key];
+    if (typeof original !== "object" || original === null)
+      return value;
+    if (isImage(original)) {
+      const name = names.get(original);
+      if (name !== undefined)
+        return name;
+      known.set(String(original), original);
+    } else if (isTextWithAssets(original)) {
+      let text = original.text;
+      for (const asset of original.assets) {
+        const name = names.get(asset);
+        if (name === undefined)
+          known.set(String(asset), asset);
+        else
+          text = text.replaceAll(String(asset), name);
+      }
+      return text;
+    }
+    return value;
+  });
+  const unreferenced = Object.keys(assets).filter((name) => !json.includes(JSON.stringify(name).slice(1, -1)));
+  if (unreferenced.length > 0)
+    throw new TypeSafeError(`Assets not referenced in the request: ${unreferenced.join(", ")}. Write each name in \`assets\` into \`state\`, question instructions, or criteria.`);
+  const sent = new Map(Object.entries(assets));
+  const missing = /* @__PURE__ */ new Set;
+  for (const [reference] of json.matchAll(REFERENCE)) {
+    if (sent.has(reference))
+      continue;
+    const asset = known.get(reference);
+    if (asset === undefined)
+      missing.add(reference);
+    else
+      sent.set(reference, asset);
+  }
+  if (missing.size > 0)
+    throw new TypeSafeError(`Image references without an attached image: ${[...missing].join(", ")}. Tag template literals that interpolate images with \`withAssets\`.`);
+  return {
+    json,
+    assets: sent.size === 0 ? undefined : Object.fromEntries(sent)
+  };
+};
+var MultipartBody = class {
+  payload;
+  contentType;
+  content;
+  constructor(payload, parts) {
+    const boundary = randomHex();
+    const chunks = [];
+    for (const { name, contentType, content, filename } of [{
+      name: "request",
+      contentType: "application/json",
+      content: JSON.stringify(payload)
+    }, ...parts]) {
+      const disposition = filename === undefined ? `name="${name}"` : `name="${name}"; filename="${filename}"`;
+      chunks.push(`--${boundary}\r
+Content-Disposition: form-data; ${disposition}\r
+`, `Content-Type: ${contentType}\r
+\r
+`, content, `\r
+`);
+    }
+    chunks.push(`--${boundary}--\r
+`);
+    this.payload = payload;
+    this.contentType = `multipart/form-data; boundary=${boundary}`;
+    this.content = new Blob(chunks);
+  }
+};
+var readImage = async (alias, { data }) => {
+  if (!(data instanceof Blob))
+    return data;
+  try {
+    return new Uint8Array(await data.arrayBuffer());
+  } catch (err) {
+    throw new TypeSafeError(`Asset "${alias}" could not be read: ${err.message}`, { cause: err });
+  }
+};
+var unshared = (bytes) => bytes.buffer instanceof ArrayBuffer ? bytes : bytes.slice();
+var copyAssetBytes = (assets) => Object.fromEntries(Object.entries(assets).map(([alias, asset]) => [alias, asset.data instanceof Uint8Array ? new Image(asset.data.slice()) : asset]));
+var encodeAssets = async (payload, assets) => {
+  const read = await Promise.all(Object.entries(assets).map(async ([alias, asset]) => [
+    alias,
+    asset,
+    await readImage(alias, asset)
+  ]));
+  const parts = [];
+  const entries = [];
+  for (const [alias, { type }, data] of read) {
+    const name = `asset-${parts.length}`;
+    parts.push({
+      name,
+      contentType: contentTypeOf(data),
+      content: unshared(data),
+      filename: name
+    });
+    entries.push([alias, {
+      type,
+      part: name
+    }]);
+  }
+  return new MultipartBody({
+    ...payload,
+    assets: Object.fromEntries(entries)
+  }, parts);
+};
+var g$1 = globalThis;
+var zlib = () => {
+  try {
+    return g$1.process?.getBuiltinModule?.("node:zlib");
+  } catch {
+    return;
+  }
+};
+var hasZstd = () => typeof zlib()?.zstdCompress === "function";
+var resolveCompression = (compression) => {
+  if (compression === undefined)
+    return hasZstd() ? "zstd" : false;
+  if (compression === false)
+    return false;
+  if (compression === "zstd") {
+    if (!hasZstd())
+      throw new TypeSafeError("zstd compression requires Node.js 22.15 or newer. Pass `compression: false` instead.");
+    return compression;
+  }
+  throw new TypeSafeError(`\`compression\` must be "zstd" or false, got ${JSON.stringify(compression)}.`);
+};
+var zstd = async (body) => {
+  const data = new Uint8Array(await body.arrayBuffer());
+  const compressed = await new Promise((resolve, reject) => {
+    zlib()?.zstdCompress?.(data, (err, result) => err ? reject(err) : resolve(result));
+  });
+  return new Uint8Array(compressed);
+};
+var byteLength = (body) => typeof body === "string" ? new TextEncoder().encode(body).byteLength : body.size;
+var compressBody = (body) => zstd(typeof body === "string" ? new Blob([body]) : body);
+var ENV = {
+  apiKey: "TYPESAFE_API_KEY",
+  baseURL: "TYPESAFE_BASE_URL",
+  defaultModel: "TYPESAFE_DEFAULT_MODEL",
+  logLevel: "TYPESAFE_LOG_LEVEL"
+};
+var readEnv = (name) => {
+  if (typeof process === "undefined" || !process.env)
+    return;
+  return process.env[name]?.trim() || undefined;
+};
+var fromCodeOrEnv = (fromCode, envVar) => fromCode ?? readEnv(envVar);
 var LOG_LEVELS = [
   "debug",
   "info",
@@ -640,10 +888,27 @@ var redact = (name, value) => {
   return value;
 };
 var redactHeaders = (headers) => Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, redact(name, value)]));
+var isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var validateChoice = (name, { criteria }) => {
+  if (!isObject(criteria))
+    throw new TypeSafeError(`Choice question "${name}" has criteria that are not a map; choice criteria must be a map of labels to descriptions.`);
+  if (Object.keys(criteria).length === 0)
+    throw new TypeSafeError(`Choice question "${name}" has no criteria; at least one choice is required.`);
+};
+var validateNoul = (name, { instructions, criteria }) => {
+  if (criteria != null && !isObject(criteria))
+    throw new TypeSafeError(`Noul question "${name}" criteria must be an object.`);
+  if (instructions == null && !Object.values(criteria ?? {}).some((value) => value != null))
+    throw new TypeSafeError(`Noul question "${name}" has neither instructions nor criteria; at least one is required.`);
+};
 var validateQuestions = (questions) => {
   if (Object.keys(questions).length === 0)
     throw new TypeSafeError("At least one question is required.");
   for (const [name, question] of Object.entries(questions)) {
+    if (question.type === "choice")
+      validateChoice(name, question);
+    if (question.type === "noul")
+      validateNoul(name, question);
     if (question.type !== "score")
       continue;
     if (!Array.isArray(question.criteria))
@@ -684,7 +949,7 @@ var describeRuntime = () => {
     return "browser";
   return "unknown";
 };
-var VERSION = "0.6.0";
+var VERSION = "0.7.0";
 var missingApiKey = () => {
   throw new TypeSafeError(`No API key was provided. Pass \`apiKey\` to the TypeSafeClient constructor or set the ${ENV.apiKey} environment variable.`);
 };
@@ -765,9 +1030,10 @@ var bufferResponse = async (response, signal) => {
   const reader = response.clone().body?.getReader();
   if (!reader)
     return;
+  const original = response.body?.getReader();
   const cancel = () => {
     reader.cancel(signal.reason).catch(() => {});
-    response.body?.cancel(signal.reason).catch(() => {});
+    original?.cancel(signal.reason).catch(() => {});
   };
   signal.addEventListener("abort", cancel, { once: true });
   try {
@@ -780,9 +1046,31 @@ var bufferResponse = async (response, signal) => {
   } finally {
     signal.removeEventListener("abort", cancel);
     reader.releaseLock();
+    original?.releaseLock();
   }
 };
+var untilAborted = (start, signal) => {
+  if (signal === undefined)
+    return start();
+  return new Promise((resolve, reject) => {
+    if (signal.aborted)
+      return reject(signal.reason);
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    start().then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    }, (err) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(err);
+    });
+  });
+};
 var RUNTIME = describeRuntime();
+var rejectedAPIPromise = (err) => {
+  const response = Promise.reject(err);
+  return new APIPromise(response, () => response);
+};
 var TypeSafeClient = class {
   #apiKey;
   baseURL;
@@ -792,6 +1080,7 @@ var TypeSafeClient = class {
   retry;
   timeout;
   defaultHeaders;
+  compression;
   fetch;
   models;
   #requestCount = 0;
@@ -806,6 +1095,7 @@ var TypeSafeClient = class {
     this.retry = resolveRetryPolicy(DEFAULT_RETRY_POLICY, config.retry);
     this.timeout = assertPositiveMs("timeout", config.timeout ?? 1e4);
     this.defaultHeaders = { ...config.defaultHeaders };
+    this.compression = resolveCompression(config.compression);
     if (config.fetch === undefined && typeof globalThis.fetch !== "function")
       missingFetch();
     this.fetch = config.fetch ?? defaultFetch;
@@ -816,26 +1106,42 @@ var TypeSafeClient = class {
     this.models = new Models(transport);
   }
   systemOne(request, options = {}) {
-    validateQuestions(request.questions);
-    const body = {
-      ...request,
-      model: request.model ?? this.defaultModel
-    };
+    let body;
+    try {
+      if (request.state == null)
+        throw new TypeSafeError("State is required.");
+      validateQuestions(request.questions);
+      const { assets, ...rest } = request;
+      const { json, assets: sent } = serializeRequest({
+        ...rest,
+        model: request.model ?? this.defaultModel
+      }, assets);
+      const payload = JSON.parse(json);
+      const copied = sent === undefined ? undefined : copyAssetBytes(sent);
+      body = copied === undefined ? payload : () => encodeAssets(payload, copied);
+    } catch (err) {
+      return rejectedAPIPromise(err);
+    }
     return this.#request("POST", "/v1/systemone", {
       ...options,
       body
     });
   }
   #request(method, path, options = {}) {
-    const resolved = {
-      method,
-      path,
-      body: options.body,
-      headers: mergeHeaders(this.defaultHeaders, options.headers ?? {}),
-      signal: options.signal,
-      timeout: options.timeout === undefined ? this.timeout : assertPositiveMs("timeout", options.timeout),
-      retry: resolveRetryPolicy(this.retry, options.retry)
-    };
+    let resolved;
+    try {
+      resolved = {
+        method,
+        path,
+        body: options.body,
+        headers: mergeHeaders(this.defaultHeaders, options.headers ?? {}),
+        signal: options.signal,
+        timeout: options.timeout === undefined ? this.timeout : assertPositiveMs("timeout", options.timeout),
+        retry: resolveRetryPolicy(this.retry, options.retry)
+      };
+    } catch (err) {
+      return rejectedAPIPromise(err);
+    }
     const tag = `#${++this.#requestCount} ${method} ${path}`;
     return new APIPromise(this.fetchWithRetries(tag, resolved), async (res) => {
       const parsed = await parseBody(res);
@@ -845,16 +1151,40 @@ var TypeSafeClient = class {
   }
   async fetchWithRetries(tag, req) {
     const url = `${this.baseURL}${req.path}`;
+    let resolved = req.body;
+    if (typeof resolved === "function")
+      try {
+        resolved = await untilAborted(resolved, req.signal);
+      } catch (err) {
+        if (!req.signal?.aborted)
+          throw err;
+        this.logger.info(`${tag} aborted by caller while reading assets`);
+        throw new APIUserAbortError(undefined, { cause: err });
+      }
+    const multipart = resolved instanceof MultipartBody ? resolved : undefined;
+    const payload = multipart === undefined ? resolved : multipart.payload;
+    const encoded = multipart?.content ?? (payload === undefined ? undefined : JSON.stringify(payload));
+    const encoding = encoded === undefined || byteLength(encoded) < 1024 ? false : this.compression;
+    let body = encoded;
+    if (encoded !== undefined && encoding !== false)
+      try {
+        body = await untilAborted(() => compressBody(encoded), req.signal);
+      } catch (err) {
+        if (!req.signal?.aborted)
+          throw err;
+        this.logger.info(`${tag} aborted by caller while compressing the body`);
+        throw new APIUserAbortError(undefined, { cause: err });
+      }
     const headers = mergeHeaders(req.headers, {
       Authorization: `Bearer ${this.#apiKey}`,
       Accept: "application/json",
       "User-Agent": `typesafe-sdk/${VERSION}`,
       "X-TypeSafe-SDK": `typesafe-sdk/${VERSION}`,
       "X-TypeSafe-Runtime": RUNTIME,
-      "Content-Type": req.body === undefined ? undefined : "application/json",
+      "Content-Type": multipart?.contentType ?? (body === undefined ? undefined : "application/json"),
+      "Content-Encoding": encoding === false ? undefined : encoding,
       "X-TypeSafe-Retry-Count": undefined
     });
-    const body = req.body === undefined ? undefined : JSON.stringify(req.body);
     for (let attempt = 0;; attempt++) {
       const retriesLeft = req.retry.maxRetries - attempt;
       const attemptHeaders = attempt === 0 ? headers : {
@@ -863,7 +1193,7 @@ var TypeSafeClient = class {
       };
       this.logger.debug(`${tag} -> ${url}`, {
         headers: redactHeaders(attemptHeaders),
-        body: req.body
+        body: payload
       });
       const started = Date.now();
       let res;
@@ -969,7 +1299,7 @@ function decisions(value, questions, bindings) {
   insist(response.model === MODEL, "unexpected response model");
   const answers = object(response.answers), usage = object(response.usage);
   for (const field of ["input_tokens", "output_tokens"])
-    insist(Number.isSafeInteger(usage[field]) && usage[field] >= 0, "invalid usage");
+    insist(usage[field] === null || Number.isSafeInteger(usage[field]) && usage[field] >= 0, "invalid usage");
   insist(Object.keys(answers).length === Object.keys(questions).length && Object.keys(questions).every((id) => Object.hasOwn(answers, id)), "answer IDs differ from request");
   const results = Object.entries(questions).map(([id, q]) => {
     const answer = object(answers[id]), binding = bindings[id];
@@ -1026,7 +1356,12 @@ function boundedFetch(fetcher, onDispatch, maxBytes = LIMITS.response) {
         insist(bytes <= maxBytes, "provider response exceeds limit");
         chunks.push(part.value);
       }
-      return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers });
+      const body = new ReadableStream({ start(c) {
+        for (const chunk of chunks)
+          c.enqueue(chunk);
+        c.close();
+      } });
+      return new Response(body, { status: response.status, statusText: response.statusText, headers });
     } finally {
       init.signal?.removeEventListener("abort", cancel);
       reader.cancel().catch(() => {});
@@ -1063,6 +1398,7 @@ async function ask(m, options) {
             defaultModel: MODEL,
             logLevel: "off",
             timeout: deadline,
+            compression: false,
             retry: { maxRetries: 1, httpStatuses: new Set([429, 529]), apiConnectionError: false, apiTimeoutError: false, respectRetryAfter: true, maxRetryAfterMs: LIMITS.deadline + 1, backoffInitialMs: 250, backoffMaxMs: 250, backoffJitter: 0 },
             fetch: async (input, init) => {
               try {
@@ -1078,8 +1414,9 @@ async function ask(m, options) {
           const validated = decisions(response, request.questions, bindings);
           row.decisions = validated.decisions;
           row.usage = validated.usage;
-          row.estimatedCostUsd = validated.usage.input_tokens * 0.042 / 1e6;
-          row.usageUnknown = attempts > 1;
+          const { input_tokens, output_tokens } = validated.usage;
+          row.estimatedCostUsd = input_tokens === null ? null : input_tokens * 0.042 / 1e6;
+          row.usageUnknown = attempts > 1 || input_tokens === null || output_tokens === null;
         } finally {
           clearTimeout(timer);
         }
