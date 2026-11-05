@@ -288,6 +288,21 @@ pub struct LinkInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub via: Option<String>,
+    /// `true` when a bare `[[stem]]` target names more than one vault file
+    /// (or an alias two notes both declare) and so resolves to none of them
+    /// (iter-319, DEC-374). Implies `path: None` and a non-empty
+    /// `candidates`: the remedy is for the author to disambiguate
+    /// (`[[sub/stem]]`), not to create a note or fix a typo. Still counted as
+    /// a broken link by `find --broken-links`, `summary.links.broken` and
+    /// HYALO006 — `path` stays `null`. Skipped from JSON when `false`, so no
+    /// other link's shape changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ambiguous: bool,
+    /// The vault files an `ambiguous` target matched, sorted and
+    /// vault-relative — identical on a disk scan and under `--index`. Skipped
+    /// from JSON when empty, which is every link that is not ambiguous.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
 }
 
 /// Value of [`LinkInfo::via`] for a target resolved through a frontmatter

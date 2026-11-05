@@ -2,7 +2,7 @@
 type: backlog
 title: "ambiguous + candidates as a first-class field on every link record"
 date: 2026-09-05
-status: planned
+status: completed
 priority: medium
 origin: "iter-277 GRAPH-4 (G3 of the post-batch-271-274 dogfood report), deferred 2026-09-05"
 ---
@@ -63,12 +63,12 @@ which is the problem this item exists to remove.
 
 ## Acceptance criteria
 
-- [ ] `find --fields links` reports `ambiguous` and `candidates` on an ambiguous target, and
+- [x] `find --fields links` reports `ambiguous` and `candidates` on an ambiguous target, and
       neither key on any other link.
-- [ ] `mv`'s `skipped_ambiguous` entries and HYALO006's "matches N candidates" message are
+- [x] `mv`'s `skipped_ambiguous` entries and HYALO006's "matches N candidates" message are
       derived from the same computation, with a test that pins all three against one vault.
-- [ ] `--index` and disk scans report identical `candidates` (sorted, vault-relative).
-- [ ] Text mode prints `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`.
+- [x] `--index` and disk scans report identical `candidates` (sorted, vault-relative).
+- [x] Text mode prints `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`.
 
 ## Plan reconciliation — iteration 287 (2026-09-07)
 
@@ -78,3 +78,12 @@ optional ambiguity fields, preserve their omission semantics in its test-only
 extend the same-binary API contract fixtures. Rebuild and sync the generated Pi
 companions and run both freshness gates. The shared-computation, text-output,
 and index-parity acceptance criteria above remain required.
+
+## Outcome — iteration 319 (2026-11-05)
+
+Delivered in [[iterations/iteration-319-link-ambiguity-field]] (DEC-374). The shared
+computation is `CaseInsensitiveIndex::ambiguity` / `stem_ambiguity` in `case_index.rs`; the
+four private copies are gone and `find`, HYALO006, `mv`, `links fix` and the catalog behind
+`backlinks` read it. No snapshot bump. The field is set only on an unresolved wikilink, so
+`path` stays `null` and the broken-link counts do not move. `mv` stays stricter than a read
+(a vault-root note wins a bare stem on a read, not in a move).

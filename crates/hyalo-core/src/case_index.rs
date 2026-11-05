@@ -435,6 +435,117 @@ impl CaseInsensitiveIndex {
         self.stem_map.get(key.as_ref()).map_or(&[], Vec::as_slice)
     }
 
+    /// The files sharing `stem` (an already-normalised bare stem, see
+    /// [`bare_stem`]) when two or more do — `None` for a unique, absent or
+    /// empty stem. Borrowed from the stem map, so the common non-ambiguous
+    /// case allocates nothing.
+    ///
+    /// This is the **one** definition of "this stem is ambiguous" (iter-319,
+    /// DEC-374). `mv`'s guards, the catalog's backlink attribution and
+    /// [`Self::ambiguity`] all ask it.
+    #[must_use]
+    pub fn stem_ambiguity(&self, stem: &str) -> Option<&[String]> {
+        let by_stem = self.lookup_stem_all(stem);
+        (by_stem.len() > 1).then_some(by_stem)
+    }
+
+    /// The files a bare, normalised `stem` is ambiguous between on the
+    /// *reading* side: two files sharing the stem, or — when no file carries it
+    /// at all — two notes declaring it as a frontmatter alias (DEC-308: an
+    /// alias claimed twice is ambiguous in either `[links] aliases` mode, and
+    /// an ambiguous stem is never tie-broken by an alias).
+    #[must_use]
+    pub fn ambiguity(&self, stem: &str) -> Option<&[String]> {
+        if let Some(by_stem) = self.stem_ambiguity(stem) {
+            return Some(by_stem);
+        }
+        if !self.lookup_stem_all(stem).is_empty() {
+            return None;
+        }
+        let by_alias = self.lookup_alias_all(stem);
+        (by_alias.len() > 1).then_some(by_alias)
+    }
+
+    /// The files an authored link `target` is ambiguous between on the
+    /// *reading* side (stems and doubly claimed aliases), borrowed from the
+    /// index, or `None` when it is not a bare, ambiguous target.
+    ///
+    /// A `?` is ambiguous in the file's own name too (`What?.md`), so the
+    /// literal stem is tried before the one with a `?query` stripped off.
+    #[must_use]
+    pub fn target_ambiguity(&self, target: &str) -> Option<&[String]> {
+        self.target_ambiguity_with(target, Self::ambiguity)
+    }
+
+    /// [`Self::target_ambiguity`] for *filename* stems only — what `mv` must
+    /// refuse to rewrite. A moved file's links are never resolved through an
+    /// alias, so an alias claimed twice is not its business.
+    #[must_use]
+    pub fn target_stem_ambiguity(&self, target: &str) -> Option<&[String]> {
+        self.target_ambiguity_with(target, Self::stem_ambiguity)
+    }
+
+    /// [`Self::target_stem_ambiguity`] without the `?query` fallback: ambiguous
+    /// only when the authored text, `?` included, is itself the shared stem.
+    /// `mv` rewrites only such a link under `--allow-ambiguous`, because
+    /// rewriting a `[[note?]]` would drop its `?`.
+    #[must_use]
+    pub fn literal_target_stem_ambiguity(&self, target: &str) -> Option<&[String]> {
+        let stem = bare_stem_with(target, false)?;
+        self.stem_ambiguity(&stem)
+    }
+
+    /// The bare stem [`Self::target_ambiguity`] matched for `target`, as the
+    /// graph keys an ambiguous link by it (`[[my%20note]]` → `my note`), so
+    /// `mv` finds every spelling through the moved file's basename stem.
+    #[must_use]
+    pub fn ambiguous_stem_key(&self, target: &str) -> Option<String> {
+        let literal = bare_stem_with(target, false)?;
+        if self.ambiguity(&literal).is_some() {
+            return Some(literal.into_owned());
+        }
+        if !literal.contains('?') {
+            return None;
+        }
+        let stripped = bare_stem(target)?;
+        self.ambiguity(&stripped).map(|_| stripped.into_owned())
+    }
+
+    fn target_ambiguity_with(
+        &self,
+        target: &str,
+        probe: for<'a> fn(&'a Self, &str) -> Option<&'a [String]>,
+    ) -> Option<&[String]> {
+        let literal = bare_stem_with(target, false)?;
+        if let Some(found) = probe(self, &literal) {
+            return Some(found);
+        }
+        if !literal.contains('?') {
+            return None;
+        }
+        let stripped = bare_stem(target)?;
+        probe(self, &stripped)
+    }
+
+    /// Sorted, vault-relative candidates an authored link `target` is
+    /// ambiguous between (reading side — stems and doubly claimed aliases), or
+    /// `None` when it is not a bare, ambiguous target. Path-form targets assert
+    /// a location and are never ambiguous.
+    ///
+    /// `find --fields links`' `ambiguous`/`candidates`, HYALO006's "matches N
+    /// candidates" and `links fix`'s `ambiguous_links` all read this.
+    #[must_use]
+    pub fn ambiguous_candidates(&self, target: &str) -> Option<Vec<String>> {
+        self.target_ambiguity(target).map(sorted_candidates)
+    }
+
+    /// Like [`Self::ambiguous_candidates`] but for *filename* stems only —
+    /// what `mv` must refuse to rewrite.
+    #[must_use]
+    pub fn ambiguous_stem_candidates(&self, target: &str) -> Option<Vec<String>> {
+        self.target_stem_ambiguity(target).map(sorted_candidates)
+    }
+
     /// Returns `true` if the index contains no entries.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
@@ -444,6 +555,57 @@ impl CaseInsensitiveIndex {
     pub fn len(&self) -> usize {
         self.map.len()
     }
+}
+
+/// The bare stem an authored link `target` names: trimmed, stripped of its
+/// `#fragment`/`?query` and of leading `./` segments (DEC-310: `[[./note]]` is
+/// `[[note]]`), percent-decoded and stripped of a `.md` suffix. `None` for an
+/// empty target and for a path-form one (it still contains a separator), which
+/// names a location rather than a stem. Borrows when nothing needs rewriting.
+#[must_use]
+pub fn bare_stem(target: &str) -> Option<std::borrow::Cow<'_, str>> {
+    bare_stem_with(target, true)
+}
+
+/// [`bare_stem`], optionally keeping a `?query` in the stem (a file may be
+/// called `What?.md`).
+fn bare_stem_with(target: &str, strip_query: bool) -> Option<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+    let target = target.trim();
+    let end = if strip_query {
+        target.find(['#', '?'])
+    } else {
+        target.find('#')
+    };
+    let mut head = end.map_or(target, |pos| &target[..pos]).trim_end();
+    while let Some(rest) = head.strip_prefix("./") {
+        head = rest;
+    }
+    let mut head: Cow<'_, str> =
+        crate::discovery::percent_decode_path(head).map_or(Cow::Borrowed(head), Cow::Owned);
+    if head.contains(['/', '\\']) {
+        return None;
+    }
+    let has_md = head.len() >= 3 && head.as_bytes()[head.len() - 3..].eq_ignore_ascii_case(b".md");
+    let stem_len = if has_md { head.len() - 3 } else { head.len() };
+    if stem_len == 0 {
+        return None;
+    }
+    if has_md {
+        match &mut head {
+            Cow::Borrowed(s) => *s = &s[..stem_len],
+            Cow::Owned(s) => s.truncate(stem_len),
+        }
+    }
+    Some(head)
+}
+
+/// Candidate paths in the one order every report uses: sorted, vault-relative.
+#[must_use]
+pub fn sorted_candidates(paths: &[String]) -> Vec<String> {
+    let mut sorted = paths.to_vec();
+    sorted.sort();
+    sorted
 }
 
 /// Filename prefix used by the write-based fallback probe.
@@ -1510,5 +1672,136 @@ mod tests {
         assert!(!projected.contains_path("Notes/Foo.md"));
         assert!(!projected.contains_path("Ignored.md"));
         assert!(idx.contains_path("Notes/Foo.md"));
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-319 (DEC-374): the one definition of "this bare name is ambiguous"
+    // -----------------------------------------------------------------------
+
+    fn twins() -> CaseInsensitiveIndex {
+        let mut idx = CaseInsensitiveIndex::new();
+        for path in ["b/note.md", "a/note.md", "solo.md", "c/one.md", "c/two.md"] {
+            idx.insert(path);
+        }
+        idx.insert_aliases("c/one.md", ["Dup", "Lone"]);
+        idx.insert_aliases("c/two.md", ["dup"]);
+        idx
+    }
+
+    #[test]
+    fn bare_stem_names_only_a_bare_target() {
+        assert_eq!(bare_stem("note").as_deref(), Some("note"));
+        assert_eq!(bare_stem("  note.MD ").as_deref(), Some("note"));
+        assert_eq!(bare_stem("note#Heading").as_deref(), Some("note"));
+        assert_eq!(bare_stem("a%20b").as_deref(), Some("a b"));
+        assert_eq!(bare_stem("sub/note"), None, "a path asserts a location");
+        assert_eq!(bare_stem("sub\\note"), None);
+        assert_eq!(bare_stem(""), None);
+        assert_eq!(bare_stem(".md"), None);
+        assert_eq!(bare_stem("./note").as_deref(), Some("note"));
+        assert_eq!(bare_stem("././note?x").as_deref(), Some("note"));
+        assert_eq!(bare_stem("./sub/note"), None);
+        assert_eq!(bare_stem("../note"), None);
+        assert_eq!(bare_stem("./"), None);
+        assert!(
+            matches!(bare_stem("plain"), Some(std::borrow::Cow::Borrowed(_))),
+            "the common case must not allocate"
+        );
+    }
+
+    #[test]
+    fn a_question_mark_is_tried_in_the_stem_before_it_is_stripped() {
+        let mut idx = CaseInsensitiveIndex::new();
+        for path in ["a/What?.md", "b/What?.md", "a/note.md", "b/note.md"] {
+            idx.insert(path);
+        }
+        let want = Some(vec!["a/What?.md".to_owned(), "b/What?.md".to_owned()]);
+        assert_eq!(idx.ambiguous_candidates("What?"), want);
+        assert_eq!(
+            idx.literal_target_stem_ambiguity("What?").map(<[_]>::len),
+            Some(2)
+        );
+        // Stripped form: `note?x` names the twins only through the fallback.
+        assert_eq!(idx.ambiguous_candidates("note?x").map(|c| c.len()), Some(2));
+        assert!(idx.literal_target_stem_ambiguity("note?x").is_none());
+        assert_eq!(
+            idx.ambiguous_stem_candidates("./note").map(|c| c.len()),
+            Some(2)
+        );
+        assert_eq!(idx.ambiguous_candidates("sub/note"), None);
+    }
+
+    #[test]
+    fn a_shared_stem_is_ambiguous_with_sorted_vault_relative_candidates() {
+        let idx = twins();
+        // `b/` was inserted first, yet the report is sorted.
+        assert_eq!(
+            idx.ambiguous_candidates("Note"),
+            Some(vec!["a/note.md".to_owned(), "b/note.md".to_owned()])
+        );
+        assert_eq!(
+            idx.ambiguous_candidates("note.md#Heading"),
+            idx.ambiguous_candidates("note")
+        );
+        assert_eq!(
+            idx.ambiguous_stem_candidates("note"),
+            idx.ambiguous_candidates("note")
+        );
+        assert_eq!(idx.stem_ambiguity("note").map(<[String]>::len), Some(2));
+    }
+
+    #[test]
+    fn a_unique_absent_or_path_form_target_is_not_ambiguous() {
+        let idx = twins();
+        for target in ["solo", "missing", "a/note", "", "Lone"] {
+            assert_eq!(idx.ambiguous_candidates(target), None, "{target}");
+        }
+    }
+
+    #[test]
+    fn a_doubly_claimed_alias_is_ambiguous_for_reads_but_not_for_moves() {
+        let idx = twins();
+        assert_eq!(
+            idx.ambiguous_candidates("DUP"),
+            Some(vec!["c/one.md".to_owned(), "c/two.md".to_owned()])
+        );
+        // `mv` never resolves a link through an alias, so an alias two notes
+        // claim is not a reason to refuse a move.
+        assert_eq!(idx.ambiguous_stem_candidates("dup"), None);
+    }
+
+    #[test]
+    fn an_ambiguous_stem_is_never_tie_broken_by_an_alias() {
+        let mut idx = twins();
+        // `note` is already two files; an alias on a third must not change it.
+        idx.insert_aliases("solo.md", ["note"]);
+        assert_eq!(
+            idx.ambiguous_candidates("note"),
+            Some(vec!["a/note.md".to_owned(), "b/note.md".to_owned()])
+        );
+        // A filename a unique file carries beats an alias two notes claim.
+        idx.insert_aliases("c/one.md", ["solo"]);
+        idx.insert_aliases("c/two.md", ["solo"]);
+        assert_eq!(idx.ambiguous_candidates("solo"), None);
+    }
+
+    #[test]
+    fn ambiguity_does_not_depend_on_the_aliases_setting() {
+        for enabled in [false, true] {
+            let mut idx = twins();
+            idx.set_aliases_enabled(enabled);
+            assert!(
+                idx.ambiguous_candidates("note").is_some(),
+                "aliases={enabled}"
+            );
+            assert!(
+                idx.ambiguous_candidates("dup").is_some(),
+                "aliases={enabled}"
+            );
+            assert!(
+                idx.ambiguous_candidates("lone").is_none(),
+                "aliases={enabled}"
+            );
+        }
     }
 }

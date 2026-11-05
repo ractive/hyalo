@@ -61,7 +61,7 @@ pub(super) const TAG_SUMMARY_ENTRY_FILTER: &str =
 ///   `external` link gets none of them, because it names nothing to resolve;
 /// - ` (via alias)` when a frontmatter `aliases:` entry resolved it (iter-272);
 /// - the DEC-268 heading suggestion, then a `[label]` suffix.
-pub(super) const LINK_INFO_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)\(if .label then " [\(.label)]" else "" end)""##;
+pub(super) const LINK_INFO_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" elif .ambiguous then " (ambiguous: \(.candidates | join(", ")))" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)\(if .label then " [\(.label)]" else "" end)""##;
 
 /// `TaskCount`: `{done, total}`
 pub(super) const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;

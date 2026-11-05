@@ -30,6 +30,7 @@ import {
   type Envelope,
   type FileObject,
   type HyaloTransport,
+  type LinkInfo,
   type ReadResult,
   type TagSummaryEntry,
   type TermEntry,
@@ -498,6 +499,55 @@ describe("lint refusals", () => {
       .rejects.toMatchObject({ name: "HyaloError", envelope: { error: "file not found" } });
     await expect(lint("note.md", { transport: async () => ({ code: 1, stdout: "note.md:1: finding\n", stderr: "" }) }))
       .resolves.toMatchObject({ code: 1 });
+  });
+});
+
+describe("link ambiguity (DEC-374)", () => {
+  let ambiguity = "";
+  beforeAll(async () => {
+    ambiguity = path.join(scratch, "ambiguity vault");
+    await mkdir(path.join(ambiguity, "a"), { recursive: true });
+    await mkdir(path.join(ambiguity, "b"), { recursive: true });
+    await writeFile(path.join(ambiguity, "a/dup.md"), "# A\n");
+    await writeFile(path.join(ambiguity, "b/dup.md"), "# B\n");
+    await writeFile(path.join(ambiguity, "solo.md"), "# Solo\n");
+    await writeFile(path.join(ambiguity, "one.md"), "---\naliases: [Twin]\n---\n# One\n");
+    await writeFile(path.join(ambiguity, "two.md"), "---\naliases: [Twin]\n---\n# Two\n");
+    await writeFile(
+      path.join(ambiguity, "src.md"),
+      "# Src\n\n[[dup]] [[nowhere]] [[solo]] [[Twin]] [md](solo.md) [web](https://example.com)\n",
+    );
+  });
+  const inAmbiguity = () => ({ binaryPath: binary, cwd: ambiguity }) as const;
+  const linksOf = async (extra: { index?: boolean } = {}): Promise<LinkInfo[]> => {
+    const response = await find({ file: ["src.md"], fields: ["links"], ...extra, ...inAmbiguity() });
+    const links = response.results[0]?.links;
+    if (!links) throw new Error("find returned no links");
+    return links;
+  };
+
+  it("reports ambiguous and sorted candidates only on an ambiguous target", async () => {
+    expectTypeOf<LinkInfo["ambiguous"]>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<LinkInfo["candidates"]>().toEqualTypeOf<string[] | undefined>();
+    const links = await linksOf();
+    const dup = links.find((link) => link.target === "dup");
+    expect(dup).toMatchObject({ path: null, ambiguous: true, candidates: ["a/dup.md", "b/dup.md"] });
+    const twin = links.find((link) => link.target === "Twin");
+    expect(twin).toMatchObject({ path: null, ambiguous: true, candidates: ["one.md", "two.md"] });
+    // Omission, not `false` / `[]`: every other link keeps its existing shape.
+    for (const target of ["nowhere", "solo", "solo.md", "https://example.com"]) {
+      const link = links.find((candidate) => candidate.target === target);
+      expect(link, target).toBeDefined();
+      expect("ambiguous" in (link ?? {}), target).toBe(false);
+      expect("candidates" in (link ?? {}), target).toBe(false);
+    }
+    expect(links.find((link) => link.target === "nowhere")?.path).toBeNull();
+  });
+
+  it("reports the same candidates from a snapshot index as from a disk scan", async () => {
+    const disk = await linksOf();
+    await raw(["create-index", "--format=json", "--no-hints"], inAmbiguity());
+    expect(await linksOf({ index: true })).toEqual(disk);
   });
 });
 

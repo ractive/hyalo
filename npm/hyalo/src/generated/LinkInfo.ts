@@ -93,4 +93,21 @@ out_of_vault?: boolean,
  * `wikilink`: an alias changes *what the target names*, not the syntax it
  * was written in.
  */
-via?: string, };
+via?: string,
+/**
+ * `true` when a bare `[[stem]]` target names more than one vault file
+ * (or an alias two notes both declare) and so resolves to none of them
+ * (iter-319, DEC-374). Implies `path: None` and a non-empty
+ * `candidates`: the remedy is for the author to disambiguate
+ * (`[[sub/stem]]`), not to create a note or fix a typo. Still counted as
+ * a broken link by `find --broken-links`, `summary.links.broken` and
+ * HYALO006 — `path` stays `null`. Skipped from JSON when `false`, so no
+ * other link's shape changes.
+ */
+ambiguous?: boolean,
+/**
+ * The vault files an `ambiguous` target matched, sorted and
+ * vault-relative — identical on a disk scan and under `--index`. Skipped
+ * from JSON when empty, which is every link that is not ambiguous.
+ */
+candidates?: Array<string>, };

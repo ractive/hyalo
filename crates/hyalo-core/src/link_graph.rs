@@ -631,7 +631,16 @@ fn insert_file_links_with_options(
             Resolution::Resolved(path) => strip_md_extension(&path).to_owned(),
             Resolution::External | Resolution::Attachment(_) => continue,
             Resolution::Missing | Resolution::Ambiguous(_) => {
-                if link.kind == LinkKind::Markdown && !link.target.starts_with('/') {
+                // iter-319 (DEC-374): an ambiguous wikilink is keyed by the
+                // bare stem it is ambiguous on, not its spelling, so `mv`'s
+                // basename-stem probe reaches `[[note?]]`, `[[my%20note]]` and
+                // `[[./note]]` as it does `[[note]]`.
+                let ambiguous_key = (link.kind == LinkKind::Wikilink)
+                    .then(|| case_index.ambiguous_stem_key(&link.target))
+                    .flatten();
+                if let Some(stem) = ambiguous_key {
+                    stem
+                } else if link.kind == LinkKind::Markdown && !link.target.starts_with('/') {
                     normalize_target(&file_links.source, &link.target)
                 } else {
                     strip_site_prefix(link.target.trim(), options.site_prefix)

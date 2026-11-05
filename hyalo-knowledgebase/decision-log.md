@@ -8684,6 +8684,73 @@ entry of every vault. Such a note reads correctly on a disk scan and, under
 covers later Unicode table updates; a change to how an already assigned code
 point tokenizes still needs the bump.
 
+## DEC-374: link ambiguity is one computation on the case index, reported on every link record (2026-11-05)
+
+**Context.** `[[stem]]` naming two files and `[[stem]]` naming none both read
+`path: null` in `find --fields links`. Four places had decided "this bare name
+is ambiguous" on their own — `links fix` (`ambiguous_links`), HYALO006
+("matches N candidates"), three `mv` guards (inbound body links, the moved
+file's own self-links, frontmatter links) plus the identity check, and the
+catalog resolver behind `backlinks` — and only two of them said so. Reporting
+the verdict from `find` alone would have made it a fifth (backlog item
+`link-ambiguity-as-a-first-class-link-field`).
+
+**Decision** (iteration 319).
+- *One definition.* `CaseInsensitiveIndex::ambiguity(stem)` — two or more files
+  share the stem, or, when no file carries it, two or more notes declare it as
+  an alias — and its filename-only sibling `stem_ambiguity` (what `mv` needs: a
+  move never resolves a link through an alias). `ambiguous_candidates(target)`
+  and `ambiguous_stem_candidates(target)` take an authored target, normalise it
+  with `bare_stem` (trim, drop `#fragment`/`?query` and leading `./`
+  segments, percent-decode, drop a `.md` suffix; a path-form target names a
+  location and is never ambiguous; the literal stem, `?` included, is tried
+  before the `?query` is stripped, so `What?.md` twins stay ambiguous) and
+  return the files sorted and vault-relative. `links fix`, `mv`'s inbound
+  guard and the catalog behind `backlinks` normalise through the same
+  function. Under `--allow-ambiguous`, and for the moved file's own
+  frontmatter, `mv` rewrites only a link whose authored text is itself the
+  shared stem, so a `[[note?]]` keeps its `?`. The link graph keys an ambiguous
+  wikilink by that bare stem, so `mv` reaches every spelling of it. The private copies in
+  `link_fix`, `link_rewrite` (four), `mdlint`'s HYALO006 and `discovery` are
+  gone; `catalog::resolve`'s bare-stem branch and `LinkResolver::resolve_stem`
+  call the same function.
+- *The field.* `LinkInfo` gains `ambiguous: true` and `candidates: [...]`, both
+  skipped from JSON when absent, so no other link's shape changes. They are
+  set only for a link that failed to resolve and is a wikilink (body,
+  embed or frontmatter): a markdown destination is a path, so HYALO006 and
+  `links fix` keep calling it broken. Text mode prints
+  `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`.
+- *Still broken.* `path` stays `null`, so `find --broken-links`,
+  `summary.links.broken` and HYALO006 count an ambiguous link exactly as
+  before (DEC-351); the e2e test pins the three counts against one vault. The
+  remedy differs, not the verdict.
+- *Alias rules unchanged.* An alias two notes claim is ambiguous in either
+  `[links] aliases` mode (DEC-308), an ambiguous stem is never tie-broken by an
+  alias (DEC-296), and a unique alias stays unambiguous. The one visible
+  consequence inside `catalog::resolve`: a doubly claimed alias under
+  `aliases = false` is now `Resolution::Ambiguous` rather than `Missing`; every
+  consumer reads `.path()` or treats both alike, so nothing observable moves.
+- *Reads keep the shortest-path rule.* A bare stem with a vault-root note
+  resolves to it, so that link is resolved and carries no ambiguity. `mv`
+  stays stricter — a root winner does not make a multiply declared name safe
+  to rewrite — which is why it asks `stem_ambiguity` unconditionally.
+  `skipped_ambiguous` candidates are now sorted (they were in discovery
+  order); `--allow-ambiguous`, `self: true` and `property` are unchanged.
+
+**No snapshot bump.** Candidates are computed at resolve time from the case
+index that a disk scan builds from the walk and an `--index` read builds from
+the snapshot's note paths, attachments and indexed `aliases:` properties; both
+see the same inventory, and the sort removes the one difference (insertion
+order). An e2e test compares the two. The cost is paid only by a link that
+already failed to resolve — a resolved link allocates nothing extra.
+
+**Rejected.**
+- *Store `candidates` on the snapshot entry.* Would need a format bump and goes
+  stale the moment a note is added, for a verdict that costs one hash lookup.
+- *Derive the field from `catalog::resolve` for every kind.* The catalog also
+  stem-looks-up a bare markdown destination, which would turn today's
+  "broken markdown link" into an ambiguity claim HYALO006 and `links fix`
+  never made; left for a deliberate follow-up.
 *Note 2026-11-05 (DEC-375):* for the release that carries the Unicode 18
 update the sentence "once it changes or after `create-index --force`" no
 longer applies, because the serde-saphyr 2.1 change bumped the snapshot format

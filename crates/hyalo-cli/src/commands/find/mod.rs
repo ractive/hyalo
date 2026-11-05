@@ -1523,7 +1523,26 @@ pub(crate) fn find_prepared(
                         let via = (!link.external
                             && discovery::resolves_via_alias(&link.target, case_index))
                         .then(|| hyalo_core::types::LINK_VIA_ALIAS.to_owned());
+                        // iter-319 (DEC-374): a bare wikilink that resolved to
+                        // nothing may be *ambiguous* rather than missing. The
+                        // verdict is `CaseInsensitiveIndex::ambiguous_candidates`
+                        // — the same call `mv`'s guard, `links fix` and
+                        // HYALO006 make — and it is only asked of the links
+                        // that failed to resolve, so the common resolved link
+                        // pays nothing.
+                        let candidates = if path.is_none()
+                            && !link.external
+                            && link.kind == hyalo_core::links::LinkKind::Wikilink
+                        {
+                            case_index
+                                .and_then(|idx| idx.ambiguous_candidates(&link.target))
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
                         LinkInfo {
+                            ambiguous: !candidates.is_empty(),
+                            candidates,
                             target: link.target.clone(),
                             path,
                             label: link.label.clone(),
@@ -1598,6 +1617,8 @@ pub(crate) fn find_prepared(
                             out_of_vault: false,
                             // A same-file anchor names no target to alias.
                             via: None,
+                            ambiguous: false,
+                            candidates: Vec::new(),
                         }
                     }))
                     .collect::<Vec<_>>(),

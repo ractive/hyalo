@@ -141,18 +141,35 @@ pub(crate) fn resolve_with_explicit_paths(
             return resolved;
         }
     }
+    // iter-319 (DEC-374): the shared target normalisation — `?query`, `./`,
+    // `%20` — so `backlinks` agrees with `find` and HYALO006 on what is
+    // ambiguous; the literal `What?` stem is tried before its `?` is stripped.
+    if kind == LinkKind::Wikilink
+        && !absolute
+        && let Some(paths) = index.target_ambiguity(target)
+    {
+        return Resolution::Ambiguous(crate::case_index::sorted_candidates(paths));
+    }
     let bare = raw.trim_end_matches('/');
     if !absolute && !bare.contains('/') {
         let stem = strip_md(bare);
-        let paths = index.lookup_stem_all(stem);
-        if !paths.is_empty() {
-            return candidates_result(paths);
+        // iter-319 (DEC-374): "this bare name is ambiguous" is
+        // `CaseInsensitiveIndex::ambiguity`'s one definition — the same call
+        // that fills `find`'s `candidates` field, HYALO006's message and
+        // `links fix`'s `ambiguous_links`. A filename beats an alias, an
+        // ambiguous filename beats it too, and an alias two notes claim is
+        // ambiguous in either `[links] aliases` mode (DEC-308), so asking it
+        // first leaves the unique-name arms below to the unambiguous cases.
+        if let Some(paths) = index.ambiguity(stem) {
+            return Resolution::Ambiguous(crate::case_index::sorted_candidates(paths));
         }
-        if options.aliases {
-            let paths = index.lookup_alias_all(stem);
-            if !paths.is_empty() {
-                return candidates_result(paths);
-            }
+        if let [only] = index.lookup_stem_all(stem) {
+            return hit(only.to_owned());
+        }
+        if options.aliases
+            && let [only] = index.lookup_alias_all(stem)
+        {
+            return hit(only.to_owned());
         }
     }
     if crate::discovery::has_non_md_extension(raw) || crate::discovery::has_hidden_component(raw) {
@@ -384,5 +401,60 @@ mod tests {
                 matches!(resolve(&index, "a.md", LinkKind::Wikilink, target, options), Resolution::Ambiguous(paths) if paths.len() == 2)
             );
         }
+    }
+
+    /// iter-319 (DEC-374): the catalog's `Ambiguous` and the case index's
+    /// `ambiguity` are one definition, in both `[links] aliases` modes — an
+    /// alias two notes claim is ambiguous either way (DEC-308), a unique one
+    /// resolves only when the vault opted in.
+    #[test]
+    fn catalog_ambiguity_is_the_case_index_ambiguity_in_both_alias_modes() {
+        let mut index = CaseInsensitiveIndex::new();
+        for path in ["b/note.md", "a/note.md", "x/one.md", "x/two.md", "x/own.md"] {
+            index.insert(path);
+        }
+        index.insert_aliases("x/one.md", ["Twin"]);
+        index.insert_aliases("x/two.md", ["Twin"]);
+        index.insert_aliases("x/own.md", ["Solo"]);
+        for aliases in [false, true] {
+            let options = ResolutionOptions {
+                aliases,
+                site_prefix: None,
+            };
+            for target in ["note", "Twin", "Solo", "nowhere"] {
+                let resolved = resolve(&index, "src.md", LinkKind::Wikilink, target, options);
+                let expected = index.ambiguous_candidates(target);
+                match (&resolved, &expected) {
+                    (Resolution::Ambiguous(paths), Some(candidates)) => {
+                        assert_eq!(paths, candidates, "{target} aliases={aliases}");
+                    }
+                    (Resolution::Ambiguous(paths), None) => {
+                        panic!(
+                            "{target} aliases={aliases}: catalog ambiguous {paths:?}, index not"
+                        );
+                    }
+                    (_, Some(_)) => {
+                        panic!("{target} aliases={aliases}: index ambiguous, catalog {resolved:?}");
+                    }
+                    (_, None) => {}
+                }
+            }
+        }
+        let on = ResolutionOptions {
+            aliases: true,
+            site_prefix: None,
+        };
+        let off = ResolutionOptions {
+            aliases: false,
+            ..on
+        };
+        assert_eq!(
+            resolve(&index, "src.md", LinkKind::Wikilink, "Solo", on).path(),
+            Some("x/own.md")
+        );
+        assert_eq!(
+            resolve(&index, "src.md", LinkKind::Wikilink, "Solo", off),
+            Resolution::Missing
+        );
     }
 }

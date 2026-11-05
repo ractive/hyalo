@@ -2151,6 +2151,15 @@ fn classify_short_form_wikilink(
         return None;
     }
 
+    // iter-319 (DEC-374): "ambiguous" is `CaseInsensitiveIndex::ambiguity`'s
+    // one definition — two files sharing the stem, or (no file carrying it)
+    // two notes declaring it as an alias — the call that also fills `find`'s
+    // `candidates` field, HYALO006 and `mv`'s guard. Asked first, so the
+    // arms below only ever see unambiguous stems when an index is available.
+    if case_index.is_some_and(|idx| idx.target_ambiguity(target).is_some()) {
+        return Some(LinkResolution::ShortFormAmbiguous);
+    }
+
     // Look up the stem case-insensitively. Prefer the case_index when
     // available (O(1) hash lookup); otherwise use the precomputed
     // per-invocation stem index built from `vault_files`.
@@ -2169,22 +2178,22 @@ fn classify_short_form_wikilink(
     // written*: it needs no rewrite, so it is `ShortFormValid` rather than a
     // relocation, and it never reaches the fuzzy matcher — which used to offer
     // `Leah → Lewuathe.md` at confidence 0.87 on the Obsidian Hub. Two notes
-    // claiming one alias is ambiguous, exactly like two files sharing a stem.
+    // claiming one alias is ambiguous, exactly like two files sharing a stem
+    // (ALIAS-5, iter-275, BUG-26: in either mode, so `links fix` reports the
+    // candidates rather than "does not resolve" — settled by the
+    // `ambiguity` check above, which is why only a *unique* alias is left).
     if matches.is_empty()
         && let Some(idx) = case_index
+        && idx.lookup_alias(target).is_some()
     {
-        match idx.lookup_alias_all(target).len() {
-            0 => {}
-            // DEC-308 (iter-275): a unique alias resolves the link only when
-            // the vault opted in. In the default mode it is broken — and
-            // `links fix` turns it into an `alias_fixes` plan.
-            1 if link_aliases_enabled() => return Some(LinkResolution::ShortFormValid),
-            1 => return Some(LinkResolution::Broken),
-            // ALIAS-5 (iter-275, BUG-26): two notes claiming one alias is
-            // *ambiguous* in either mode, so `links fix` reports the
-            // candidates rather than "does not resolve".
-            _ => return Some(LinkResolution::ShortFormAmbiguous),
-        }
+        // DEC-308 (iter-275): a unique alias resolves the link only when
+        // the vault opted in. In the default mode it is broken — and
+        // `links fix` turns it into an `alias_fixes` plan.
+        return Some(if link_aliases_enabled() {
+            LinkResolution::ShortFormValid
+        } else {
+            LinkResolution::Broken
+        });
     }
 
     match matches.len() {
@@ -2443,6 +2452,16 @@ pub(crate) fn classify_link_from_source(
             // happen; it always returns Some when called with expand_short_form=false).
             // Fall through to the regular path-based classification.
             let res = classify_link(canonical_dir, &link.target, site_prefix, case_index);
+            // iter-319 (DEC-374): a bare stem spelled with a `./` prefix or a
+            // `.md` suffix is the same bare stem to `find` and HYALO006
+            // (`bare_stem`), so a link that resolves nowhere and names an
+            // ambiguous one is `ShortFormAmbiguous` here too.
+            if res == LinkResolution::Broken
+                && !expand_short_form
+                && case_index.is_some_and(|idx| idx.target_ambiguity(&link.target).is_some())
+            {
+                return (link.target.clone(), LinkResolution::ShortFormAmbiguous);
+            }
             (link.target.clone(), res)
         }
         LinkKind::Markdown => {
@@ -3085,7 +3104,7 @@ fn resolve_target_inner(
         // link ambiguous, and a rename silently repointed all four links at
         // the theme. DEC-296 says a filename beats an alias; two filenames
         // beat it too, and leave the link unresolved.
-        if idx.lookup_stem_all(stem).len() > 1 {
+        if idx.stem_ambiguity(stem).is_some() {
             return None;
         }
         // iter-272 Part B (DEC-296): last resort — a frontmatter `aliases:`
