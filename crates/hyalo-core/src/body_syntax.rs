@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use crate::protected::{ProtectedBuilder, ProtectedRegions};
+use crate::protected::{LineInfo, ProtectedBuilder, ProtectedRegions};
 
 /// An HTML comment that is wholly contained on one physical line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +149,9 @@ impl BodySyntax {
 
             if in_percent_block {
                 syntax.percent_comment[i] = true;
+                if let Some(p) = prot.as_mut() {
+                    p.push_block(physical.start..physical.physical_end);
+                }
                 visible[physical.start..physical.start + raw_line.len()].fill(b' ');
                 if crate::scanner::is_comment_fence(line) {
                     in_percent_block = false;
@@ -156,35 +159,44 @@ impl BodySyntax {
                 continue;
             }
 
-            // A raw HTML block or `$$` block owns its lines: Markdown-looking
-            // text inside is not Markdown (DEC-381).
-            if let Some(p) = prot.as_mut()
-                && p.in_block_region()
-            {
-                let blank = line.trim().is_empty();
-                let consumed = if p.is_math_open() {
-                    p.math_block_line(line, physical.start, physical.physical_end)
-                } else {
-                    p.continue_html_block(line, blank, physical.start, physical.physical_end)
-                };
-                if consumed {
-                    let result = mask_inline_line(
-                        line,
-                        rest,
-                        absolute,
-                        i + 1,
-                        &mut inline,
-                        &mut visible,
-                        &mut syntax.html_comments,
-                        &mut prot,
-                    );
-                    syntax.in_html_comment[i] = result.had_html
-                        && visible[absolute..absolute + line.len()]
-                            .iter()
-                            .all(u8::is_ascii_whitespace);
-                    previous_blank = blank;
-                    continue;
-                }
+            // Raw HTML blocks and `$$` blocks are tracked as an overlay: the
+            // tracker never changes how this line is classified below, so
+            // `new` and `with_protected` agree on code, lists and fences.
+            let blank = line.trim().is_empty();
+            let mut consumed = false;
+            if let Some(p) = prot.as_mut() {
+                let container_column = list_content_columns.last().copied().unwrap_or(0);
+                let indent = leading_indent(line).0;
+                let marker = list_marker_content_column(
+                    line,
+                    line.len() - line.trim_start_matches(' ').len(),
+                )
+                .filter(|column| *column <= line.len());
+                let content = marker.map_or(line, |column| &line[column..]);
+                consumed = p.feed_line(&LineInfo {
+                    text: line,
+                    content,
+                    content_indent: if marker.is_some() {
+                        0
+                    } else {
+                        indent.saturating_sub(container_column)
+                    },
+                    indent,
+                    blank,
+                    quoted: prefix > 0,
+                    previous_blank,
+                    can_start: !in_percent_block
+                        && inline.code_run.is_none()
+                        && !inline.html_comment,
+                    container_col: marker.unwrap_or(if indent < container_column {
+                        0
+                    } else {
+                        container_column
+                    }),
+                    start: physical.start,
+                    end: physical.physical_end,
+                    rest,
+                });
             }
 
             // Cross-line inline constructs own the line until their real
@@ -209,7 +221,7 @@ impl BodySyntax {
                     && visible[absolute..absolute + line.len()]
                         .iter()
                         .all(u8::is_ascii_whitespace);
-                if let Some(p) = prot.as_mut() {
+                if !consumed && let Some(p) = prot.as_mut() {
                     p.scan_inline_line(&visible[absolute..absolute + line.len()], absolute);
                 }
                 previous_blank = line.trim().is_empty();
@@ -236,13 +248,15 @@ impl BodySyntax {
                 }
                 if crate::scanner::is_comment_fence(line) {
                     syntax.percent_comment[i] = true;
+                    if let Some(p) = prot.as_mut() {
+                        p.push_block(physical.start..physical.physical_end);
+                    }
                     visible[physical.start..physical.start + raw_line.len()].fill(b' ');
                     in_percent_block = true;
                     continue;
                 }
             }
 
-            let blank = line.trim().is_empty();
             // Decide indented-code status against the container that existed
             // before this line. Otherwise an indented code example beginning
             // with `- ` would incorrectly create its own list container.
@@ -273,42 +287,9 @@ impl BodySyntax {
 
             if let Some(p) = prot.as_mut()
                 && !syntax.in_code[i]
+                && crate::scanner::ends_inline_construct(line)
             {
-                if crate::scanner::ends_inline_construct(line) {
-                    p.end_block();
-                }
-                if !blank {
-                    let indent = leading_indent(line).0;
-                    let start = ProtectedBuilder::html_block_start(
-                        line,
-                        indent.saturating_sub(container_column),
-                        previous_blank,
-                    );
-                    let consumed = if let Some(end) = start {
-                        p.begin_html_block(end, line, physical.start, physical.physical_end);
-                        true
-                    } else {
-                        p.math_block_line(line, physical.start, physical.physical_end)
-                    };
-                    if consumed {
-                        let result = mask_inline_line(
-                            line,
-                            rest,
-                            absolute,
-                            i + 1,
-                            &mut inline,
-                            &mut visible,
-                            &mut syntax.html_comments,
-                            &mut prot,
-                        );
-                        syntax.in_html_comment[i] = result.had_html
-                            && visible[absolute..absolute + line.len()]
-                                .iter()
-                                .all(u8::is_ascii_whitespace);
-                        previous_blank = false;
-                        continue;
-                    }
-                }
+                p.end_block();
             }
 
             if !blank && !syntax.in_code[i] {
@@ -333,7 +314,7 @@ impl BodySyntax {
                     && visible[absolute..absolute + line.len()]
                         .iter()
                         .all(u8::is_ascii_whitespace);
-                if let Some(p) = prot.as_mut() {
+                if !consumed && let Some(p) = prot.as_mut() {
                     p.scan_inline_line(&visible[absolute..absolute + line.len()], absolute);
                 }
             }

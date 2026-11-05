@@ -1043,7 +1043,13 @@ fn scan_file_for_matches(
 /// (`Pulls` vs `pulls`), means substituting the target alone would change
 /// what the page renders, so the original surface text is preserved as an
 /// explicit alias instead: `[[link_target|matched_text]]`.
-fn wikilink_replacement_text(matched_text: &str, link_target: &str, line: &str) -> String {
+fn wikilink_replacement_text(
+    matched_text: &str,
+    link_target: &str,
+    line: &str,
+    previous: Option<&str>,
+    next: Option<&str>,
+) -> String {
     let encoded =
         crate::link_write::encode_destination(link_target, crate::links::LinkKind::Wikilink);
     if matched_text == link_target && encoded == link_target {
@@ -1051,7 +1057,7 @@ fn wikilink_replacement_text(matched_text: &str, link_target: &str, line: &str) 
     } else {
         format!(
             "[[{encoded}{}{matched_text}]]",
-            crate::link_write::alias_separator(line)
+            crate::link_write::alias_separator(line, previous, next)
         )
     }
 }
@@ -1142,15 +1148,17 @@ fn apply_matches(
                 line: m.line,
                 byte_offset: m.byte_col,
                 old_text: m.matched_text.clone(),
-                new_text: wikilink_replacement_text(
-                    &m.matched_text,
-                    &m.link_target,
-                    m.line
-                        .checked_sub(1)
-                        .and_then(|i| source_lines.get(i))
-                        .copied()
-                        .unwrap_or_default(),
-                ),
+                new_text: {
+                    let at = m.line.checked_sub(1);
+                    let line_at = |i: Option<usize>| i.and_then(|i| source_lines.get(i)).copied();
+                    wikilink_replacement_text(
+                        &m.matched_text,
+                        &m.link_target,
+                        line_at(at).unwrap_or_default(),
+                        line_at(at.and_then(|i| i.checked_sub(1))),
+                        line_at(at.map(|i| i + 1)),
+                    )
+                },
             })
             .collect();
 
@@ -3542,7 +3550,7 @@ mod tests {
     #[test]
     fn encoded_auto_destinations_keep_display_text_and_resolve_once() {
         for name in ["C#", "Release (final)", "literal%23"] {
-            let emitted = wikilink_replacement_text(name, name, "");
+            let emitted = wikilink_replacement_text(name, name, "", None, None);
             let spans = crate::links::extract_link_spans(&emitted);
             assert_eq!(spans.len(), 1);
             let mut catalog = crate::CaseInsensitiveIndex::new();

@@ -477,7 +477,12 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | `create-index` (DEC-339) would keep the old reading in
 /// |   |          | `find --index --fields properties` while a disk scan
 /// |   |          | shows the new one, so a v7 snapshot must be rebuilt |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
+/// | 9 | list-item  | no new field (DEC-381, PR #402 review) — a code span no
+/// |   | code-span  | longer crosses list items and the closer search stops
+/// |   | boundary   | after 128 lines, so the links extracted from a body
+/// |   |            | change; an entry reused by an incremental `create-index`
+/// |   |            | would keep the old links, so a v8 snapshot must be rebuilt |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]

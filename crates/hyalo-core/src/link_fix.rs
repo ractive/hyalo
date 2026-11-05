@@ -1833,7 +1833,9 @@ fn build_replacements_for_file(
     let legacy_frontmatter_fixes: &[(usize, &FixPlan)] =
         fixes_by_line.get(&1).map_or(&[], Vec::as_slice);
 
+    let mut last_line = "";
     for (line, rest) in lines_with_rest(content) {
+        let previous_line = std::mem::replace(&mut last_line, line);
         let class = scanner.classify(line, rest);
         let line_num = scanner.line_num();
 
@@ -1961,7 +1963,11 @@ fn build_replacements_for_file(
                     {
                         format!(
                             "{path_text}{}{}",
-                            crate::link_write::alias_separator(line),
+                            crate::link_write::alias_separator(
+                                line,
+                                Some(previous_line),
+                                rest.split('\n').next(),
+                            ),
                             span.link.target.trim()
                         )
                     } else {

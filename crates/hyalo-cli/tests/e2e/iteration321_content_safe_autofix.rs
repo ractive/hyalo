@@ -294,3 +294,111 @@ fn a_second_lint_fix_changes_nothing() {
     lint_fix(&tmp, "b.md");
     assert_eq!((a, b), (read(&tmp, "a.md"), read(&tmp, "b.md")));
 }
+
+// ---------------------------------------------------------------------------
+// PR #402 review round
+// ---------------------------------------------------------------------------
+
+/// Bodies whose every byte must survive `lint --fix`: each holds something the
+/// default-on fixers (HYALO001, MD009/010/012/019/022/034, ...) would rewrite
+/// outside the protected region.
+const UNTOUCHED: &[(&str, &str)] = &[
+    ("pre_task", "# T\n\n<pre>\n[] literal sample\n</pre>\n"),
+    ("div_task", "# T\n\n<div>\n[x] done?\n</div>\n"),
+    ("math_task", "# T\n\n$$\n[] \\cdot a\n$$\n"),
+    (
+        "percent_block",
+        "# T\n\n%%\nhttps://x.org/a\n##  heading\n\n%%\n",
+    ),
+    (
+        "list_pre",
+        "# T\n\n- <pre>\n  raw https://x.org/a\n\n  raw https://y.org/b\n  </pre>\n",
+    ),
+    (
+        "list_div",
+        "# T\n\n1. <div>\n   https://z.org/c\n   </div>\n",
+    ),
+    (
+        "pending_macro",
+        "# T\n\nUse {{ in Jinja. See <a href=\"x\">https://b.org/y</a> for more.\n",
+    ),
+    (
+        "pending_raw",
+        "# T\n\nType Foo<a> here, then <code>https://b.org/y</code> ok.\n",
+    ),
+    (
+        "unbalanced_math_then_fence",
+        "# T\n\nEnergy is $$\nE = mc^2\n$$ which is famous.\n\n```text\n##  literal sample\n\n\nend\n```\n",
+    ),
+    (
+        "dollar_pid",
+        "# T\n\n$$ expands to the PID.\n\n```text\n##  literal sample\n\n\nend\n```\n",
+    ),
+    (
+        "indented_code_after_list_and_div",
+        "# T\n\n- item\n\n<div>x</div>\n\n    ##  indented code\n    more code\n",
+    ),
+];
+
+#[test]
+fn nothing_in_a_protected_region_or_code_is_rewritten() {
+    for (name, body) in UNTOUCHED {
+        let tmp = vault(&[("a.md", body)]);
+        lint_fix(&tmp, "a.md");
+        assert_eq!(&read(&tmp, "a.md"), body, "{name}");
+    }
+}
+
+#[test]
+fn findings_after_a_container_scoped_block_survive() {
+    let quote = "# T\n\n> <pre>\n> never closed\n\nText with https://p.org/x here.\n";
+    let list = "# T\n\n- a\n  <div>x</div>\n- b https://x.org/one\n";
+    let tmp = vault(&[("q.md", quote), ("l.md", list)]);
+    lint_fix(&tmp, "q.md");
+    lint_fix(&tmp, "l.md");
+    assert!(read(&tmp, "q.md").contains("<https://p.org/x>"));
+    assert!(read(&tmp, "l.md").contains("<https://x.org/one>"));
+}
+
+#[test]
+fn a_formula_line_with_trailing_prose_leaves_the_prose_lintable() {
+    let tmp = vault(&[("a.md", "# T\n\n$$x$$ and https://p.org/z\n")]);
+    lint_fix(&tmp, "a.md");
+    assert!(read(&tmp, "a.md").contains("<https://p.org/z>"));
+}
+
+#[test]
+fn fix_rule_accepts_the_frontmatter_pseudo_rules() {
+    let tmp = vault(&[("a.md", "# T\n")]);
+    for id in ["SCHEMA", "schema", "FRONTMATTER003"] {
+        let out = run(
+            tmp.path(),
+            &["lint", "--fix", "--dry-run", "--fix-rule", id, "a.md"],
+        );
+        assert!(out.status.success(), "{id}: {}", stderr(&out));
+    }
+}
+
+#[test]
+fn links_auto_and_fix_escape_the_pipe_in_quoted_and_pipeless_tables() {
+    let beta = "# Beta\n\n> | Name | Note |\n> |------|------|\n> | Alpha Note | x |\n\nName | Note\n--- | ---\nAlpha Note | y\n";
+    let tmp = auto_vault(beta);
+    let out = run(tmp.path(), &["links", "auto", "--apply"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let after = read(&tmp, "beta.md");
+    assert!(
+        after.contains("> | [[alpha\\|Alpha Note]] | x |"),
+        "{after}"
+    );
+    assert!(after.contains("[[alpha\\|Alpha Note]] | y"), "{after}");
+}
+
+#[test]
+fn a_reversed_link_glued_to_a_word_is_still_fixed() {
+    let tmp = vault(&[(
+        "a.md",
+        "# T\n\ncheck this out(see docs)[https://example.com/guide] now\n",
+    )]);
+    lint_fix(&tmp, "a.md");
+    assert!(read(&tmp, "a.md").contains("[see docs](https://example.com/guide)"));
+}

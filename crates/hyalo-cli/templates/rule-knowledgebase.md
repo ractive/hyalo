@@ -412,7 +412,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directory that coincides with the index file's mtime, re-stamped after the publishing
   rename, is excused — DEC-368) — leaves the snapshot file
   untouched and reports `written: false` (iter-313, amended in review). Current-format
-  (v8) snapshots only — an older one, or one built under a different `[search] code_blocks`
+  (v9) snapshots only — an older one, or one built under a different `[search] code_blocks`
   than the config (read from the header, never forcing BM25's lazy decode), is refused with
   a `-q`-proof warning naming both values (DEC-360); `summary --index` reports
   `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused

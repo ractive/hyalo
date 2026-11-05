@@ -44,15 +44,40 @@ pub(crate) fn encode_destination(path: &str, kind: LinkKind) -> String {
 /// splits one cell into two (A-3, iteration 321). The reader already treats
 /// `[[x\|y]]` as target `x` with label `y`, and `mv`/`links fix` preserve an
 /// existing escaped form, so writing it is the matching half. A row is a line
-/// whose first non-blank byte is `|` — the shape every table row hyalo has met
-/// has, and the only one decidable from a single line.
+/// whose first non-blank byte, after any block-quote `>` prefixes, is `|`
+/// (callouts quote their tables), or a line that carries a `|` and sits next
+/// to a delimiter row (`---|:--:`), which is how a table without leading
+/// pipes is recognised. `previous` and `next` are the neighbouring lines.
 #[must_use]
-pub(crate) fn alias_separator(line: &str) -> &'static str {
-    if line.trim_start().starts_with('|') {
-        "\\|"
-    } else {
-        "|"
+pub(crate) fn alias_separator(
+    line: &str,
+    previous: Option<&str>,
+    next: Option<&str>,
+) -> &'static str {
+    let body = strip_quote(line);
+    let row = body.trim_start().starts_with('|')
+        || (body.contains('|')
+            && (previous.is_some_and(is_delimiter_row) || next.is_some_and(is_delimiter_row)));
+    if row { "\\|" } else { "|" }
+}
+
+fn strip_quote(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    while let Some(after) = rest.strip_prefix('>') {
+        rest = after.trim_start();
     }
+    rest
+}
+
+/// `| --- | :-: |` or `--- | ---`: only `|`, `-`, `:` and spaces, with at
+/// least one `-` and one `|`.
+fn is_delimiter_row(line: &str) -> bool {
+    let body = strip_quote(line);
+    body.contains('-')
+        && body.contains('|')
+        && body
+            .chars()
+            .all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t' | '\r'))
 }
 
 /// A computed text replacement for a single span within a line.
@@ -357,10 +382,15 @@ mod tests {
 
     #[test]
     fn alias_separator_escapes_the_pipe_only_in_table_rows() {
-        assert_eq!(alias_separator("| [[a]] | x |"), "\\|");
-        assert_eq!(alias_separator("   |a|b|"), "\\|");
-        assert_eq!(alias_separator("text [[a]] here"), "|");
-        assert_eq!(alias_separator("- item | pipe"), "|");
+        assert_eq!(alias_separator("| [[a]] | x |", None, None), "\\|");
+        assert_eq!(alias_separator("   |a|b|", None, None), "\\|");
+        assert_eq!(alias_separator("> | [[a]] | x |", None, None), "\\|");
+        assert_eq!(alias_separator("text [[a]] here", None, None), "|");
+        assert_eq!(alias_separator("- item | pipe", None, None), "|");
+        let delim = Some("--- | ---");
+        assert_eq!(alias_separator("Beta | x", delim, None), "\\|");
+        assert_eq!(alias_separator("Name | Note", None, delim), "\\|");
+        assert_eq!(alias_separator("a | b", Some("prose"), Some("more")), "|");
     }
     use crate::links::{LinkKind, extract_link_spans};
 

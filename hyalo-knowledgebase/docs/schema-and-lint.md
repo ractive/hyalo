@@ -325,7 +325,7 @@ as a conflict, not applied together (DEC-383). In a table row `links auto` and `
 alias separator as `\|`.
 
 Measured (changed edits inside a protected region, by an independent classifier): MDN 341 of 425 → 0
-of 76, GitHub Docs 709 of 1,368 → 0 of 658, Obsidian Hub 88 of 24,127 → 4 of 24,036 (artefacts of the
+of 76, GitHub Docs 709 of 1,368 → 0 of 658, Obsidian Hub 88 of 24,127 → 4 of 23,986 (artefacts of the
 classifier). A second `lint --fix` changes nothing on any of the three.
 
 Measured on the Obsidian Hub vault (6,520 files): MD018 fix proposals 162 → 0,

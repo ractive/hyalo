@@ -79,7 +79,7 @@ Corpora copied to scratch (MDN 14 375 files, GitHub Docs 3 710, Obsidian Hub 6 5
 |---|---|---|---|
 | MDN `lint --fix` | 425 → 76 | 341 | 0 |
 | GitHub Docs `lint --fix` | 1 368 → 658 | 709 | 0 |
-| Hub `lint --fix` | 24 127 → 24 036 | 88 | 4 |
+| Hub `lint --fix` | 24 127 → 23 986 | 88 | 4 |
 | GitHub Docs `links auto --apply` | 22 036 → 21 958 | 55 | 4 |
 | Hub `links auto --apply` | 14 031 → 13 953 | 50 | 2 |
 
@@ -90,3 +90,4 @@ The 10 remaining are checker artefacts, read by hand: four `$…$` hits are `$en
 - Lint counts by rule, before → after: MDN MD034 191 → 18 (all 18 read: prose URLs) and MD011 1 → 0; GitHub Docs MD034 126 → 120 (link text over two lines, `<code>https://<em>…`) and MD023 3 → 0 (`<pre>`); Hub MD034 116 → 113 (`"https://"` as a word). Nothing else moved; MD022/MD031 findings in block quotes are still reported, only their fix is withheld (Hub MD031 fixes 62 → 60).
 - User CPU, MDN `lint`: 18.7 s before, 18.9 s after (+1%); `summary` 1.49 s both. An intermediate version was +18% because the protected checks ran after the fix conversion; they now run before it.
 - `lint --fix` second pass conflicts: Hub 11 → 37 reported conflicts, the insert-plus-replace pairs that used to be applied together and corrupt text; the following pass applies them.
+- Review round on PR #402: the block tracker is an overlay (0 lines disagree on code classification between `BodySyntax::new` and `with_protected` over 1 889 000 lines of the three corpora); a `$$` block needs a real closer within 128 lines and no fence before it; snapshot format 9. Against the previous table the Hub gained 43 fewer findings (MD034 113 → 104, MD042 21 → 18, MD009, MD022): all sit inside Obsidian `%%` comment blocks that the model now protects (the Hub's templates pair a `%% text` opener with a lone `%%` closer, which the long-standing comment-fence rule reads as a block from the closer onward — unchanged, but it now also silences lint there). GitHub Docs and MDN lost nothing. `lint --fix` Hub edits 24 036 → 23 986; protected 4 (artefacts), idempotent, properties byte-identical.

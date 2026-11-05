@@ -94,7 +94,9 @@ and this project adheres to
   a block of any size is scanned in linear time (it was quadratic: 22 s for a
   60 000-line note). A code span longer than 128 lines is read as literal text.
   A fence indented with tabs under a list item is now recognised as a fence
-  (DEC-381).
+  (DEC-381). The snapshot format is now 9 because these scanner changes alter
+  the links a body yields: an older snapshot is refused and rebuilt with
+  `create-index`.
 
 ### Fixed
 

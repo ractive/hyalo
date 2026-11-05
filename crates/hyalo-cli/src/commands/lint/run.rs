@@ -338,6 +338,19 @@ pub(crate) fn run(
         // canonicalize to the catalog spelling.
         let mut fix_rule_ids: Vec<String> = Vec::with_capacity(fix_rule.len());
         for raw in &fix_rule {
+            // `SCHEMA` and `FRONTMATTER*` select the frontmatter fixes
+            // (`lint/file.rs`); they are not in the markdown rule catalog.
+            if raw.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) {
+                fix_rule_ids.push(SCHEMA_PSEUDO_RULE.to_owned());
+                continue;
+            }
+            if raw
+                .get(.."FRONTMATTER".len())
+                .is_some_and(|head| head.eq_ignore_ascii_case("FRONTMATTER"))
+            {
+                fix_rule_ids.push(raw.to_ascii_uppercase());
+                continue;
+            }
             match md_engine.rule_entry_ci(raw) {
                 Some(entry) => fix_rule_ids.push(entry.id.clone()),
                 None => {

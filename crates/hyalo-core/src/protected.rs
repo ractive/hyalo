@@ -145,7 +145,15 @@ impl ProtectedRegions {
     #[must_use]
     pub fn overlaps(&self, range: &Range<usize>) -> bool {
         if range.start >= range.end {
-            return self.contains(range.start);
+            // An insertion changes none of the bytes around it: it is
+            // protected only strictly inside a region, a block's first byte
+            // included in the open side (R13).
+            let at = range.start;
+            return [&self.blocks, &self.inline].iter().any(|ranges| {
+                ranges
+                    .get(upper(ranges, at))
+                    .is_some_and(|r| r.start < at && at < r.end)
+            });
         }
         overlaps_any(&self.blocks, range) || overlaps_any(&self.inline, range)
     }
@@ -161,26 +169,6 @@ impl ProtectedRegions {
     #[must_use]
     pub fn in_destination(&self, offset: usize) -> bool {
         covers(&self.destinations, offset)
-    }
-
-    /// Whether body byte `offset` lies in a *whole-line* region (raw HTML or
-    /// math block), as opposed to an inline span.
-    #[must_use]
-    pub fn in_block(&self, offset: usize) -> bool {
-        covers(&self.blocks, offset)
-    }
-
-    /// The merged inline regions, ascending. Exposed for the independent
-    /// checker in the test-suite.
-    #[must_use]
-    pub fn inline_regions(&self) -> &[Range<usize>] {
-        &self.inline
-    }
-
-    /// The merged block regions, ascending.
-    #[must_use]
-    pub fn block_regions(&self) -> &[Range<usize>] {
-        &self.blocks
     }
 }
 
@@ -284,10 +272,65 @@ pub(crate) struct ProtectedBuilder {
     /// Start offset of an open `$$` block and its opening line's end.
     math_block: Option<(usize, usize)>,
     /// A raw HTML block in progress, with the offset it started at.
-    html_block: Option<(HtmlBlockEnd, usize)>,
+    html_block: Option<HtmlBlock>,
     /// Offsets of `[` still unmatched at the end of the previous line, so a
     /// link label wrapping over lines is recognised when its `](` arrives.
     open_labels: Vec<usize>,
+}
+
+/// A raw HTML block in progress.
+#[derive(Debug)]
+struct HtmlBlock {
+    end: HtmlBlockEnd,
+    start: usize,
+    /// Started inside a block quote.
+    quoted: bool,
+    /// Content column of the list item the block started in (0: none).
+    container_col: usize,
+}
+
+/// What the host knows about the line being fed to the block tracker.
+pub(crate) struct LineInfo<'a> {
+    /// The line, block-quote prefix removed.
+    pub(crate) text: &'a str,
+    /// The part after a list marker (the whole line when there is none).
+    pub(crate) content: &'a str,
+    /// Columns of indentation beyond the enclosing list item's content column.
+    pub(crate) content_indent: usize,
+    /// Indentation columns of `text`.
+    pub(crate) indent: usize,
+    pub(crate) blank: bool,
+    pub(crate) quoted: bool,
+    pub(crate) previous_blank: bool,
+    /// The host is not inside a fence, comment or code span, so a block may
+    /// start here.
+    pub(crate) can_start: bool,
+    /// Content column of the list item a block starting here belongs to.
+    pub(crate) container_col: usize,
+    /// Physical line span.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// The text after this line.
+    pub(crate) rest: &'a str,
+}
+
+/// How many lines a `$$` opener searches for its closer.
+const MAX_MATH_LOOKAHEAD_LINES: usize = 128;
+
+/// Whether a line ending in `$$` follows within the lookahead cap, with no
+/// fence delimiter before it. Without one the `$$` is prose (`$$` is the PID
+/// in shell, `Energy is $$`), and a block must not swallow the lines after it.
+fn math_closer_ahead(rest: &str) -> bool {
+    for line in rest.split('\n').take(MAX_MATH_LOOKAHEAD_LINES) {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            return false;
+        }
+        if t.ends_with("$$") {
+            return true;
+        }
+    }
+    false
 }
 
 /// How many unmatched `[` a block remembers across lines. Bounds memory on a
@@ -310,16 +353,6 @@ impl ProtectedBuilder {
         self.raw = None;
         self.macro_call = None;
         self.open_labels.clear();
-    }
-
-    /// Whether a `$$` block is open (as opposed to a raw HTML block).
-    pub(crate) fn is_math_open(&self) -> bool {
-        self.math_block.is_some()
-    }
-
-    /// Whether a raw HTML block or `$$` block owns the current line.
-    pub(crate) fn in_block_region(&self) -> bool {
-        self.html_block.is_some() || self.math_block.is_some()
     }
 
     // ------------------------------------------------------------------
@@ -405,103 +438,102 @@ impl ProtectedBuilder {
         None
     }
 
-    /// Begin a raw HTML block on the line spanning `line_start..line_end`
-    /// (physical, newline included). Returns `true` when the block already
-    /// ended on this same line.
-    pub(crate) fn begin_html_block(
-        &mut self,
-        end: HtmlBlockEnd,
-        text: &str,
-        line_start: usize,
-        line_end: usize,
-    ) -> bool {
-        self.end_block();
-        let closed_here = match &end {
-            HtmlBlockEnd::BlankLine => false,
-            HtmlBlockEnd::Marker(marker) => {
-                // The marker may not overlap the opener itself: `<pre>` does
-                // not contain `</pre>`, but `<?` must be followed by `?>`.
-                let opener_len = if *marker == "?>" || *marker == ">" {
-                    2
-                } else {
-                    0
-                };
-                text.get(opener_len..)
-                    .is_some_and(|t| t.to_ascii_lowercase().contains(marker))
-            }
-        };
-        if closed_here {
-            self.blocks.push(line_start..line_end);
-        } else {
-            self.html_block = Some((end, line_start));
-        }
-        closed_here
+    /// Record a whole-line region (a `%%` comment block line).
+    pub(crate) fn push_block(&mut self, range: Range<usize>) {
+        self.blocks.push(range);
     }
 
-    /// Feed a line to the raw HTML block in progress. Returns `true` when the
-    /// line belongs to it (and is protected); `false` when the block ended
-    /// before this line (a blank line for conditions 6 and 7).
-    pub(crate) fn continue_html_block(
-        &mut self,
-        text: &str,
-        blank: bool,
-        line_start: usize,
-        line_end: usize,
-    ) -> bool {
-        let Some((end, start)) = self.html_block.take() else {
-            return false;
-        };
-        match end {
-            HtmlBlockEnd::BlankLine => {
-                if blank {
-                    self.blocks.push(start..line_start);
-                    false
-                } else {
-                    self.html_block = Some((HtmlBlockEnd::BlankLine, start));
-                    true
-                }
-            }
-            HtmlBlockEnd::Marker(marker) => {
-                if text.to_ascii_lowercase().contains(marker) {
-                    self.blocks.push(start..line_end);
-                } else {
-                    self.html_block = Some((HtmlBlockEnd::Marker(marker), start));
-                }
-                true
+    /// Feed one line to the block-level tracker (raw HTML blocks and `$$`
+    /// blocks). The tracker is an **overlay**: it never changes how the host
+    /// classifies the line, so fences, lists and code agree with a scan made
+    /// without protection. Returns `true` when the line is part of a block
+    /// region, in which case the host skips the inline scan for it.
+    pub(crate) fn feed_line(&mut self, info: &LineInfo<'_>) -> bool {
+        // An open block ends with its container: a block quote that stops
+        // quoting, or a list item that the line no longer sits inside.
+        if let Some(open) = &self.html_block
+            && !info.blank
+            && ((open.quoted && !info.quoted)
+                || (open.container_col > 0 && info.indent < open.container_col))
+        {
+            let open = self.html_block.take();
+            if let Some(open) = open {
+                self.blocks.push(open.start..info.start);
             }
         }
-    }
-
-    // ------------------------------------------------------------------
-    // `$$` math blocks
-    // ------------------------------------------------------------------
-
-    /// Handle a `$$` display-math block. Returns `true` when `text` (the line,
-    /// container prefix removed) is consumed by one.
-    pub(crate) fn math_block_line(
-        &mut self,
-        text: &str,
-        line_start: usize,
-        line_end: usize,
-    ) -> bool {
+        if let Some(open) = self.html_block.take() {
+            match open.end {
+                HtmlBlockEnd::BlankLine => {
+                    if info.blank {
+                        self.blocks.push(open.start..info.start);
+                    } else {
+                        self.html_block = Some(open);
+                        return true;
+                    }
+                }
+                HtmlBlockEnd::Marker(marker) => {
+                    if info.text.to_ascii_lowercase().contains(marker) {
+                        self.blocks.push(open.start..info.end);
+                    } else {
+                        self.html_block = Some(HtmlBlock {
+                            end: HtmlBlockEnd::Marker(marker),
+                            ..open
+                        });
+                    }
+                    return true;
+                }
+            }
+        }
         if let Some((start, _)) = self.math_block {
-            if text.contains("$$") {
+            if info.text.trim_end().ends_with("$$") {
                 self.math_block = None;
-                self.blocks.push(start..line_end);
+                self.blocks.push(start..info.end);
             }
             return true;
         }
-        let trimmed = text.trim_start_matches([' ', '\t']);
-        let Some(after) = trimmed.strip_prefix("$$") else {
+        if info.blank || !info.can_start {
             return false;
-        };
-        if after.contains("$$") {
-            // Opens and closes on one line.
-            self.blocks.push(line_start..line_end);
-        } else {
-            self.math_block = Some((line_start, line_end));
         }
-        true
+        if let Some(end) =
+            Self::html_block_start(info.content, info.content_indent, info.previous_blank)
+        {
+            self.end_block();
+            let closed_here = match &end {
+                HtmlBlockEnd::BlankLine => false,
+                HtmlBlockEnd::Marker(marker) => {
+                    let skip = if *marker == "?>" || *marker == ">" {
+                        2
+                    } else {
+                        0
+                    };
+                    info.content
+                        .get(skip..)
+                        .is_some_and(|t| t.to_ascii_lowercase().contains(marker))
+                }
+            };
+            if closed_here {
+                self.blocks.push(info.start..info.end);
+            } else {
+                self.html_block = Some(HtmlBlock {
+                    end,
+                    start: info.start,
+                    quoted: info.quoted,
+                    container_col: info.container_col,
+                });
+            }
+            return true;
+        }
+        let trimmed = info.content.trim_start_matches([' ', '\t']);
+        if let Some(after) = trimmed.strip_prefix("$$") {
+            // `$$x$$ and prose` closes on its own line: the inline scan
+            // protects exactly `$$x$$`.
+            if !after.contains("$$") && math_closer_ahead(info.rest) {
+                self.end_block();
+                self.math_block = Some((info.start, info.end));
+                return true;
+            }
+        }
+        false
     }
 
     // ------------------------------------------------------------------
@@ -511,36 +543,36 @@ impl ProtectedBuilder {
     /// Scan one prose line. `line` is the visible (code spans and comments
     /// already blanked) text of the line, container prefix removed, and
     /// `abs` the body offset of its first byte.
+    ///
+    /// An opener whose closer is not on the line (`{{`, an unclosed `<code>`)
+    /// stays *pending* while the scan carries on, so what follows it keeps
+    /// its own protection; the range is committed when the closer arrives
+    /// and dropped at the end of the block (R9). Every search that failed on
+    /// this line is remembered, so a line of repeated openers is scanned
+    /// once, not once per opener (R11).
     pub(crate) fn scan_inline_line(&mut self, line: &[u8], abs: usize) {
         let n = line.len();
         let mut i = 0usize;
         let mut dest_search = true;
+        let mut macro_closer_missing = [false; 2];
+        let mut raw_missing: Vec<String> = Vec::new();
         if let Some(def) = reference_definition_destination(line) {
             self.destinations.push(abs + def.start..abs + def.end);
         }
+        // Closers of constructs pending from earlier lines.
+        if let Some(pending) = self.raw.clone()
+            && let Some(end) = find_closing_tag(line, 0, &pending.name)
+        {
+            self.inline.push(pending.start..abs + end);
+            self.raw = None;
+        }
+        if let Some(pending) = self.macro_call.clone()
+            && let Some(j) = find_pair(line, 0, pending.closer)
+        {
+            self.inline.push(pending.start..abs + j + 2);
+            self.macro_call = None;
+        }
         while i < n {
-            if let Some(pending) = self.raw.clone() {
-                match find_closing_tag(line, i, &pending.name) {
-                    Some(end) => {
-                        self.inline.push(pending.start..abs + end);
-                        self.raw = None;
-                        i = end;
-                    }
-                    None => return,
-                }
-                continue;
-            }
-            if let Some(pending) = self.macro_call.clone() {
-                match find_pair(line, i, pending.closer) {
-                    Some(j) => {
-                        self.inline.push(pending.start..abs + j + 2);
-                        self.macro_call = None;
-                        i = j + 2;
-                    }
-                    None => return,
-                }
-                continue;
-            }
             if let Some(pending) = self.tag.clone() {
                 match continue_tag(line, i, pending.quote, pending.prev) {
                     TagScan::Complete(tag) => {
@@ -548,9 +580,16 @@ impl ProtectedBuilder {
                             closing: pending.closing,
                             ..tag
                         };
-                        self.finish_tag(line, abs, pending.start, &pending.name, &tag);
+                        let next = self.finish_tag(
+                            line,
+                            abs,
+                            pending.start,
+                            &pending.name,
+                            &tag,
+                            &mut raw_missing,
+                        );
                         self.tag = None;
-                        i = tag.end + 1;
+                        i = next;
                     }
                     TagScan::Open { quote, prev, .. } => {
                         self.tag = Some(PendingTag {
@@ -571,8 +610,7 @@ impl ProtectedBuilder {
                 b'<' => match scan_tag(line, i, None, 0) {
                     TagScan::Complete(tag) => {
                         let name = ascii_lower(&line[tag.name_start..tag.name_end]);
-                        self.finish_tag(line, abs, abs + i, &name, &tag);
-                        i = tag.end + 1;
+                        i = self.finish_tag(line, abs, abs + i, &name, &tag, &mut raw_missing);
                     }
                     TagScan::Open {
                         name_start,
@@ -600,16 +638,25 @@ impl ProtectedBuilder {
                     }
                 },
                 b'{' if matches!(line.get(i + 1), Some(b'{' | b'%')) => {
-                    let closer = if line[i + 1] == b'{' { *b"}}" } else { *b"%}" };
-                    if let Some(j) = find_pair(line, i + 2, closer) {
+                    let which = usize::from(line[i + 1] == b'%');
+                    let closer = if which == 0 { *b"}}" } else { *b"%}" };
+                    let found = if macro_closer_missing[which] {
+                        None
+                    } else {
+                        find_pair(line, i + 2, closer)
+                    };
+                    if let Some(j) = found {
                         self.inline.push(abs + i..abs + j + 2);
                         i = j + 2;
                     } else {
-                        self.macro_call = Some(PendingMacro {
-                            start: abs + i,
-                            closer,
-                        });
-                        return;
+                        macro_closer_missing[which] = true;
+                        if self.macro_call.is_none() {
+                            self.macro_call = Some(PendingMacro {
+                                start: abs + i,
+                                closer,
+                            });
+                        }
+                        i += 2;
                     }
                 }
                 b'$' => {
@@ -656,15 +703,33 @@ impl ProtectedBuilder {
         }
     }
 
-    /// Record a completed tag and, for an opening raw-text element, start
-    /// looking for its closing tag.
-    fn finish_tag(&mut self, line: &[u8], abs: usize, tag_start_abs: usize, name: &str, tag: &Tag) {
+    /// Record a completed tag and, for an opening raw-text element, look for
+    /// its closing tag. Returns the index the scan resumes at: just past the
+    /// closing tag when one was found (everything between is protected
+    /// already, so the scan does not walk it again).
+    fn finish_tag(
+        &mut self,
+        line: &[u8],
+        abs: usize,
+        tag_start_abs: usize,
+        name: &str,
+        tag: &Tag,
+        raw_missing: &mut Vec<String>,
+    ) -> usize {
         let end = tag.end;
         self.inline.push(tag_start_abs..abs + end + 1);
-        if !tag.closing && !tag.self_closing && RAW_ELEMENTS.contains(&name) {
-            match find_closing_tag(line, end + 1, name) {
-                Some(close_end) => self.inline.push(abs + end + 1..abs + close_end),
-                None => {
+        let mut next = end + 1;
+        if !tag.closing
+            && !tag.self_closing
+            && RAW_ELEMENTS.contains(&name)
+            && !raw_missing.iter().any(|m| m == name)
+        {
+            if let Some(close_end) = find_closing_tag(line, end + 1, name) {
+                self.inline.push(abs + end + 1..abs + close_end);
+                next = close_end;
+            } else {
+                raw_missing.push(name.to_owned());
+                if self.raw.is_none() {
                     self.raw = Some(PendingRaw {
                         start: abs + end + 1,
                         name: name.to_owned(),
@@ -672,6 +737,7 @@ impl ProtectedBuilder {
                 }
             }
         }
+        next
     }
 
     /// Finish the body: an unclosed `$$` block protects its opening line
@@ -680,10 +746,10 @@ impl ProtectedBuilder {
         if let Some((start, end)) = self.math_block.take() {
             self.blocks.push(start..end);
         }
-        if let Some((_, start)) = self.html_block.take() {
+        if let Some(open) = self.html_block.take() {
             // A condition 1/3-5 block with no closer runs to the end of the
             // document; a condition 6/7 block ends there too.
-            self.blocks.push(start..usize::MAX);
+            self.blocks.push(open.start..usize::MAX);
         }
         normalise(&mut self.blocks);
         normalise(&mut self.inline);
@@ -1107,5 +1173,138 @@ mod tests {
             "protected scan took {:?}",
             start.elapsed()
         );
+    }
+
+    /// Lines whose code classification differs between the plain scan and the
+    /// protected one: must be none, protection is an overlay (R1, R2).
+    fn code_disagreements(body: &str) -> Vec<usize> {
+        let plain = BodySyntax::new(body);
+        let prot = BodySyntax::with_protected(body);
+        (1..=body.lines().count())
+            .filter(|l| plain.line_is_code(*l) != prot.line_is_code(*l))
+            .collect()
+    }
+
+    #[test]
+    fn protection_never_changes_code_classification() {
+        for body in [
+            "- $$\n  a = b\n  $$\n\nText.\n\n```text\n##  literal sample\n\n\nend\n```\n",
+            "Energy is $$\nE = mc^2\n$$ which is famous.\n\n```sh\necho $$\n```\n\nprose\n",
+            "$$ expands to the PID.\n\n```text\nx\n```\n",
+            "- item\n\n<div>x</div>\n\n    ##  indented code\n    \ttab\n\n\n    more code\n",
+            "- <pre>\n  a\n\n  b\n  </pre>\n\n    code here\n",
+            "> <pre>\n> x\n\n```\nfenced\n```\n",
+        ] {
+            assert!(
+                code_disagreements(body).is_empty(),
+                "{body:?}: {:?}",
+                code_disagreements(body)
+            );
+        }
+    }
+
+    #[test]
+    fn an_unbalanced_dollar_pair_protects_only_what_it_closes() {
+        let body = "Energy is $$\nE = mc^2\n$$ which is famous.\n\n```text\n##  x\n```\n";
+        let r = regions(body);
+        assert!(
+            !r.contains(body.find("##  x").unwrap_or(0)),
+            "fence content is code, not math"
+        );
+        let syntax = BodySyntax::with_protected(body);
+        assert!(syntax.line_is_code(6));
+        assert!(!hit(
+            "$$ expands to the PID.\n\ntext https://p.org\n",
+            "text"
+        ));
+    }
+
+    #[test]
+    fn a_display_block_needs_a_real_closer_and_stops_at_it() {
+        let body = "$$\na\n$$\ntext https://p.org\n";
+        assert!(hit(body, "a\n"));
+        assert!(!hit(body, "https://p.org"));
+        // a content line that merely contains `$$` does not close the block
+        let body = "$$\nx $$ y\nstill math\n$$\ntext\n";
+        assert!(hit(body, "still math"));
+        assert!(!hit(body, "text\n"));
+        // a fence before any closer: not a block
+        assert!(!hit("$$\n```\ncode\n```\n$$\n", "$$\n```"));
+    }
+
+    #[test]
+    fn a_single_line_display_formula_protects_only_itself() {
+        let body = "$$x$$ and https://p.org/z\n";
+        assert!(hit(body, "x$$"));
+        assert!(!hit(body, "https://p.org"));
+    }
+
+    #[test]
+    fn percent_comment_blocks_are_protected() {
+        let body = "%%\nhttps://x.org/a\n##  heading\n%%\n\nhttps://p.org\n";
+        assert!(hit(body, "https://x.org"));
+        assert!(!hit(body, "https://p.org"));
+    }
+
+    #[test]
+    fn a_block_opened_on_a_list_marker_line_is_recognised() {
+        let body = "- <pre>\n  raw https://x.org/a\n\n  raw https://y.org/b\n  </pre>\n- next https://p.org\n";
+        assert!(hit(body, "https://x.org"));
+        assert!(hit(body, "https://y.org"));
+        assert!(!hit(body, "https://p.org"));
+        let body = "1. <div>\n   https://z.org/c\n   </div>\n";
+        assert!(hit(body, "https://z.org"));
+    }
+
+    #[test]
+    fn a_raw_block_ends_with_its_container() {
+        let body = "> <pre>\n> never closed\n\n## Next\n\nText  with https://p.org/x here.\n";
+        assert!(hit(body, "never closed"));
+        assert!(!hit(body, "https://p.org"));
+        let body = "- a\n  <div>x</div>\n- b https://x.org/one\n- c https://x.org/two\n";
+        assert!(hit(body, "<div>"));
+        assert!(!hit(body, "https://x.org/one"));
+        assert!(!hit(body, "https://x.org/two"));
+    }
+
+    #[test]
+    fn a_pending_opener_does_not_unprotect_what_follows() {
+        let body = "Use {{ in Jinja. See <a href=\"x\">https://b.org/y</a> for more.\n";
+        assert!(hit(body, "https://b.org"));
+        let body = "Type Foo<a> here, then <code>https://b.org/y</code> ok.\n";
+        assert!(hit(body, "https://b.org"));
+        // and the pending macro still closes on a later line
+        let body = "{{ start\nhttps://m.org/x }} tail https://p.org\n";
+        assert!(hit(body, "https://m.org"));
+        assert!(!hit(body, "https://p.org"));
+    }
+
+    #[test]
+    fn repeated_openers_on_one_line_stay_linear() {
+        for line in [
+            format!("{}</a>\n", "<a>".repeat(120_000)),
+            format!("{}\n", "<code>".repeat(120_000)),
+            "{{ ".repeat(120_000) + "\n",
+        ] {
+            let start = std::time::Instant::now();
+            let _ = BodySyntax::with_protected(&line);
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(3),
+                "{:?}",
+                start.elapsed()
+            );
+        }
+    }
+
+    #[test]
+    fn inserting_before_a_block_is_not_protected() {
+        let body = "## Next\n<div>x</div>\n";
+        let at = body.find("<div>").unwrap_or(0);
+        assert!(!regions(body).overlaps(&(at..at)));
+        assert!(
+            regions(body).contains(at),
+            "a diagnostic there is still protected"
+        );
+        assert!(regions(body).overlaps(&(at + 2..at + 2)));
     }
 }

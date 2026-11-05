@@ -886,11 +886,18 @@ impl HyaloLintEngine {
                     // DEC-381: a rule that lints prose does not fire where
                     // the text is not prose. `HTML_AWARE_RULE_IDS` are the
                     // rules whose subject is the markup itself.
-                    let diag_byte = line_text.map(|line| {
-                        line.char_indices()
-                            .nth(column.saturating_sub(1))
-                            .map_or(line.len(), |(b, _)| b)
-                    });
+                    // A whole-line finding (MD013) is about the line, not the
+                    // column where the limit happens to fall: judge it at the
+                    // line's first byte.
+                    let diag_byte = if LINE_LEVEL_RULE_IDS.contains(rule_id) {
+                        line_text.map(|_| 0)
+                    } else {
+                        line_text.map(|line| {
+                            line.char_indices()
+                                .nth(column.saturating_sub(1))
+                                .map_or(line.len(), |(b, _)| b)
+                        })
+                    };
                     if protected_aware
                         && !HTML_AWARE_RULE_IDS.contains(rule_id)
                         && diag_byte.is_some_and(|byte| spans.position_is_protected(v.line, byte))
@@ -1026,7 +1033,19 @@ impl HyaloLintEngine {
                 .check(&doc)
                 .with_context(|| format!("running HYALO001 on {rel_path}"))?;
             for v in violations {
-                let fix = convert_fix(&v, body_content);
+                // R3 (iteration 321): the same protected-region model as the
+                // stock rules. `[] sample` inside `<pre>`, a raw HTML block or
+                // `$$` math is literal text, not a malformed task.
+                let line_byte = doc_line_byte(&doc, v.line, v.column);
+                if line_byte.is_some_and(|byte| spans.position_is_protected(v.line, byte)) {
+                    continue;
+                }
+                let mut fix = convert_fix(&v, body_content);
+                if fix.as_ref().is_some_and(|fix| {
+                    spans.edit_touches_protected(body_content, fix.start, fix.end, &fix.replacement)
+                }) {
+                    fix = None;
+                }
                 diagnostics.push(Diagnostic {
                     rule_id: "HYALO001".to_owned(),
                     rule_name: v.rule_name.clone(),
@@ -1130,12 +1149,26 @@ const CODE_BLOCK_AWARE_RULE_IDS: &[&str] = &["MD010", "MD031", "MD040", "MD046",
 /// (no-inline-html) in an HTML block would switch it off entirely.
 const HTML_AWARE_RULE_IDS: &[&str] = &["MD033"];
 
+/// Rules that report on a whole line at a column that only marks where a
+/// limit falls (MD013's 81st). They are judged at the line's first byte.
+const LINE_LEVEL_RULE_IDS: &[&str] = &["MD013"];
+
 /// Rules whose fix inserts whole lines with no knowledge of the enclosing
 /// block quote (L-2, iteration 321). Inside a quote their findings stand and
 /// their edits are withheld: a blank line without the `> ` prefix splits one
 /// quote into three. A list item needs no prefix on a blank line, so those
 /// fixes stay; MD023 is dropped in any container, see its branch below.
 const BLOCK_QUOTE_BLIND_FIX_RULE_IDS: &[&str] = &["MD022", "MD031"];
+
+/// Byte offset within the 1-based `line` of the 1-based scalar `column`.
+fn doc_line_byte(doc: &Document, line: usize, column: usize) -> Option<usize> {
+    let text = doc.lines.get(line.checked_sub(1)?)?;
+    Some(
+        text.char_indices()
+            .nth(column.saturating_sub(1))
+            .map_or(text.len(), |(b, _)| b),
+    )
+}
 
 /// Whether an MD034 span is not a URL to wrap: a bare scheme with no address
 /// after it (`mailto:`, `https://`), or a word the rule measured without any
@@ -1170,8 +1203,12 @@ fn is_call_or_index_false_positive(message: &str, line: Option<&String>, column:
     if !url.is_empty() && url.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
         return true;
     }
-    line.and_then(|line| column.checked_sub(2).and_then(|i| line.chars().nth(i)))
-        .is_some_and(|before| before.is_alphanumeric() || matches!(before, '_' | ')' | ']'))
+    let glued = line
+        .and_then(|line| column.checked_sub(2).and_then(|i| line.chars().nth(i)))
+        .is_some_and(|before| before.is_alphanumeric() || matches!(before, '_' | ')' | ']'));
+    // A real destination on the right keeps it a reversed link even when the
+    // `(` follows a word (`out(see docs)[https://…]`, G2).
+    glued && !looks_like_destination(url)
 }
 
 /// Rule IDs whose upstream `Violation.column` (the *reported* diagnostic
@@ -1254,12 +1291,17 @@ fn is_regex_false_positive(message: &str) -> bool {
         return false;
     };
     let text_is_regexish = text.contains('|') || text.contains('[') || text.contains(']');
-    let url_is_destination = url.contains("://")
+    text_is_regexish && !looks_like_destination(url)
+}
+
+/// Whether the bracketed part of a suspected reversed link reads as a link
+/// destination (a scheme, a path, an anchor) rather than an index.
+fn looks_like_destination(url: &str) -> bool {
+    url.contains("://")
         || url.starts_with('/')
         || url.starts_with("./")
         || url.starts_with('#')
-        || url.starts_with("mailto:");
-    text_is_regexish && !url_is_destination
+        || url.starts_with("mailto:")
 }
 
 fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
@@ -2490,5 +2532,42 @@ mod tests {
         let found = lint_rule("  ## Using `x`\n", "MD023");
         assert!(found.iter().all(|d| d.fix.is_some()), "{found:?}");
         assert!(!found.is_empty());
+    }
+
+    #[test]
+    fn hyalo001_stays_out_of_raw_html_and_math() {
+        for body in [
+            "<pre>\n[] literal sample\n</pre>\n",
+            "<div>\n[x] done?\n</div>\n",
+            "$$\n[] \\cdot a\n$$\n",
+        ] {
+            assert!(lint_rule(body, "HYALO001").is_empty(), "{body:?}");
+        }
+        assert_eq!(lint_rule("[] real task\n", "HYALO001").len(), 1);
+    }
+
+    #[test]
+    fn md013_is_judged_per_line_not_at_the_limit_column() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let mut config = LintConfig::default();
+        config.rules.insert(
+            "MD013".to_owned(),
+            crate::config::RuleOverride::Enabled(true),
+        );
+        let body = format!("{} `{}` tail text here\n", "x".repeat(70), "y".repeat(90));
+        let found = engine
+            .lint_body(&body, "t.md", None, false, &config, &["MD013".to_owned()])
+            .unwrap();
+        assert_eq!(found.len(), 1, "column 81 sits inside a code span");
+    }
+
+    #[test]
+    fn md011_keeps_a_reversed_link_glued_to_a_word() {
+        let found = lint_rule(
+            "check this out(see docs)[https://example.com/guide] now\n",
+            "MD011",
+        );
+        assert_eq!(found.len(), 1);
+        assert!(lint_rule("a.getGamepads()[0]\n", "MD011").is_empty());
     }
 }
