@@ -46,6 +46,7 @@ pub mod link_graph;
 pub mod link_resolve;
 pub mod link_rewrite;
 pub mod link_score;
+pub mod link_target;
 pub mod link_write;
 pub mod links;
 pub mod rooted;

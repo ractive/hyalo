@@ -1885,6 +1885,14 @@ fn normalize_link_target<'a>(
     use crate::links::LinkKind;
 
     match kind {
+        // iter-322 (C-12, DEC-384): `./x` and `../x` are relative to the source
+        // folder in every reader — the catalog resolves them that way — so a
+        // wikilink spelled with either is normalised here too instead of being
+        // rooted (`./`) or rejected (`../`).
+        LinkKind::Wikilink if target.starts_with("./") || target.starts_with("../") => {
+            let target_path = crate::link_target::TargetParts::split(target).resolution_path();
+            std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), &target_path))
+        }
         LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
         LinkKind::Markdown => {
             if target.starts_with('/') {
@@ -2402,6 +2410,20 @@ pub(crate) fn classify_link_from_source(
     }
 
     match link.kind {
+        LinkKind::Wikilink if link.target.starts_with("./") || link.target.starts_with("../") => {
+            // iter-322 (C-12, DEC-384): a relative wikilink is judged from its
+            // source folder, as the catalog reads it — not rooted (`./`) or
+            // reported out of the vault (`../`).
+            let normalized = normalize_link_target(link.kind, source_rel, &link.target, |_| false);
+            let res = classify_link(canonical_dir, normalized.as_ref(), site_prefix, case_index);
+            if res == LinkResolution::Broken
+                && !expand_short_form
+                && case_index.is_some_and(|idx| idx.target_ambiguity(&link.target).is_some())
+            {
+                return (normalized.into_owned(), LinkResolution::ShortFormAmbiguous);
+            }
+            (normalized.into_owned(), res)
+        }
         LinkKind::Wikilink => {
             // For short-form wikilinks (no `/`), apply Obsidian stem resolution first.
             // This prevents `resolve_target`'s internal stem lookup (inside classify_link)
@@ -2888,9 +2910,10 @@ fn resolve_target_inner(
     // These are URL components that don't correspond to filesystem paths.
     // `[[a #Heading]]` leaves `a ` behind once the fragment is split off; trim
     // again so the space before the `#` is not part of the filename.
-    let head_len = target
-        .find(['#', '?'])
-        .map_or(target.len(), |pos| target[..pos].trim_end().len());
+    let head_len = crate::link_target::TargetParts::split(&target)
+        .path
+        .trim_end()
+        .len();
     truncate_cow(&mut target, head_len);
     // iter-275 (BUG-37): `[[./a]]` and `[[a]]` name the same file, so both must
     // report the same canonical path. `.` segments are pure syntax — dropping

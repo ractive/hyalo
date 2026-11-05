@@ -1,5 +1,6 @@
 //! Immutable semantic link identities. Catalog paths are never filesystem write authority.
 use crate::case_index::CaseInsensitiveIndex;
+use crate::link_target::TargetParts;
 use crate::links::LinkKind;
 use std::path::Path;
 
@@ -97,13 +98,13 @@ pub(crate) fn resolve_with_explicit_paths(
     if crate::links::is_external_target(target) {
         return Resolution::External;
     }
-    let raw = target.trim().replace('\\', "/");
-    let raw = raw.split(['#', '?']).next().unwrap_or("").trim_end();
+    // iter-322 (DEC-384): the one canonical split of an authored target.
+    let parts = TargetParts::split(target);
+    let raw = parts.resolution_path();
+    let raw = raw.as_ref();
     if raw.is_empty() {
         return Resolution::Missing;
     }
-    let decoded = crate::discovery::percent_decode_path(raw);
-    let raw = decoded.as_deref().unwrap_or(raw);
     let absolute = raw.starts_with('/');
     let trailing = raw.ends_with('/');
     let mut candidates = Vec::with_capacity(2);
@@ -112,7 +113,7 @@ pub(crate) fn resolve_with_explicit_paths(
             raw,
             options.site_prefix,
         ));
-    } else if kind == LinkKind::Markdown || raw.starts_with("./") {
+    } else if kind == LinkKind::Markdown || raw.starts_with("./") || raw.starts_with("../") {
         candidates.push(crate::link_graph::normalize_target(Path::new(source), raw));
         // Markdown file links can name a path from the vault root without a
         // leading slash (Obsidian's "Absolute path in vault" format). Prefer
@@ -139,6 +140,15 @@ pub(crate) fn resolve_with_explicit_paths(
         let resolved = resolve_path(index, candidate, trailing, &explicit_path);
         if !matches!(resolved, Resolution::Missing) {
             return resolved;
+        }
+    }
+    // iter-322 (C-1): Obsidian matches a wikilink against any path *suffix*, so
+    // `[[x/note]]` names `a/x/note.md` — the spelling it writes to tell two
+    // `note.md` apart. One match resolves, several are ambiguous.
+    if kind == LinkKind::Wikilink && !absolute && raw.contains('/') && !raw.starts_with('.') {
+        let by_suffix = index.lookup_path_suffix(raw.trim_end_matches('/'));
+        if !by_suffix.is_empty() {
+            return candidates_result(&by_suffix);
         }
     }
     // iter-319 (DEC-374): the shared target normalisation — `?query`, `./`,
@@ -456,5 +466,39 @@ mod tests {
             resolve(&index, "src.md", LinkKind::Wikilink, "Solo", off),
             Resolution::Missing
         );
+    }
+
+    /// iter-322 (C-1, C-12): a partial path resolves by suffix; a relative
+    /// `../` wikilink is read from its source folder, not called external.
+    #[test]
+    fn partial_paths_and_parent_relative_wikilinks_resolve() {
+        let mut index = CaseInsensitiveIndex::new();
+        for path in [
+            "a/x/note.md",
+            "b/y/note.md",
+            "c/x/note.md",
+            "t.md",
+            "o/o.md",
+        ] {
+            index.insert(path);
+        }
+        index.set_complete(true);
+        let options = ResolutionOptions {
+            aliases: false,
+            site_prefix: None,
+        };
+        let wiki = |source: &str, target: &str| {
+            resolve(&index, source, LinkKind::Wikilink, target, options)
+        };
+        assert_eq!(wiki("s.md", "y/note").path(), Some("b/y/note.md"));
+        assert_eq!(wiki("s.md", "Y/Note.md").path(), Some("b/y/note.md"));
+        assert_eq!(
+            wiki("s.md", "x/note"),
+            Resolution::Ambiguous(vec!["a/x/note.md".to_owned(), "c/x/note.md".to_owned()])
+        );
+        assert_eq!(wiki("s.md", "z/note"), Resolution::Missing);
+        assert_eq!(wiki("sub/s.md", "../t").path(), Some("t.md"));
+        assert_eq!(wiki("sub/s.md", "../o/o").path(), Some("o/o.md"));
+        assert_eq!(wiki("s.md", "../t"), Resolution::External);
     }
 }

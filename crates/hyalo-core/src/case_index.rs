@@ -425,6 +425,33 @@ impl CaseInsensitiveIndex {
         self.alias_map.len()
     }
 
+    /// The notes whose path ends in `/<target>.md` (case-insensitive) — a
+    /// partially qualified wikilink target such as `x/note` for `a/x/note.md`
+    /// (iter-322, C-1). `target` is path-form: it must contain a `/`, and a
+    /// `.md` suffix is optional. Empty for a bare stem.
+    #[must_use]
+    pub fn lookup_path_suffix(&self, target: &str) -> Vec<String> {
+        let target = target.trim_matches('/');
+        let target = target
+            .get(..target.len().saturating_sub(3))
+            .map_or(target, |head| {
+                if target.as_bytes()[head.len()..].eq_ignore_ascii_case(b".md") {
+                    head
+                } else {
+                    target
+                }
+            });
+        let Some((_, stem)) = target.rsplit_once('/') else {
+            return Vec::new();
+        };
+        let wanted = fold_key(&format!("/{target}.md")).into_owned();
+        self.lookup_stem_all(stem)
+            .iter()
+            .filter(|path| fold_key(&format!("/{path}")).ends_with(&wanted))
+            .cloned()
+            .collect()
+    }
+
     /// Return all candidate paths for a bare filename stem (case-insensitive).
     ///
     /// Unlike [`lookup_stem`] (which returns `None` for ambiguous matches),
@@ -572,17 +599,17 @@ pub fn bare_stem(target: &str) -> Option<std::borrow::Cow<'_, str>> {
 fn bare_stem_with(target: &str, strip_query: bool) -> Option<std::borrow::Cow<'_, str>> {
     use std::borrow::Cow;
     let target = target.trim();
-    let end = if strip_query {
-        target.find(['#', '?'])
+    let parts = crate::link_target::TargetParts::split(target);
+    let kept = if strip_query {
+        parts.path.len()
     } else {
-        target.find('#')
+        parts.path.len() + parts.query.len()
     };
-    let mut head = end.map_or(target, |pos| &target[..pos]).trim_end();
+    let mut head = target[..kept].trim_end();
     while let Some(rest) = head.strip_prefix("./") {
         head = rest;
     }
-    let mut head: Cow<'_, str> =
-        crate::discovery::percent_decode_path(head).map_or(Cow::Borrowed(head), Cow::Owned);
+    let mut head: Cow<'_, str> = crate::link_target::resolution_path(head);
     if head.contains(['/', '\\']) {
         return None;
     }

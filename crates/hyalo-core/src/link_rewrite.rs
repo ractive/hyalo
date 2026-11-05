@@ -23,6 +23,7 @@ use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
 use crate::frontmatter_links::FrontmatterValueLines;
 use crate::link_graph::{LinkGraph, normalize_target};
 use crate::link_resolve::LinkResolver;
+use crate::link_target::TargetParts;
 use crate::link_write::{LinkWriter, SpanReplacement, TargetStyle};
 use crate::links::{LinkKind, PreserveForm, Resolution, extract_link_spans_with_original};
 use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
@@ -536,38 +537,6 @@ fn replacement_link_spans(text: &str) -> Vec<crate::links::LinkSpan> {
     }
 }
 
-/// Split a markdown-link target into its path portion and any trailing
-/// `#fragment`. Returns `(path, fragment_including_hash)`.
-///
-/// For `"peer.md#intro"` this returns `("peer.md", "#intro")`; for a target
-/// without a fragment the second element is `""`.
-fn split_target_fragment(target: &str) -> (&str, &str) {
-    match target.find('#') {
-        Some(idx) => (&target[..idx], &target[idx..]),
-        None => (target, ""),
-    }
-}
-
-/// Split a raw frontmatter wikilink target into `(path, fragment, alias)`.
-///
-/// `fragment` includes the leading `#` (empty when absent); `alias` includes
-/// the leading `|` (empty when absent). The alias is separated first because
-/// an alias may itself contain a `#` that must not be mistaken for a fragment
-/// (e.g. `path#frag|Some #hashtag label`).
-///
-/// Examples:
-/// - `"decision-log#DEC-041"` → `("decision-log", "#DEC-041", "")`
-/// - `"a#x|Label"` → `("a", "#x", "|Label")`
-/// - `"a|Label"` → `("a", "", "|Label")`
-fn split_frontmatter_target(target: &str) -> (&str, &str, &str) {
-    let (before_alias, alias) = match target.find('|') {
-        Some(idx) => (&target[..idx], &target[idx..]),
-        None => (target, ""),
-    };
-    let (path, fragment) = split_target_fragment(before_alias);
-    (path, fragment, alias)
-}
-
 /// Rebuild a frontmatter wikilink's bracket text when its target moves, given
 /// the already-matched original occurrence and the destination path.
 ///
@@ -582,7 +551,9 @@ fn split_frontmatter_target(target: &str) -> (&str, &str, &str) {
 /// be a no-op (the new bracket text is identical to the old), so callers can
 /// skip emitting an empty replacement.
 pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str) -> Option<String> {
-    let (path_part, fragment, alias) = split_frontmatter_target(occ_target);
+    let parts = TargetParts::split_with_alias(occ_target);
+    let path_part = parts.path;
+    let tail = &occ_target[path_part.len()..];
 
     let new_stem = new_ref.strip_suffix(".md").unwrap_or(new_ref);
     let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
@@ -595,9 +566,36 @@ pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str)
     };
 
     let new_target = crate::link_write::encode_destination(new_target, LinkKind::Wikilink);
+    // iter-322 (DEC-384): `?query`, `#fragment` and `|alias` are the canonical
+    // split's tail and survive verbatim, as they do in a body wikilink. A new
+    // name holding a `?` drops the query, which would otherwise read as part of it.
+    let tail = if new_target.contains('?') {
+        &tail[parts.query.len()..]
+    } else {
+        tail
+    };
     let old_text = format!("[[{occ_target}]]");
-    let new_text = format!("[[{new_target}{fragment}{alias}]]");
+    let new_text = format!("[[{new_target}{tail}]]");
     (old_text != new_text).then_some(new_text)
+}
+
+/// [`rewrite_frontmatter_wikilink_text`] for an alias fix (iter-322, A-1): a
+/// bare `[[AKA]]` becomes `[[sub/Target|AKA]]` — the declaring note's full
+/// vault path over the alias as display text, as in a body — because the bare
+/// basename could be ambiguous and would drop the alias. An existing label, a
+/// `#fragment` and a `?query` survive; the alias only becomes the label when
+/// the link had none.
+pub(crate) fn rewrite_frontmatter_alias_text(occ_target: &str, new_ref: &str) -> Option<String> {
+    let parts = TargetParts::split_with_alias(occ_target);
+    let new_stem = new_ref.strip_suffix(".md").unwrap_or(new_ref);
+    let new_target = crate::link_write::encode_destination(new_stem, LinkKind::Wikilink);
+    let label = if parts.alias.is_empty() {
+        format!("|{}", parts.path.trim())
+    } else {
+        parts.alias.to_owned()
+    };
+    let new_text = format!("[[{new_target}{}{}{label}]]", parts.query, parts.fragment);
+    (new_text != format!("[[{occ_target}]]")).then_some(new_text)
 }
 
 /// How a markdown-link target classifies for outbound rewriting when a file
@@ -635,7 +633,7 @@ fn classify_outbound_target(target: &str) -> OutboundTargetKind {
     if target.is_empty() || target.starts_with('#') {
         return OutboundTargetKind::Excluded;
     }
-    let (path_part, _) = split_target_fragment(target);
+    let path_part = TargetParts::split(target).path;
     if path_part.is_empty() {
         return OutboundTargetKind::Excluded;
     }
@@ -1045,6 +1043,7 @@ fn plan_inbound_rewrites(
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     &visible_line,
                     scanner.line_num(),
+                    source_rel,
                     old_rel,
                     old_stem,
                     new_rel,
@@ -1107,19 +1106,29 @@ fn plan_inbound_rewrites(
                         candidates,
                     )))
                 } else {
-                    let decoded = crate::discovery::percent_decode_path(&span.link.target);
-                    let t = decoded.as_deref().unwrap_or(&span.link.target);
+                    // iter-322 (DEC-384): the canonical split drops the `?query`
+                    // the reader drops, so `[[note?x=1]]` is checked as `note`.
+                    // The literal `What?` stem is tried first (a file may be
+                    // called `What?.md`).
+                    let parts = TargetParts::split(&span.link.target);
+                    let literal = &span.link.target[..parts.path.len() + parts.query.len()];
+                    let t = parts.resolution_path();
+                    let stem_of = |name: &str| {
+                        let name = name.to_ascii_lowercase();
+                        name.strip_suffix(".md").unwrap_or(&name).to_owned()
+                    };
                     // Only bare wikilinks (no path separator) need the ambiguity check.
                     let normalized = if let Some(wo) = t.strip_prefix("./") {
                         std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
                     } else {
-                        std::borrow::Cow::Borrowed(t)
+                        t
                     };
                     let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
                     (is_bare && case_index.is_some()).then(|| {
-                        let t_norm = normalized.to_ascii_lowercase();
-                        let stem = t_norm.strip_suffix(".md").unwrap_or(&t_norm);
-                        resolver.resolve_stem(stem)
+                        let by_literal = (!parts.query.is_empty())
+                            .then(|| resolver.resolve_stem(&stem_of(literal)))
+                            .filter(|found| !matches!(found, Resolution::Broken));
+                        by_literal.unwrap_or_else(|| resolver.resolve_stem(&stem_of(&normalized)))
                     })
                 };
                 match resolution {
@@ -1261,10 +1270,9 @@ fn resolve_outbound_target(
             });
         return (path.to_owned(), style);
     }
-    let (target_path, _) = split_target_fragment(&span.link.target);
-    let decoded = crate::discovery::percent_decode_path(target_path);
+    let target_path = TargetParts::split(&span.link.target).resolution_path();
     (
-        normalize_target(Path::new(source), decoded.as_deref().unwrap_or(target_path)),
+        normalize_target(Path::new(source), &target_path),
         TargetStyle::File,
     )
 }
@@ -1316,6 +1324,7 @@ fn plan_outbound_rewrites(
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     &visible_line,
                     scanner.line_num(),
+                    old_rel,
                     old_rel,
                     old_stem,
                     new_rel,
@@ -1421,10 +1430,8 @@ fn plan_outbound_rewrites(
                 continue;
             }
             if kind == OutboundTargetKind::BareUnknown {
-                let (path_part, _) = split_target_fragment(&span.link.target);
-                let decoded = crate::discovery::percent_decode_path(path_part);
-                let candidate =
-                    normalize_target(Path::new(old_rel), decoded.as_deref().unwrap_or(path_part));
+                let path_part = TargetParts::split(&span.link.target).resolution_path();
+                let candidate = normalize_target(Path::new(old_rel), &path_part);
                 if !dir.join(&candidate).is_file() {
                     continue;
                 }
@@ -1516,9 +1523,12 @@ fn apply_replacements_observed(
 
             for &(index, r) in sorted {
                 let pos = r.byte_offset;
-                let end = pos + r.old_text.len();
-                if end <= line.len() && line[pos..end] == *r.old_text {
-                    line = format!("{}{}{}", &line[..pos], r.new_text, &line[end..]);
+                let end = pos.saturating_add(r.old_text.len());
+                // C-7 (iter-322): `get` is `None` for an offset off a char
+                // boundary, so a plan computed against another layout of the
+                // line is skipped as stale instead of panicking.
+                if line.get(pos..end) == Some(r.old_text.as_str()) {
+                    line.replace_range(pos..end, &r.new_text);
                     applied(index);
                 }
             }
@@ -2001,7 +2011,7 @@ fn split_frontmatter_wikilink(
     // and the block scalar wrapped it, which is exactly the case worth
     // warning about.
     let collapsed: String = joined.chars().filter(|c| !c.is_whitespace()).collect();
-    let (target_path, _, _) = split_frontmatter_target(&collapsed);
+    let target_path = TargetParts::split_with_alias(&collapsed).path;
     let matches = target_path == old_stem
         || target_path == old_rel
         || case_index.is_some_and(|idx| {
@@ -2134,6 +2144,7 @@ fn scan_split_frontmatter_links_batch(
 fn plan_frontmatter_wikilink_rewrites(
     line: &str,
     line_num: usize,
+    source_rel: &str,
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
@@ -2149,14 +2160,14 @@ fn plan_frontmatter_wikilink_rewrites(
         // Strip both the alias suffix (`path|alias`) AND any `#fragment` before
         // comparing against the moved file — an anchored frontmatter target like
         // `decision-log#DEC-041` must still match `decision-log` (L-2).
-        let (target_path, _, _) = split_frontmatter_target(target);
-        let decoded = crate::discovery::percent_decode_path(target_path);
-        let target_path = decoded.as_deref().unwrap_or(target_path);
+        let parts = TargetParts::split_with_alias(target);
+        let resolution_path = parts.resolution_path();
+        let target_path = resolution_path.as_ref();
 
         let matches = if target_path == old_stem || target_path == old_rel {
             true
         } else if let Some(idx) = case_index {
-            let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
+            let t_norm = target_path.to_ascii_lowercase();
             // BUG-3 (dogfood v0.22.0), iter-275 MV-1: a bare frontmatter stem
             // shared by two files resolves to neither, so every lookup below
             // answers `None` and the link used to be dropped before it could
@@ -2181,24 +2192,29 @@ fn plan_frontmatter_wikilink_rewrites(
             if ambiguous.is_some_and(|candidates| candidates.iter().any(|c| c == old_rel)) {
                 true
             } else {
-                let canonical = idx
-                    .lookup_unique(&t_norm)
-                    .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
-                    // iter-262: a bare stem naming a file in a subdirectory
-                    // (`categories: ["[[Books]]"]` → `Categories/Books.md`) is how
-                    // Obsidian writes nearly every frontmatter link. The path
-                    // lookups above never match it — `books.md` is not a vault path
-                    // — so `mv Categories/Books.md` used to report
-                    // `links updated: 0` and leave the reference dangling. Only an
-                    // unambiguous stem resolves; `lookup_stem` returns `None` when
-                    // two files share a basename, and guessing there would rewrite
-                    // the wrong link.
-                    .or_else(|| {
-                        (!t_norm.contains('/')).then(|| {
-                            idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
-                        })?
-                    });
-                canonical == Some(old_rel) || canonical == Some(old_stem)
+                // iter-322 (DEC-384): the one catalog resolver, with the link's
+                // own source — so `[[./note]]`, `[[../t]]`, `[[x/note]]` and a
+                // bare stem naming a file in a subdirectory (iter-262) resolve
+                // here exactly as they do on a read. Only an unambiguous
+                // target resolves; guessing there would rewrite the wrong link.
+                let resolved = crate::catalog::resolve(
+                    idx,
+                    source_rel,
+                    LinkKind::Wikilink,
+                    parts.path,
+                    crate::catalog::ResolutionOptions {
+                        aliases: false,
+                        site_prefix: None,
+                    },
+                );
+                // A file may be called `What?.md`: the literal stem counts too.
+                let literal = (!parts.query.is_empty())
+                    .then(|| {
+                        let literal = &target[..parts.path.len() + parts.query.len()];
+                        idx.lookup_stem(literal.strip_suffix(".md").unwrap_or(literal))
+                    })
+                    .flatten();
+                resolved.path() == Some(old_rel) || literal == Some(old_rel)
             }
         } else {
             false
@@ -2312,6 +2328,7 @@ fn plan_outbound_rewrites_batch(
                     &visible_line,
                     scanner.line_num(),
                     old_rel,
+                    old_rel,
                     old_stem,
                     new_rel,
                     new_stem,
@@ -2340,10 +2357,8 @@ fn plan_outbound_rewrites_batch(
                 continue;
             }
             if kind == OutboundTargetKind::BareUnknown {
-                let (path_part, _) = split_target_fragment(&span.link.target);
-                let decoded = crate::discovery::percent_decode_path(path_part);
-                let candidate =
-                    normalize_target(Path::new(old_rel), decoded.as_deref().unwrap_or(path_part));
+                let path_part = TargetParts::split(&span.link.target).resolution_path();
+                let candidate = normalize_target(Path::new(old_rel), &path_part);
                 if !dir.join(&candidate).is_file() {
                     continue;
                 }
@@ -2532,6 +2547,29 @@ mod tests {
             validate_move_link_identity(std::iter::once(&mut plan), &index, &renames, None, false)
                 .is_err()
         );
+    }
+
+    /// C-7 (iter-322): a replacement whose offset is off a char boundary, or
+    /// past the line, is stale and skipped — it must not panic.
+    #[test]
+    fn stale_replacement_offsets_are_skipped_not_sliced() {
+        let content = "caf\u{e9} [[a]]\n";
+        for byte_offset in [4, 100] {
+            let replacements = [Replacement {
+                line: 1,
+                byte_offset,
+                old_text: "[[a]]".to_owned(),
+                new_text: "[[b]]".to_owned(),
+            }];
+            assert_eq!(apply_replacements(content, &replacements), content);
+        }
+        let ok = [Replacement {
+            line: 1,
+            byte_offset: 6,
+            old_text: "[[a]]".to_owned(),
+            new_text: "[[b]]".to_owned(),
+        }];
+        assert_eq!(apply_replacements(content, &ok), "caf\u{e9} [[b]]\n");
     }
 
     #[test]

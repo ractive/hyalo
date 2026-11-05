@@ -1258,8 +1258,8 @@ pub(crate) enum Commands {
             to write [[sub/note]], not to create a note. `mv`'s skipped_ambiguous, HYALO006 and \
             `links fix`'s ambiguous_links name the same candidates. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
-            also carries suggested_fragment, the full heading to write instead (never applied \
-            automatically). -, _ and a space are one character class both for that prefix test and \
+            also carries suggested_fragment, the full heading to write instead (the GFM slug for a \
+            markdown link; never applied automatically). -, _ and a space are one character class both for that prefix test and \
             for anchor RESOLUTION (DEC-309), so #Browser_compatibility resolves to \
             `## Browser compatibility`; a nested heading path [[a#H1#H2]] resolves by walking the \
             outline (DEC-311), and a wikilink target is trimmed before resolution, so [[ a ]] and \
