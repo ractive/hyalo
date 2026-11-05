@@ -8683,6 +8683,7 @@ entry of every vault. Such a note reads correctly on a disk scan and, under
 `--index`, once it changes or after `create-index --force`. The same reasoning
 covers later Unicode table updates; a change to how an already assigned code
 point tokenizes still needs the bump.
+
 ## DEC-375: serde-saphyr 2.1 — four changes in how frontmatter reads, one undone (2026-11-05) — amends DEC-350
 
 **Context.** Dependabot's PR #392 moved the YAML parser from serde-saphyr 1.3
