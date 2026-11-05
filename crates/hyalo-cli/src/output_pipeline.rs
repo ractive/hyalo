@@ -4,6 +4,10 @@ use crate::commands::files_from::FilesFromCounters;
 use crate::hints::{FilesFromCounterSummary, HintContext, generate_hints_with_counters};
 use crate::output::{CommandOutcome, Envelope, Format, evaluate_jq_isolated, output_value};
 
+/// The way out of a `--jq` result over the output cap (iter-320).
+const JQ_LIMIT_HINT: &str = "use --format json (with --limit) instead of --jq, or narrow the filter \
+     (for example `.results[:100]` or `[.results[].file]`)";
+
 /// Error message for `--count` on non-list commands (shared across match arms).
 ///
 /// Re-exported from [`crate::list_commands`], the single source of truth for
@@ -222,10 +226,48 @@ impl OutputPipeline<'_> {
         rendered.code
     }
 
+    /// The diagnostic for a `--jq` filter that failed to evaluate.
+    fn jq_failure(&self, error: &str) -> crate::output::UserDiagnostic {
+        let mut diagnostic = crate::output::user_diagnostic(
+            self.error_format,
+            "jq filter failed",
+            None,
+            None,
+            Some(error),
+        );
+        diagnostic.category = Some("output_failure");
+        if crate::output::is_jq_output_limit_error(error) {
+            diagnostic.hint = Some(JQ_LIMIT_HINT.into());
+        }
+        diagnostic
+    }
+
+    /// iter-320 (DEC-307): a `--jq` result over the output cap is the caller's
+    /// query being too wide, not a renderer failure, so it exits 1 and names
+    /// the way out instead of exiting 2 with a bare "jq filter failed".
+    fn jq_limit_rendered(&self, mut rendered: RenderedReport, error: &str) -> RenderedReport {
+        let diagnostic = crate::output::user_diagnostic(
+            self.error_format,
+            error,
+            None,
+            Some(JQ_LIMIT_HINT),
+            None,
+        );
+        rendered.stdout.clear();
+        rendered
+            .stderr
+            .extend_from_slice(format!("{}\n", diagnostic.render(self.error_format)).as_bytes());
+        rendered.code = 1;
+        rendered
+    }
+
     fn render(
         &self,
         report: ExecutionReport,
     ) -> std::result::Result<RenderedReport, Box<crate::output::UserDiagnostic>> {
+        // A run that already wrote keeps the post-write failure contract
+        // (exit 2, effects retained); only a read-only run exits 1 (iter-320).
+        let no_effects = report.effects.is_none();
         let mut rendered = RenderedReport {
             stdout: Vec::new(),
             stderr: Vec::new(),
@@ -242,17 +284,15 @@ impl OutputPipeline<'_> {
         match payload {
             ReportPayload::Envelope(envelope) => {
                 let formatted = if let Some(filter) = self.jq_filter {
-                    evaluate_jq_isolated(filter, &envelope).map_err(|error| {
-                        let mut diagnostic = crate::output::user_diagnostic(
-                            self.error_format,
-                            "jq filter failed",
-                            None,
-                            None,
-                            Some(&error),
-                        );
-                        diagnostic.category = Some("output_failure");
-                        diagnostic
-                    })?
+                    match evaluate_jq_isolated(filter, &envelope) {
+                        Ok(formatted) => formatted,
+                        Err(error)
+                            if no_effects && crate::output::is_jq_output_limit_error(&error) =>
+                        {
+                            return Ok(self.jq_limit_rendered(rendered, &error));
+                        }
+                        Err(error) => return Err(Box::new(self.jq_failure(&error))),
+                    }
                 } else {
                     serde_json::to_string_pretty(&envelope)
                         .map_err(|error| crate::output::UserDiagnostic::new(error.to_string()))?
@@ -346,17 +386,15 @@ impl OutputPipeline<'_> {
                     output_value(&envelope)
                 };
                 let formatted = if let Some(filter) = self.jq_filter {
-                    evaluate_jq_isolated(filter, &envelope).map_err(|error| {
-                        let mut diagnostic = crate::output::user_diagnostic(
-                            self.error_format,
-                            "jq filter failed",
-                            None,
-                            None,
-                            Some(&error),
-                        );
-                        diagnostic.category = Some("output_failure");
-                        diagnostic
-                    })?
+                    match evaluate_jq_isolated(filter, &envelope) {
+                        Ok(formatted) => formatted,
+                        Err(error)
+                            if no_effects && crate::output::is_jq_output_limit_error(&error) =>
+                        {
+                            return Ok(self.jq_limit_rendered(rendered, &error));
+                        }
+                        Err(error) => return Err(Box::new(self.jq_failure(&error))),
+                    }
                 } else {
                     if self.user_format == Format::Text
                         && total == Some(0)

@@ -155,13 +155,26 @@ impl Plan {
         let receipt_path = skill_path.join(RECEIPT);
         let bytes = serde_json::to_vec(&self.receipt)?;
         let existed = self.receipt_source.is_some();
-        // Write the receipt first with both old and pending contents. An
-        // interrupted upgrade remains recognizable on retry or deinit.
-        publish_captured_installation(root, &receipt_path, self.receipt_source, &bytes)?;
-        report.push(
-            if existed { "updated" } else { "created" },
-            format!("{}/{RECEIPT}", self.skill),
-        );
+        // iter-320: a re-run whose receipt is byte-identical writes nothing
+        // and says so, instead of reporting an update.
+        let receipt_same = self
+            .receipt_source
+            .as_ref()
+            .map(CapturedInput::bytes)
+            .transpose()?
+            .as_deref()
+            == Some(bytes.as_slice());
+        if receipt_same {
+            report.push("unchanged", format!("{}/{RECEIPT}", self.skill));
+        } else {
+            // Write the receipt first with both old and pending contents. An
+            // interrupted upgrade remains recognizable on retry or deinit.
+            publish_captured_installation(root, &receipt_path, self.receipt_source, &bytes)?;
+            report.push(
+                if existed { "updated" } else { "created" },
+                format!("{}/{RECEIPT}", self.skill),
+            );
+        }
         for asset in self.assets {
             let label = format!("{}/{}", self.skill, asset.name);
             if asset

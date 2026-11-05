@@ -68,13 +68,14 @@ hyalo changelog release 1.2.0 --date 2026-07-17 --apply            # override th
   `[Unreleased]` is the last section.
 - **`changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a
   dated `## [X.Y.Z] - <date>` section (date defaults to today), re-creates an empty
-  `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference
-  (fill in the real compare URL). It **refuses** to release a version that already exists
+  `[Unreleased]` above it, and writes the footer links from the `[Unreleased]` compare link
+  (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`); only a
+  non-compare `[Unreleased]` definition gets a `[X.Y.Z]: TBD` placeholder. It **refuses** to release a version that already exists
   (idempotency guard). Both default to `--dry-run` and exit non-zero on drift, so they
   double as CI checks; pass `--apply` to write.
 
-After a release, replace the `TBD` link target with the real compare/tag URL and run
-`hyalo lint --profile changelog` to confirm the result is clean.
+After a release, run `hyalo lint --profile changelog` to confirm the result is clean (and
+replace a `TBD` link target by hand if one was written).
 
 ## Root `CHANGELOG.md` with a docs-subdir vault
 

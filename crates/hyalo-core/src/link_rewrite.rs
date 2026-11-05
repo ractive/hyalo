@@ -1192,6 +1192,13 @@ fn plan_inbound_rewrites(
                 site_prefix,
                 style,
             ) {
+                // iter-320 (DEC-354): a bare link resolves by NFC-folded stem,
+                // so a rewrite whose new text only recomposes the old one
+                // (`[[Café]]` precomposed -> the decomposed bytes of
+                // `Café.md`) changes nothing a reader or Obsidian sees.
+                if same_up_to_unicode_composition(&old_text, &new_text) {
+                    continue;
+                }
                 replacements.push(Replacement {
                     line: line_num,
                     byte_offset,
@@ -1203,6 +1210,12 @@ fn plan_inbound_rewrites(
     }
 
     (replacements, skipped_ambiguous)
+}
+
+/// Whether two link texts differ only in Unicode composition (NFC vs NFD).
+fn same_up_to_unicode_composition(old: &str, new: &str) -> bool {
+    use unicode_normalization::UnicodeNormalization as _;
+    old != new && old.nfc().eq(new.nfc())
 }
 
 /// A static empty index used as a fallback when no case_index is available.

@@ -6,8 +6,11 @@
    [Version-sync prerequisites](#version-sync-prerequisites)), and bump the
    default `version` input of [`npm-registry.yml`](../.github/workflows/npm-registry.yml)
    to the new version.
-2. Rotate the changelog with hyalo itself: `hyalo changelog release X.Y.Z --apply`
-   (check that the new footer link is a GitHub compare URL, not `TBD`).
+2. Rotate the changelog with hyalo itself: `hyalo changelog release X.Y.Z --apply`.
+   It writes both footer links from the `[Unreleased]` compare link:
+   `[X.Y.Z]: …/compare/vPREV...vX.Y.Z` and `[Unreleased]: …/compare/vX.Y.Z...HEAD`.
+   Only an `[Unreleased]` definition that is not a `…/compare/<tag>...HEAD` link
+   still yields a `[X.Y.Z]: TBD` placeholder to fix by hand.
 3. Cut the release: `gh release create vX.Y.Z --generate-notes`.
 
 ## Version-sync prerequisites
@@ -23,6 +26,25 @@ xtask gates in CI fail until these all carry the Cargo workspace version
 | `crates/hyalo-cli/templates/pi/package.json` (vendored copy; `just sync-pi-package`) | `check-pi-package-sync` |
 | `plugins/hyalo/.codex-plugin/plugin.json` (Codex plugin, DEC-340) | `check-pi-package-sync` |
 | `npm/hyalo/package.json` and its platform `optionalDependencies` | `generate-npm-packages --check` (npm Packages workflow) |
+| `npm/platforms/*/package.json` (seven platform manifests) | `generate-npm-packages --check` |
+| `npm/hyalo/package-lock.json` (root `version`, the seven `optionalDependencies` pins, each platform entry's `version` and `resolved` URL) | `generate-npm-packages --check` |
+| `Cargo.lock` (the `hyalo-*` workspace packages) | `cargo` rewrites it on the next build |
+| `.github/workflows/npm-registry.yml` (default `version` input) | none — bump it by hand |
+
+`cargo xtask generate-npm-packages --generate` (run it as
+`./target/debug/xtask generate-npm-packages --generate`) rewrites the npm
+manifests *and* the lockfile lines above in one go. It drops the `integrity`
+of a platform entry whose version moves, because that hash names the previous
+tarball; npm records the new one once the version is published, so after the
+npm job succeeds run `npm install --package-lock-only` in `npm/hyalo` and
+commit the lockfile.
+
+A full version bump therefore touches 16 files: `Cargo.toml`, `Cargo.lock`,
+`package.json`, `pi-package/package.json`,
+`crates/hyalo-cli/templates/pi/package.json`,
+`plugins/hyalo/.codex-plugin/plugin.json`, `npm/hyalo/package.json`,
+`npm/hyalo/package-lock.json`, the seven `npm/platforms/*/package.json`, and
+`.github/workflows/npm-registry.yml`.
 
 The Codex plugin follows the workspace version because it ships the
 per-release jev helper (DEC-340). On a release the npm job also refuses a

@@ -182,8 +182,7 @@ pub fn plan_anchor_fixes_filtered(
             // a `suggested_fragment` when one exists -- the two commands
             // never disagree about what the fix would look like.
             let suggested_fragment =
-                crate::anchor::unique_heading_by_prefix(fragment, &target_entry.sections)
-                    .map(str::to_owned);
+                crate::anchor::suggest_heading(fragment, &target_entry.sections);
             let candidate = numbered_heading_repair(fragment, &target_entry.sections);
             let result = (|| -> Result<AnchorFixPlan, String> {
                 let (heading, slug) = candidate.map_err(str::to_owned)?;

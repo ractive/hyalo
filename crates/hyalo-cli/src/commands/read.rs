@@ -443,6 +443,15 @@ fn read_resolved(
         None
     };
 
+    // iter-320: an empty frontmatter map with no raw text is a note that has
+    // none (or an empty fence); say so instead of printing nothing.
+    if frontmatter_flag
+        && fm_raw.is_none()
+        && fm_value.as_ref().is_some_and(indexmap::IndexMap::is_empty)
+    {
+        crate::warn::warn(format!("{rel_path}: no frontmatter to show"));
+    }
+
     // Determine what content to return
     let need_body = section.is_some() || !frontmatter_flag || line_range.is_some();
 

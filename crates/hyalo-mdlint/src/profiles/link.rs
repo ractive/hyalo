@@ -209,7 +209,12 @@ pub fn check_broken_links(
             ctx.site_prefix.as_deref(),
             Some(&ctx.case_index),
         );
-        if resolved.is_none() {
+        // iter-320: a destination that walks above the vault root is out of
+        // scope, not broken -- `find --broken-links` and `summary` leave it
+        // out of the headline (iter-193), so HYALO006 must too.
+        if resolved.is_none()
+            && !discovery::link_target_escapes_vault(rel_path, link.kind, &link.target)
+        {
             let kind = if link.is_frontmatter() {
                 "frontmatter wikilink"
             } else {

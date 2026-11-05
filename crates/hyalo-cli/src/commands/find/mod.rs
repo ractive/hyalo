@@ -67,9 +67,8 @@ fn anchor_verdict(
             explicit_anchor_ids,
         );
         let suggested = broken
-            .then(|| hyalo_core::anchor::unique_heading_by_prefix(fragment, sections))
-            .flatten()
-            .map(str::to_owned);
+            .then(|| hyalo_core::anchor::suggest_heading(fragment, sections))
+            .flatten();
         (broken, suggested)
     }
 
@@ -1607,13 +1606,9 @@ pub(crate) fn find_prepared(
                             // cross-file anchor, against this file's headings.
                             suggested_fragment: broken_anchor
                                 .then(|| {
-                                    hyalo_core::anchor::unique_heading_by_prefix(
-                                        fragment,
-                                        &entry.sections,
-                                    )
+                                    hyalo_core::anchor::suggest_heading(fragment, &entry.sections)
                                 })
-                                .flatten()
-                                .map(str::to_owned),
+                                .flatten(),
                             out_of_vault: false,
                             // A same-file anchor names no target to alias.
                             via: None,

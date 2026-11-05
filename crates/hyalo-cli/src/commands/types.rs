@@ -1615,6 +1615,23 @@ pub(crate) fn run(
     use crate::cli::args::TypesAction;
 
     let action = action.unwrap_or(TypesAction::List);
+    // iter-320: `list`/`show` read the loaded schema, which under an unusable
+    // `[schema]` is the empty fallback. Answering "no types" / "type 'x' not
+    // found" then blames the type for what is a broken config.
+    if matches!(action, TypesAction::List | TypesAction::Show { .. })
+        && let Some(diagnostic) = ctx.schema_invalid
+    {
+        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+            effective_format,
+            &format!("the [schema] in .hyalo.toml is unusable: {diagnostic}"),
+            None,
+            Some(
+                "fix the [schema] section (`hyalo config` reports it as malformed); \
+                 until it loads, no type can be listed or shown",
+            ),
+            None,
+        )));
+    }
     match action {
         TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
         TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
