@@ -651,7 +651,9 @@ pub fn detect_broken_links_from_index(
                         source: entry.rel_path.clone(),
                         line: *line,
                         target: link.target.clone(),
-                        candidates: ambiguous_candidates(&link.target, case_index),
+                        candidates: case_index
+                            .and_then(|idx| idx.ambiguous_candidates(&link.target))
+                            .unwrap_or_default(),
                     });
                 }
                 LinkResolution::Broken => {
@@ -723,33 +725,6 @@ pub fn detect_broken_links_from_index(
 /// concept, and a markdown `[x](Leah)` names a file relative to its own
 /// folder, so answering it with somebody's alias would be a guess dressed up
 /// as a certainty.
-/// The vault paths a bare, unresolved wikilink target is ambiguous between
-/// (iter-275, ALIAS-5 / BUG-26): two files sharing a stem, or — when no file
-/// carries the stem at all — two notes declaring it as an alias.
-fn ambiguous_candidates(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> Vec<String> {
-    let Some(idx) = case_index else {
-        return Vec::new();
-    };
-    let target = target.trim();
-    if target.is_empty() || target.contains('/') || target.contains('\\') {
-        return Vec::new();
-    }
-    let stem = strip_md_suffix(target);
-    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
-    if stem.is_empty() {
-        return Vec::new();
-    }
-    let by_stem = idx.lookup_stem_all(stem);
-    if by_stem.len() > 1 {
-        return by_stem.to_vec();
-    }
-    let by_alias = idx.lookup_alias_all(stem);
-    if by_stem.is_empty() && by_alias.len() > 1 {
-        return by_alias.to_vec();
-    }
-    Vec::new()
-}
-
 fn alias_fix_target(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> Option<String> {
     let idx = case_index?;
     let target = target.trim();

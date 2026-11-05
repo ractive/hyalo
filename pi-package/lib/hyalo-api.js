@@ -299,9 +299,9 @@ var require_platforms = __commonJS({
   }
 });
 
-// node_modules/detect-libc/lib/process.js
+// ../../../../../npm/hyalo/node_modules/detect-libc/lib/process.js
 var require_process = __commonJS({
-  "node_modules/detect-libc/lib/process.js"(exports, module) {
+  "../../../../../npm/hyalo/node_modules/detect-libc/lib/process.js"(exports, module) {
     "use strict";
     var isLinux = () => process.platform === "linux";
     var report = null;
@@ -322,9 +322,9 @@ var require_process = __commonJS({
   }
 });
 
-// node_modules/detect-libc/lib/filesystem.js
+// ../../../../../npm/hyalo/node_modules/detect-libc/lib/filesystem.js
 var require_filesystem = __commonJS({
-  "node_modules/detect-libc/lib/filesystem.js"(exports, module) {
+  "../../../../../npm/hyalo/node_modules/detect-libc/lib/filesystem.js"(exports, module) {
     "use strict";
     var fs = __require("fs");
     var LDD_PATH = "/usr/bin/ldd";
@@ -361,9 +361,9 @@ var require_filesystem = __commonJS({
   }
 });
 
-// node_modules/detect-libc/lib/elf.js
+// ../../../../../npm/hyalo/node_modules/detect-libc/lib/elf.js
 var require_elf = __commonJS({
-  "node_modules/detect-libc/lib/elf.js"(exports, module) {
+  "../../../../../npm/hyalo/node_modules/detect-libc/lib/elf.js"(exports, module) {
     "use strict";
     var interpreterPath = (elf) => {
       if (elf.length < 64) {
@@ -398,9 +398,9 @@ var require_elf = __commonJS({
   }
 });
 
-// node_modules/detect-libc/lib/detect-libc.js
+// ../../../../../npm/hyalo/node_modules/detect-libc/lib/detect-libc.js
 var require_detect_libc = __commonJS({
-  "node_modules/detect-libc/lib/detect-libc.js"(exports, module) {
+  "../../../../../npm/hyalo/node_modules/detect-libc/lib/detect-libc.js"(exports, module) {
     "use strict";
     var childProcess = __require("child_process");
     var { isLinux, getReport } = require_process();

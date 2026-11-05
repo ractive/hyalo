@@ -9,6 +9,24 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `find --fields links` tells an ambiguous link from a missing one. A bare
+  `[[stem]]` that names two or more notes, or an alias two notes claim, carries
+  `ambiguous: true` and `candidates` (sorted, vault-relative, identical on a disk
+  scan and under `--index`); no other link carries either key. Text mode prints
+  `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`. The link is
+  still broken, so `find --broken-links`, `summary.links.broken` and HYALO006
+  count it as before (DEC-374).
+
+### Changed
+
+- `mv`'s `skipped_ambiguous`, HYALO006's "matches N candidates", `links fix`'s
+  `ambiguous_links` and the link resolver behind `backlinks` now share one
+  definition of an ambiguous name, `CaseInsensitiveIndex::ambiguity`, instead of
+  four private copies. `skipped_ambiguous` candidates are sorted; the
+  `[links] aliases` setting never changes whether an ambiguous stem is reported.
+
 ## [0.25.1] - 2026-11-01
 
 ### Changed

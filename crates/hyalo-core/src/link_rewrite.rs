@@ -474,17 +474,19 @@ fn validate_move_link_identity<'a>(
                     options,
                 );
                 let permitted_override = if allow_ambiguous && old.kind == LinkKind::Wikilink {
-                    ambiguous_bare_link_candidates(&old.link.target, before).and_then(|paths| {
-                        paths
-                            .iter()
-                            .filter_map(|path| {
-                                forward
-                                    .get(path.as_str())
-                                    .map(|(_, order)| (path.as_str(), *order))
-                            })
-                            .min_by_key(|(_, order)| *order)
-                            .map(|(path, _)| path)
-                    })
+                    crate::case_index::bare_stem(&old.link.target)
+                        .and_then(|stem| before.stem_ambiguity(&stem))
+                        .and_then(|paths| {
+                            paths
+                                .iter()
+                                .filter_map(|path| {
+                                    forward
+                                        .get(path.as_str())
+                                        .map(|(_, order)| (path.as_str(), *order))
+                                })
+                                .min_by_key(|(_, order)| *order)
+                                .map(|(path, _)| path)
+                        })
                 } else {
                     None
                 };
@@ -1314,8 +1316,9 @@ fn plan_outbound_rewrites(
                 // guard inbound links get since NEW-3 applies here too; the
                 // entry is marked `self` so the report says whose link it is.
                 let mut self_ambiguous = false;
-                if let Some(candidates) =
-                    ambiguous_self_link_candidates(&span.link.target, old_rel, case_index)
+                if let Some(candidates) = case_index
+                    .ambiguous_stem_candidates(&span.link.target)
+                    .filter(|candidates| candidates.iter().any(|c| c == old_rel))
                 {
                     if !allow_ambiguous {
                         skipped_ambiguous.push(SkippedAmbiguous {
@@ -2126,7 +2129,10 @@ fn plan_frontmatter_wikilink_rewrites(
             // layout. An ambiguous stem the moved file is one of the
             // candidates for is this move's business; what happens next is the
             // guard's decision, not this filter's.
-            if ambiguous_stem_includes(&t_norm, old_rel, idx) {
+            if idx
+                .ambiguous_stem_candidates(&t_norm)
+                .is_some_and(|candidates| candidates.iter().any(|c| c == old_rel))
+            {
                 true
             } else {
                 let canonical = idx
@@ -2164,7 +2170,8 @@ fn plan_frontmatter_wikilink_rewrites(
         // own stem, rewrote it. The same `mv` therefore both refused and
         // performed the guess, in the same file.
         if let Some(guard) = ambiguity.as_deref_mut()
-            && let Some(candidates) = ambiguous_frontmatter_candidates(target_path, case_index)
+            && let Some(candidates) =
+                case_index.and_then(|idx| idx.ambiguous_stem_candidates(target_path))
         {
             guard.skipped.push(SkippedAmbiguous {
                 source: guard.source.to_owned(),
@@ -2203,76 +2210,6 @@ struct FrontmatterAmbiguityGuard<'a> {
     /// attributed to the property that owns it.
     property: Option<String>,
     skipped: &'a mut Vec<SkippedAmbiguous>,
-}
-
-/// The candidates a **self-link's** bare wikilink target is ambiguous between,
-/// when the moved file is one of them (iter-275, MV-2 / BUG-8).
-///
-/// `None` — meaning "not this guard's business" — for a path-form target
-/// (which asserts a location and stays correct), for a unique stem (the
-/// ordinary rewrite path handles it), and for a stem the moved file does not
-/// share.
-fn ambiguous_self_link_candidates(
-    target: &str,
-    old_rel: &str,
-    case_index: &CaseInsensitiveIndex,
-) -> Option<Vec<String>> {
-    ambiguous_bare_link_candidates(target, case_index)
-        .filter(|candidates| candidates.iter().any(|c| c == old_rel))
-        .map(<[String]>::to_vec)
-}
-
-fn ambiguous_bare_link_candidates<'a>(
-    target: &str,
-    case_index: &'a CaseInsensitiveIndex,
-) -> Option<&'a [String]> {
-    let decoded = crate::discovery::percent_decode_path(target);
-    let target = decoded.as_deref().unwrap_or(target).trim();
-    if target.contains('/') || target.contains('\\') {
-        return None;
-    }
-    let t_norm = target.to_ascii_lowercase();
-    let stem = t_norm.strip_suffix(".md").unwrap_or(&t_norm);
-    if stem.is_empty() {
-        return None;
-    }
-    let candidates = case_index.lookup_stem_all(stem);
-    (candidates.len() > 1).then_some(candidates)
-}
-
-/// Whether `t_norm` (a lower-cased, forward-slashed frontmatter target) is a
-/// **bare stem shared by two or more vault files**, one of which is the file
-/// being moved (iter-275, MV-1 / BUG-3).
-///
-/// This is the frontmatter twin of the body rewriter's
-/// `Resolution::Ambiguous` arm. Neither rewrites on its own — the caller's
-/// ambiguity guard decides — but both have to *see* the link first, and the
-/// frontmatter side used to see it only when the moved file happened to sit at
-/// the vault root.
-fn ambiguous_stem_includes(t_norm: &str, old_rel: &str, idx: &CaseInsensitiveIndex) -> bool {
-    if t_norm.contains('/') {
-        return false;
-    }
-    let stem = t_norm.strip_suffix(".md").unwrap_or(t_norm);
-    let candidates = idx.lookup_stem_all(stem);
-    candidates.len() > 1 && candidates.iter().any(|c| c == old_rel)
-}
-
-/// The candidate paths a bare frontmatter target is ambiguous between, or
-/// `None` when the target is a path (which asserts a location), when there is
-/// no case index to ask, or when the stem is unique.
-fn ambiguous_frontmatter_candidates(
-    target_path: &str,
-    case_index: Option<&CaseInsensitiveIndex>,
-) -> Option<Vec<String>> {
-    if target_path.contains('/') || target_path.contains('\\') {
-        return None;
-    }
-    let idx = case_index?;
-    let normalized = target_path.to_ascii_lowercase();
-    let stem = normalized.strip_suffix(".md").unwrap_or(&normalized);
-    let candidates = idx.lookup_stem_all(stem);
-    (candidates.len() > 1).then(|| candidates.to_vec())
 }
 
 /// The frontmatter property a line declares (`related:`, `  - ` continues the

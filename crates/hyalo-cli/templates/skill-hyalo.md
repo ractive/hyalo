@@ -611,6 +611,16 @@ Flags that only `--help` mentions, worth knowing:
   either mode an ambiguous *stem* is never tie-broken by an alias, and an alias claimed by two
   notes is ambiguous — `links fix` lists the `candidates` and HYALO006 says "ambiguous
   wikilink … matches 2 candidates". `hyalo config --jq '.results.links.aliases'` reports it.
+- **An ambiguous link says so** (DEC-374): a bare `[[stem]]` that names two or more notes
+  — or an alias two notes claim — resolves to none of them, and its `--fields links` record
+  carries `ambiguous: true` plus `candidates`, the sorted vault-relative files it could mean
+  (neither key appears on any other link). Text mode prints `(ambiguous: a/note.md,
+  b/note.md)` in place of `(unresolved)`. It is still **broken** (`path` stays `null`, so the
+  recipe above, `summary.links.broken` and HYALO006 count it) but the remedy differs: write
+  `[[sub/note]]`, do not create a note. `mv`'s `skipped_ambiguous`, HYALO006's "matches N
+  candidates" and `links fix`'s `ambiguous_links` name the same files — one computation,
+  `--index` and disk alike. Select them with
+  `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.ambiguous) | "\($f.file):\(.line) \(.target) \(.candidates | join(", "))"'`.
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the

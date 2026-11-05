@@ -1248,6 +1248,13 @@ pub(crate) enum Commands {
             exact fix waiting in `links fix`'s alias_fixes bucket; set [links] aliases = true (for \
             vaults running the Alias Linker plugin) and the same link resolves to the declaring \
             note instead. Either way an ambiguous stem is never tie-broken by an alias. \
+            AMBIGUITY (DEC-374): an unresolved bare [[stem]] that names two or more notes, or an \
+            alias two notes claim, carries ambiguous: true and its candidates (sorted, \
+            vault-relative) — text mode prints `(ambiguous: a/note.md, b/note.md)` instead of \
+            `(unresolved)`. Neither key appears on any other link. It is still BROKEN (path stays \
+            null; the counts of --broken-links, summary and HYALO006 do not change): the remedy is \
+            to write [[sub/note]], not to create a note. `mv`'s skipped_ambiguous, HYALO006 and \
+            `links fix`'s ambiguous_links name the same candidates. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
             also carries suggested_fragment, the full heading to write instead (never applied \
             automatically). -, _ and a space are one character class both for that prefix test and \

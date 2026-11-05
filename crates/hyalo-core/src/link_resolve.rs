@@ -199,13 +199,17 @@ impl<'a> LinkResolver<'a> {
         // A move deliberately has a stronger refusal policy than a read: a
         // root-path winner does not make a multiply declared bare name safe
         // to rewrite, and a stable alias should keep its authored spelling.
-        let candidates = self.case_index.lookup_stem_all(stem.trim());
-        match candidates {
-            [] => Resolution::Broken,
+        let stem = stem.trim();
+        // iter-319 (DEC-374): ambiguity is `CaseInsensitiveIndex`'s one
+        // definition, shared with `find`'s link fields and HYALO006.
+        if let Some(candidates) = self.case_index.stem_ambiguity(stem) {
+            return Resolution::Ambiguous(crate::case_index::sorted_candidates(candidates));
+        }
+        match self.case_index.lookup_stem_all(stem) {
             [only] => Resolution::Hit {
                 vault_path: only.to_owned(),
             },
-            _ => Resolution::Ambiguous(candidates.to_vec()),
+            _ => Resolution::Broken,
         }
     }
 }
