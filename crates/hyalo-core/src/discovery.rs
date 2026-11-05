@@ -1885,7 +1885,20 @@ fn normalize_link_target<'a>(
     use crate::links::LinkKind;
 
     match kind {
-        LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
+        // iter-322 (C-12, DEC-384): `./x` and `../x` are relative to the source
+        // folder in every reader — the catalog resolves them that way — so a
+        // wikilink spelled with either is normalised here too instead of being
+        // rooted (`./`) or rejected (`../`).
+        LinkKind::Wikilink => {
+            // R9: trimmed and `\`-normalised first, as the catalog reads it,
+            // so `[[ ./x ]]` takes the arm too.
+            let target_path = crate::link_target::TargetParts::split(target).resolution_path();
+            if target_path.starts_with("./") || target_path.starts_with("../") {
+                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), &target_path))
+            } else {
+                std::borrow::Cow::Borrowed(target)
+            }
+        }
         LinkKind::Markdown => {
             if target.starts_with('/') {
                 std::borrow::Cow::Borrowed(target)
@@ -2348,6 +2361,11 @@ fn nfc_equal(a: &str, b: &str) -> bool {
 /// (iter-211 / BUG-12): `Foo.MD` → `foo.md` is a casing fix, `foo.md` →
 /// `sub/foo.md` is a move.
 fn is_case_only_variant(written: &str, canonical: &str) -> bool {
+    // The resolver ignored the `?query`/`#fragment` and decoded `%20` before
+    // it found `canonical`, so the comparison must read the same path (R12,
+    // iter-322): on a case-sensitive volume `SUB/note?x=1` is a casing fix of
+    // `sub/Note.md`, not a relocation.
+    let written = crate::link_target::TargetParts::split(written).resolution_path();
     let w = written.trim_end_matches('/');
     if w.is_empty() {
         return false;
@@ -2402,6 +2420,26 @@ pub(crate) fn classify_link_from_source(
     }
 
     match link.kind {
+        LinkKind::Wikilink
+            if {
+                let target_path =
+                    crate::link_target::TargetParts::split(&link.target).resolution_path();
+                target_path.starts_with("./") || target_path.starts_with("../")
+            } =>
+        {
+            // iter-322 (C-12, DEC-384): a relative wikilink is judged from its
+            // source folder, as the catalog reads it — not rooted (`./`) or
+            // reported out of the vault (`../`).
+            let normalized = normalize_link_target(link.kind, source_rel, &link.target, |_| false);
+            let res = classify_link(canonical_dir, normalized.as_ref(), site_prefix, case_index);
+            if res == LinkResolution::Broken
+                && !expand_short_form
+                && case_index.is_some_and(|idx| idx.target_ambiguity(&link.target).is_some())
+            {
+                return (normalized.into_owned(), LinkResolution::ShortFormAmbiguous);
+            }
+            (normalized.into_owned(), res)
+        }
         LinkKind::Wikilink => {
             // For short-form wikilinks (no `/`), apply Obsidian stem resolution first.
             // This prevents `resolve_target`'s internal stem lookup (inside classify_link)
@@ -2888,9 +2926,10 @@ fn resolve_target_inner(
     // These are URL components that don't correspond to filesystem paths.
     // `[[a #Heading]]` leaves `a ` behind once the fragment is split off; trim
     // again so the space before the `#` is not part of the filename.
-    let head_len = target
-        .find(['#', '?'])
-        .map_or(target.len(), |pos| target[..pos].trim_end().len());
+    let head_len = crate::link_target::TargetParts::split(&target)
+        .path
+        .trim_end()
+        .len();
     truncate_cow(&mut target, head_len);
     // iter-275 (BUG-37): `[[./a]]` and `[[a]]` name the same file, so both must
     // report the same canonical path. `.` segments are pure syntax — dropping
@@ -6119,5 +6158,13 @@ mod tests {
         assert_eq!(discover_files(tmp.path()).unwrap(), files);
         reset_discovery_memo_for_test();
         assert_eq!(discover_files(tmp.path()).unwrap().len(), files.len() + 1);
+    }
+
+    #[test]
+    fn case_only_variant_ignores_query_fragment_and_escapes() {
+        assert!(is_case_only_variant("SUB/note?x=1", "sub/Note.md"));
+        assert!(is_case_only_variant("SUB/note?x=1#H", "sub/Note.md"));
+        assert!(is_case_only_variant("Sub/My%20Note", "sub/my note.md"));
+        assert!(!is_case_only_variant("note?x=1", "sub/note.md"));
     }
 }

@@ -637,8 +637,8 @@ Flags that only `--help` mentions, worth knowing:
   directory link stays a directory link (trailing slash included), an authored `.md` stays
   `.md`, and neither `/index` nor `.md` is appended to a form that lacked it.
 - **A dead `#anchor` that prefixes exactly one heading gets a `suggested_fragment`** (DEC-268):
-  `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write.
-  Reported, never applied — an ambiguous prefix suggests nothing; a fragment covering the whole
+  `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write
+  (the GFM slug for a markdown link, B-16). Reported, never applied — an ambiguous prefix suggests nothing; a fragment covering the whole
   heading is suggested (iter-275).
 - **`-`, `_` and a space are one word separator when an anchor RESOLVES** (DEC-309, amends
   DEC-268/DEC-298): `#Browser_compatibility` resolves to `## Browser compatibility` outright,
@@ -725,6 +725,13 @@ Flags that only `--help` mentions, worth knowing:
   never a slug. `links fix` and `find --broken-links` share one anchor-suggestion chooser; a
   deferred anchor fix carries that `suggested_fragment`, and the `Fixable:` text line counts
   anchor fixes too, so it cannot read 0 next to an "Apply N fixes" hint.
+- **`mv` and `links fix` write what the reader reads** (DEC-384, DEC-385, iter-322): one split of
+  a target into path, `?query`, `#fragment` and `|alias`. `mv` rewrites only the path portion
+  (`[[note?x=1]]` -> `[[moved?x=1]]`, a frontmatter `[[./note]]` or `[[sub]]` too); `[[./x]]`/`[[../x]]` are
+  relative to the source folder, so moving a note re-aims its own; a link naming two notes is
+  listed by `mv`, never a backlink; a `?` in a note name is part of the name (DEC-387); `[[x/note]]` matches a path suffix; an alias fix writes
+  `[[sub/Target#Second|AKA]]` in body and frontmatter. `links fix` text lists the case-mismatch,
+  relocation and alias fixes plain `--apply` also writes beside `Fixable:`.
 - **A fragment also resolves against an explicit HTML anchor** (DEC-353, iter-311):
   `<a id="x">`, `<a name="x">`, `<h1 id="x">`…`<h6 id="x">` are valid targets, matched
   byte-for-byte (case-sensitive) against the id/name value, independent of any ATX heading.

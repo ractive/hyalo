@@ -1486,6 +1486,15 @@ pub(crate) fn find_prepared(
                             }
                             _ => (false, None),
                         };
+                        // B-16 (iter-322): a markdown fragment is a URL
+                        // component, so the destination to paste is the GFM
+                        // slug — what `links fix` writes — not the heading text.
+                        let suggested_fragment = match suggested_fragment {
+                            Some(heading) if !link.kind.is_wikilink() => {
+                                Some(hyalo_core::anchor::github_slug(&heading))
+                            }
+                            other => other,
+                        };
                         // iter-193: a target that walks above the vault root
                         // is out of scope, not broken — flag it so
                         // `--broken-links` can leave it out of the headline.

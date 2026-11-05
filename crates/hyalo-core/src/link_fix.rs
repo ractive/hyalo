@@ -35,9 +35,10 @@ use crate::index::VaultIndex;
 use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
-    find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
+    find_frontmatter_wikilinks, rewrite_frontmatter_alias_text, rewrite_frontmatter_wikilink_text,
 };
 use crate::link_score::{self, candidate_confidence_with_claim};
+use crate::link_target::TargetParts;
 use crate::links::{
     LinkKind, extract_link_spans_with_original, parse_wikilink, strip_wikilink_md_suffix,
 };
@@ -96,6 +97,13 @@ pub struct BrokenLinkReport {
     /// cosmetic count; a relocation (`target.md` → `sub/target.md`) is a
     /// different kind of change and gets its own bucket and section.
     pub relocations: Vec<FixPlan>,
+    /// How many of [`Self::relocations`] the shared reader still calls broken
+    /// (iter-322, A-7): `[m](../note.md)` fails the exact path and the reader
+    /// has no stem fallback for a path-form link, so `find --broken-links`
+    /// and HYALO006 count it while `links fix` plans an exact relocation.
+    /// `summary.links.broken` adds this to agree with them. A relocation the
+    /// reader resolves (a bare name found by stem) is not counted.
+    pub unresolved_relocations: usize,
     /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
     /// These are left untouched by `--apply` because the correct target is
     /// ambiguous and auto-picking would be wrong.
@@ -134,7 +142,9 @@ pub struct FixPlan {
     /// Similarity confidence in `[0.0, 1.0]`.
     pub confidence: f64,
     /// The link-target text `--apply` actually writes for this plan
-    /// (iter-272 Part F / CASE-2).
+    /// (iter-272 Part F / CASE-2). For a wikilink, body or frontmatter, it is
+    /// the whole text between the brackets — `?query`, `#fragment` and
+    /// `|label` included (R7, iter-322); for a markdown link, the destination.
     ///
     /// [`new_target`](Self::new_target) is always the *vault-relative path*,
     /// which is the coordinate system detection works in — but the writer
@@ -525,6 +535,7 @@ pub fn detect_broken_links_from_index(
             ambiguous: Vec::new(),
             out_of_vault: Vec::new(),
             alias_fixes: Vec::new(),
+            unresolved_relocations: 0,
         };
     };
 
@@ -541,6 +552,28 @@ pub fn detect_broken_links_from_index(
     let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
     let mut out_of_vault: Vec<BrokenLinkInfo> = Vec::new();
     let mut alias_fixes: Vec<FixPlan> = Vec::new();
+    let mut unresolved_relocations = 0usize;
+    // iter-322 (A-7, DEC-384): with a complete index the shared catalog is the
+    // reader — the resolver `find --broken-links`, HYALO006 and the graph use —
+    // and this classifier must not disagree with it about whether a link is
+    // broken. Asked only for links the classifier did not call fine.
+    let reader = case_index.filter(|idx| idx.is_complete() && !expand_short_form);
+    let reader_resolves = |source: &str, link: &crate::links::Link| {
+        reader.is_some_and(|idx| {
+            crate::catalog::resolve(
+                idx,
+                source,
+                link.kind,
+                &link.target,
+                crate::catalog::ResolutionOptions {
+                    aliases: idx.aliases_enabled(),
+                    site_prefix,
+                },
+            )
+            .path()
+            .is_some()
+        })
+    };
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
@@ -625,6 +658,9 @@ pub fn detect_broken_links_from_index(
                     if resolved_through_site_prefix(&link.target, site_prefix) {
                         continue;
                     }
+                    if reader.is_some() && !reader_resolves(&entry.rel_path, link) {
+                        unresolved_relocations += 1;
+                    }
                     relocations.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
@@ -656,6 +692,9 @@ pub fn detect_broken_links_from_index(
                             .unwrap_or_default(),
                     });
                 }
+                // `[[note?]]`, `[[my%20note]]`, `[[x/note]]` name a note the
+                // reader finds; the classifier's literal probes did not.
+                LinkResolution::Broken if reader_resolves(&entry.rel_path, link) => {}
                 LinkResolution::Broken => {
                     // ALIAS-2 (iter-275, DEC-308): a bare target exactly one
                     // note declares as an alias is broken *and* exactly
@@ -706,6 +745,7 @@ pub fn detect_broken_links_from_index(
         broken,
         case_mismatches,
         relocations,
+        unresolved_relocations,
         ambiguous,
         out_of_vault,
         alias_fixes,
@@ -785,6 +825,10 @@ pub struct LinkMatcher {
     /// — as before; a camelCase or space-separated Obsidian note name now keys
     /// the way [`link_score::basename_similarity`] reads it.
     gate_stems: Vec<String>,
+    /// Character histogram of each [`Self::gate_stems`] entry, the cheap exact
+    /// upper bound [`fuzzy_shortlist`](Self::fuzzy_shortlist) checks before it
+    /// pays for a Jaro-Winkler (C-18, iter-322).
+    gate_histograms: Vec<CharHistogram>,
     /// Lazy threshold-gated fuzzy candidate shortlist per distinct target
     /// gate key (iter-206). The Jaro-Winkler candidacy gate over the whole vault
     /// is by far the dominant cost of `links fix` on link-heavy corpora
@@ -796,6 +840,66 @@ pub struct LinkMatcher {
     /// remains — self-link filtering and `candidate_confidence` ranking over
     /// the shortlist — still runs per link because it depends on `source`.
     fuzzy_shortlists: RefCell<HashMap<String, Rc<Vec<usize>>>>,
+}
+
+/// Number of buckets in a [`CharHistogram`].
+const HISTOGRAM_BUCKETS: usize = 40;
+
+/// Per-bucket character counts of a gate key, saturating at 255.
+///
+/// A cheap *upper bound* on Jaro-Winkler (C-18, iter-322). Jaro matches a
+/// character only against an equal one, so the match count `m` can never exceed
+/// the sum over characters of the smaller of the two counts; folding several
+/// characters into one bucket can only raise that sum, so it stays an upper
+/// bound however the buckets are chosen. With `m` capped, Jaro is at most
+/// `(m / |a| + m / |b| + 1) / 3` (no transpositions), and Winkler's prefix
+/// bonus lifts a score `j` to at most `0.4 + 0.6 j` (prefix capped at 4, scale
+/// 0.1). [`may_reach`](Self::may_reach) is `false` only when even that cannot
+/// clear the threshold, so the pass drops pairs and never a hit.
+struct CharHistogram {
+    counts: [u8; HISTOGRAM_BUCKETS],
+    len: usize,
+}
+
+impl CharHistogram {
+    fn of(key: &str) -> Self {
+        let mut counts = [0u8; HISTOGRAM_BUCKETS];
+        let mut len = 0usize;
+        for c in key.chars() {
+            len += 1;
+            let bucket = match c {
+                'a'..='z' => c as usize - 'a' as usize,
+                '0'..='9' => 26 + c as usize - '0' as usize,
+                _ => 36 + (c as usize % (HISTOGRAM_BUCKETS - 36)),
+            };
+            counts[bucket] = counts[bucket].saturating_add(1);
+        }
+        Self { counts, len }
+    }
+
+    fn may_reach(&self, other: &Self, threshold: f64) -> bool {
+        if self.len == 0 || other.len == 0 {
+            // `strsim` scores two empty strings 1.0 and one empty 0.0; leave
+            // the degenerate cases to it.
+            return true;
+        }
+        // Saturated counts under-count, which would break the bound: fall
+        // back to the full score for any key with a run of 255+ of a char.
+        if self.counts.contains(&u8::MAX) || other.counts.contains(&u8::MAX) {
+            return true;
+        }
+        let common: usize = self
+            .counts
+            .iter()
+            .zip(&other.counts)
+            .map(|(a, b)| usize::from(*a.min(b)))
+            .sum();
+        // Gate keys are file-name stems: far inside `u32`.
+        let as_f64 = |n: usize| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+        let m = as_f64(common);
+        let jaro_bound = (m / as_f64(self.len) + m / as_f64(other.len) + 1.0) / 3.0;
+        0.4 + 0.6 * jaro_bound + 1e-9 >= threshold
+    }
 }
 
 /// Result of a single match attempt.
@@ -845,14 +949,15 @@ impl LinkMatcher {
         let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
         let mut gate_stems = Vec::with_capacity(files.len());
+        let mut gate_histograms = Vec::with_capacity(files.len());
 
         for (i, f) in files.iter().enumerate() {
             // Filename stem in the candidacy gate's normal form, precomputed
             // for the fuzzy pass (iter-206 shortlist, iter-280 normalisation).
             let fname0 = f.rsplit('/').next().unwrap_or(f.as_str());
-            gate_stems.push(link_score::gate_key(
-                fname0.strip_suffix(".md").unwrap_or(fname0),
-            ));
+            let gate_stem = link_score::gate_key(fname0.strip_suffix(".md").unwrap_or(fname0));
+            gate_histograms.push(CharHistogram::of(&gate_stem));
+            gate_stems.push(gate_stem);
             // Index by exact path, plus the extension-toggled form.
             exact_to_idx.entry(f.clone()).or_insert(i);
             let alt = if f.to_ascii_lowercase().ends_with(".md") {
@@ -890,6 +995,7 @@ impl LinkMatcher {
             threshold,
             site_prefix: site_prefix.map(std::string::ToString::to_string),
             gate_stems,
+            gate_histograms,
             fuzzy_shortlists: RefCell::new(HashMap::new()),
         }
     }
@@ -927,11 +1033,16 @@ impl LinkMatcher {
         if let Some(hit) = self.fuzzy_shortlists.borrow().get(target_key) {
             return Rc::clone(hit);
         }
+        let target_histogram = CharHistogram::of(target_key);
         let shortlist: Vec<usize> = self
             .gate_stems
             .iter()
+            .zip(&self.gate_histograms)
             .enumerate()
-            .filter(|(_, fstem)| strsim::jaro_winkler(target_key, fstem.as_str()) >= self.threshold)
+            .filter(|(_, (fstem, histogram))| {
+                target_histogram.may_reach(histogram, self.threshold)
+                    && strsim::jaro_winkler(target_key, fstem.as_str()) >= self.threshold
+            })
             .map(|(i, _)| i)
             .collect();
         let rc = Rc::new(shortlist);
@@ -1736,8 +1847,8 @@ fn markdown_fix_round_trips(
     source_rel: &str,
     site_prefix: Option<&str>,
 ) -> bool {
-    let decoded = crate::discovery::percent_decode_path(emitted);
-    let emitted = decoded.as_deref().unwrap_or(emitted);
+    let emitted = crate::link_target::resolution_path(emitted);
+    let emitted = emitted.as_ref();
     let normalized = if emitted.starts_with('/') {
         strip_site_prefix(emitted, site_prefix)
     } else {
@@ -1764,9 +1875,8 @@ fn markdown_fix_round_trips(
 /// target (Obsidian short-form, which detection only proposes for stems that
 /// are unique in the vault).
 fn wikilink_fix_round_trips(emitted: &str, new_vault_rel: &str) -> bool {
-    let decoded = crate::discovery::percent_decode_path(emitted);
-    let emitted = decoded.as_deref().unwrap_or(emitted);
-    let emitted = strip_md_suffix(emitted);
+    let emitted = crate::link_target::resolution_path(emitted);
+    let emitted = strip_md_suffix(emitted.as_ref());
     let target = strip_md_suffix(new_vault_rel);
     emitted == target
         || (!emitted.contains('/')
@@ -1871,9 +1981,22 @@ fn build_replacements_for_file(
                         // anchor (L-7: repairs must keep `[[log#DEC-041]]`'s
                         // anchor), and written form (path-form vs bare stem)
                         // via the shared `mv`/`links fix` frontmatter rewriter.
-                        if let Some(new_text) =
+                        let rewritten = if fix.strategy == FixStrategy::Alias {
+                            rewrite_frontmatter_alias_text(occ.target, &fix.new_target)
+                        } else {
                             rewrite_frontmatter_wikilink_text(occ.target, &fix.new_target)
-                        {
+                        };
+                        // B-12 / A-1: the bytes written between the brackets are
+                        // what `emitted_target` reports for a frontmatter link,
+                        // exactly as for a body one.
+                        emitted_by_fix.entry(fix_idx).or_insert_with(|| {
+                            rewritten
+                                .as_deref()
+                                .and_then(|text| text.strip_prefix("[[")?.strip_suffix("]]"))
+                                .unwrap_or(occ.target)
+                                .to_owned()
+                        });
+                        if let Some(new_text) = rewritten {
                             replacements.push(Replacement {
                                 line: line_num,
                                 byte_offset: occ.full_start,
@@ -1939,7 +2062,7 @@ fn build_replacements_for_file(
 
             // Compute new target text based on link kind, then verify it
             // round-trips through the read-side resolver (H-1 guard).
-            let (new_target_text, round_trips) = match span.kind {
+            let (new_target_text, round_trips, suffix) = match span.kind {
                 LinkKind::Wikilink => {
                     // Use stem (without .md) for wikilinks; wikilink targets
                     // are vault-relative as written, so the plan's target is
@@ -1949,6 +2072,15 @@ fn build_replacements_for_file(
                         LinkKind::Wikilink,
                     );
                     let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
+                    // R6 (iter-322): the `?query` the reader strips stays as
+                    // written, exactly as `mv` and the frontmatter writer keep it.
+                    let raw_target = &line[span.target_start..span.target_end];
+                    let query_tail = if path_text.contains('?') {
+                        ""
+                    } else {
+                        &raw_target[TargetParts::split(raw_target).path.len()..]
+                    };
+                    let path_text = format!("{path_text}{query_tail}");
                     // ALIAS-2 (iter-275, DEC-308): an alias fix writes what
                     // Obsidian's own link suggester writes — the note over the
                     // alias as display text — so `[[Leah]]` becomes
@@ -1957,23 +2089,32 @@ fn build_replacements_for_file(
                     // (the label lives in the span tail, past `target_end`),
                     // and an embed takes the bare target: `![[Leah|Leah]]`
                     // would embed a note under a caption nobody asked for.
-                    let emitted = if fix.strategy == FixStrategy::Alias
+                    let tail = &line[span.target_end..span.full_end];
+                    let alias_tail = (fix.strategy == FixStrategy::Alias
                         && span.link.label.is_none()
-                        && !span.link.embed
-                    {
-                        format!(
-                            "{path_text}{}{}",
-                            crate::link_write::alias_separator(
-                                line,
-                                Some(previous_line),
-                                rest.split('\n').next(),
+                        && !span.link.embed)
+                        .then(|| tail.strip_suffix("]]"))
+                        .flatten();
+                    match alias_tail {
+                        // iter-322 (A-2): the `#fragment` stays on the target and
+                        // the alias follows it — `[[sub/Target#Second|AKA]]`, not
+                        // `[[sub/Target|AKA#Second]]` (a label that swallowed the
+                        // anchor and hid a broken one).
+                        Some(inner_tail) => (
+                            format!(
+                                "{path_text}{inner_tail}{}{}",
+                                crate::link_write::alias_separator(
+                                    line,
+                                    Some(previous_line),
+                                    rest.split('\n').next(),
+                                ),
+                                span.link.target.trim()
                             ),
-                            span.link.target.trim()
-                        )
-                    } else {
-                        path_text
-                    };
-                    (emitted, ok)
+                            ok,
+                            "]]",
+                        ),
+                        None => (path_text, ok, tail),
+                    }
                 }
                 LinkKind::Markdown => {
                     // The plan's target is vault-relative; a markdown
@@ -2003,13 +2144,24 @@ fn build_replacements_for_file(
                         .path()
                             == Some(fix.new_target.as_str())
                     });
-                    (emitted, ok)
+                    (emitted, ok, &line[span.target_end..span.full_end])
                 }
             };
 
+            // R7 (iter-322): `emitted_target` is the whole text between the
+            // brackets of a wikilink, body and frontmatter alike — fragment,
+            // label and all; a markdown fix reports its destination.
             emitted_by_fix
                 .entry(fix_idx)
-                .or_insert_with(|| new_target_text.clone());
+                .or_insert_with(|| match span.kind {
+                    LinkKind::Wikilink => {
+                        format!(
+                            "{new_target_text}{}",
+                            suffix.strip_suffix("]]").unwrap_or(suffix)
+                        )
+                    }
+                    LinkKind::Markdown => new_target_text.clone(),
+                });
 
             // A fix whose emitted target would not resolve is never written:
             // it is consumed (so a duplicate plan is not re-matched) and
@@ -2026,7 +2178,7 @@ fn build_replacements_for_file(
                 "{}{}{}",
                 &line[span.full_start..span.target_start],
                 new_target_text,
-                &line[span.target_end..span.full_end],
+                suffix,
             );
 
             if old_text != new_text {
@@ -2149,6 +2301,47 @@ mod tests {
             files.push((f, Vec::new()));
         }
         MockIndex::new(&files)
+    }
+
+    // --- C-18: the histogram bound never drops a Jaro-Winkler hit ---
+
+    #[test]
+    fn char_histogram_bound_never_drops_a_jaro_winkler_hit() {
+        let keys = [
+            "note",
+            "notes",
+            "nota",
+            "authentication",
+            "authentcation",
+            "getting-started-with-git",
+            "getting-started",
+            "a",
+            "ab",
+            "zzzz",
+            "my-long-note",
+            "mylongnote",
+            "caf\u{e9}",
+            "cafe",
+            "9lives",
+            "aaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaa",
+            "referential-content-type",
+            "reference",
+        ];
+        for threshold in [0.5, 0.7, 0.8, 0.85, 0.95] {
+            for a in keys {
+                for b in keys {
+                    if strsim::jaro_winkler(a, b) >= threshold {
+                        assert!(
+                            CharHistogram::of(a).may_reach(&CharHistogram::of(b), threshold),
+                            "{a} vs {b} at {threshold}"
+                        );
+                    }
+                }
+            }
+        }
+        // And it does prune: nothing in common cannot clear a high threshold.
+        assert!(!CharHistogram::of("abcdef").may_reach(&CharHistogram::of("uvwxyz"), 0.8));
     }
 
     // --- LinkMatcher unit tests ---

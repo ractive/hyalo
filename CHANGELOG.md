@@ -22,6 +22,7 @@ and this project adheres to
 - `lint --fix` over 200 or more files prints `lint --fix: N/M files` on stderr
   every 200 files and `lint --fix: M/M files, done` at the end, like the other
   bulk write phases; `-q` silences it (DEC-383).
+- `links fix` and `mv` read a link target one way (DEC-384): a path suffix names a note (`[[x/note]]` for `a/x/note.md`; two notes sharing it are ambiguous) and `[[./x]]`/`[[../x]]` are relative to the source folder, so an in-vault `../x` is no longer `out_of_vault`.
 
 ### Changed
 
@@ -97,6 +98,7 @@ and this project adheres to
   (DEC-381). The snapshot format is now 9 because these scanner changes alter
   the links a body yields: an older snapshot is refused and rebuilt with
   `create-index`.
+- `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
 
 ### Fixed
 
@@ -120,6 +122,12 @@ and this project adheres to
   row, so the cell does not split.
 - `lint --fix --fix-rule BOGUS` exits 1 with `no such rule`, like `--rule`
   (it exited 0 with "fixed 0").
+- `mv` rewrites the links it counts as backlinks: `[[note?x=1]]`, `[[note?]]` and a frontmatter `[[./note]]` or `[[note?]]` follow a moved note and keep their `?query` (DEC-384).
+- `links fix` writes an alias fix as `[[sub/Target#Second|AKA]]` (fragment on the target) in the body and in frontmatter, where the alias and the declaring note's folder were dropped; frontmatter fixes now report `emitted_target` (DEC-385).
+- `summary.links.broken` and `links fix` agree with `find --broken-links` on short forms the reader resolves (`[[note?]]`, `[[my%20note]]`) and on path-form links relocated to another folder (DEC-384).
+- Moving a note re-aims its own `./x` and `../x` wikilinks (single and batch, body and frontmatter); before, they broke or silently pointed at another note. A frontmatter link spelling a moved directory index keeps naming the directory (DEC-384).
+- A link that names two notes (`[[./note]]`, a shared partial path `[[x/note]]`) is no longer a backlink of either; `mv` lists it in `skipped_ambiguous` instead of leaving it to resolve to the twin. `--allow-ambiguous` rewrites body and frontmatter alike, `?query` kept (DEC-384).
+- A `?` in a note name is part of the name for every reader and for `mv`; wikilinks write `?`, `%` and `:` literally instead of `%3F`. `links fix` keeps a body wikilink's `?query` and reports the whole bracket text as `emitted_target`; a partial path folds case only when `[links] case_insensitive` does (DEC-387, DEC-385).
 
 ### Security
 

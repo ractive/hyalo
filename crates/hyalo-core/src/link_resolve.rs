@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::link_graph::normalize_target;
+use crate::link_target::TargetParts;
 use crate::links::{LinkKind, LinkSpan, Resolution, WrittenForm};
 
 // ---------------------------------------------------------------------------
@@ -130,9 +131,8 @@ impl<'a> LinkResolver<'a> {
         }
         let old_dir = crate::discovery::directory_for_index_file(old_rel)?;
 
-        let raw = span.link.target.replace('\\', "/");
-        let decoded = crate::discovery::percent_decode_path(&raw);
-        let raw = decoded.as_deref().unwrap_or(&raw);
+        let raw = TargetParts::split(&span.link.target).resolution_path();
+        let raw = raw.as_ref();
         let trailing_slash = raw.ends_with('/');
         let trimmed = raw.trim_end_matches('/');
         if trimmed.is_empty() {
@@ -141,10 +141,13 @@ impl<'a> LinkResolver<'a> {
 
         // Normalize exactly like the read-side resolvers do, per link kind.
         let candidates: Vec<String> = match span.kind {
-            LinkKind::Wikilink => match trimmed.strip_prefix("./") {
-                Some(rest) => vec![normalize_target(Path::new(source_rel), rest)],
-                None => vec![trimmed.to_owned()],
-            },
+            LinkKind::Wikilink => {
+                if trimmed.starts_with("./") || trimmed.starts_with("../") {
+                    vec![normalize_target(Path::new(source_rel), trimmed)]
+                } else {
+                    vec![trimmed.to_owned()]
+                }
+            }
             LinkKind::Markdown => {
                 if trimmed.starts_with('/') {
                     vec![strip_site_prefix(trimmed, self.site_prefix)]

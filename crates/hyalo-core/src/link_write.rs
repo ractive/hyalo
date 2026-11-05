@@ -12,20 +12,31 @@
 
 use crate::link_graph::relative_path_between;
 use crate::link_resolve::detect_wikilink_form;
+use crate::link_target::TargetParts;
 use crate::links::{LinkKind, LinkSpan, PreserveForm, WrittenForm};
 
 /// Encode path bytes before inserting them into a link. The catalog decodes once,
-/// after splitting authored fragment/query delimiters. Wiki spaces and parentheses
-/// stay prose; Markdown destinations additionally encode URL syntax delimiters.
+/// after splitting authored fragment/query delimiters. Wiki spaces, parentheses,
+/// `?`, `%` and `:` stay literal; Markdown destinations additionally encode URL syntax delimiters.
 #[must_use]
 pub(crate) fn encode_destination(path: &str, kind: LinkKind) -> String {
     use std::fmt::Write as _;
     let mut encoded = String::with_capacity(path.len());
-    for ch in path.chars() {
+    let chars: Vec<char> = path.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        // A wikilink is a vault path, not a URL (M1, iter-322): `?` and `:`
+        // are written literally, and so is a `%` the reader would not take
+        // for an escape. Only what a wikilink cannot carry is encoded, plus
+        // a `%` that a percent-decoding reader would swallow (`%23`).
+        let starts_escape = ch == '%'
+            && chars.get(i + 1).is_some_and(char::is_ascii_hexdigit)
+            && chars.get(i + 2).is_some_and(char::is_ascii_hexdigit);
         let reserved = ch.is_control()
-            || matches!(ch, '#' | '?' | '%' | '[' | ']' | '|' | ':' | '\\')
+            || matches!(ch, '#' | '[' | ']' | '|' | '\\')
+            || starts_escape
             || (kind == LinkKind::Markdown
-                && (ch.is_whitespace() || matches!(ch, '(' | ')' | '<' | '>' | '\"' | '\'')));
+                && (ch.is_whitespace()
+                    || matches!(ch, '?' | '%' | ':' | '(' | ')' | '<' | '>' | '\"' | '\'')));
         if reserved {
             for byte in ch.to_string().as_bytes() {
                 let _ = write!(encoded, "%{byte:02X}");
@@ -110,6 +121,18 @@ pub(crate) enum TargetStyle {
     DirectoryIndex { trailing_slash: bool },
 }
 
+/// The `?query` tail of a wikilink target (`[[note?x=1]]` -> `?x=1`) that a
+/// rewrite keeps, or `""`. Dropped when the new target itself holds a `?`,
+/// because then the whole of it is the file name and a kept tail would be read
+/// as part of it.
+fn wikilink_query_tail<'a>(span: &LinkSpan, line: &'a str, new_target: &str) -> &'a str {
+    if span.kind != LinkKind::Wikilink || new_target.contains('?') {
+        return "";
+    }
+    let raw = &line[span.target_start..span.target_end];
+    &raw[TargetParts::split(raw).path.len()..]
+}
+
 /// Unified link text writer.
 pub struct LinkWriter;
 
@@ -188,10 +211,15 @@ impl LinkWriter {
 
         let new_target = encode_destination(&new_target, span.kind);
         let old_text = line[span.full_start..span.full_end].to_string();
+        // iter-322 (DEC-384): only the path portion of a wikilink target is
+        // replaced; the `?query` the reader strips before resolving (`[[note?x=1]]`)
+        // stays as written, so the rewritten link resolves exactly as the old one.
+        let keep_tail = wikilink_query_tail(span, line, &new_target);
         let new_text = format!(
-            "{}{}{}",
+            "{}{}{}{}",
             &line[span.full_start..span.target_start],
             new_target,
+            keep_tail,
             &line[span.target_end..span.full_end]
         );
 
@@ -252,6 +280,7 @@ impl LinkWriter {
             PreserveForm::Preserve => {
                 // Detect the user's original written form from the raw target text.
                 let raw_target = &line[span.target_start..span.target_end];
+                let raw_target = &raw_target[..TargetParts::split(raw_target).path.len()];
                 let form = detect_wikilink_form(raw_target);
                 let mut emitted =
                     Self::emit_wikilink_with_form(form, new_vault_rel, new_stem, source_rel);
@@ -274,7 +303,7 @@ impl LinkWriter {
     }
 
     /// Emit a wikilink target in the given form.
-    fn emit_wikilink_with_form(
+    pub(crate) fn emit_wikilink_with_form(
         form: WrittenForm,
         _new_vault_rel: &str,
         new_stem: &str,
@@ -344,10 +373,8 @@ impl LinkWriter {
         // a suffix the author never wrote, breaking iter-203's spelling
         // guarantee on one of its ten forms.
         // Encoded punctuation/letters still express an explicit Markdown suffix.
-        let decoded = crate::discovery::percent_decode_path(&span.link.target);
-        let had_md = decoded
-            .as_deref()
-            .unwrap_or(&span.link.target)
+        let had_md = TargetParts::split(&span.link.target)
+            .resolution_path()
             .to_ascii_lowercase()
             .ends_with(".md");
         let styled_target = if had_md { new_vault_rel } else { new_stem };

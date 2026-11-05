@@ -223,8 +223,9 @@ fn part_b_links_fix_proposes_the_alias_backed_rewrite() {
         plans[0]["emitted_target"], "Leah Ferguson|Leah",
         "the label is the alias the author wrote: {r}"
     );
-    // The author's own label survives.
-    assert_eq!(plans[1]["emitted_target"], "Leah Ferguson", "{r}");
+    // The author's own label survives, and `emitted_target` is the whole
+    // bracket text (R7, iter-322).
+    assert_eq!(plans[1]["emitted_target"], "Leah Ferguson|the boss", "{r}");
 
     // Plain `--apply` writes them; the fuzzy path is never involved.
     run_json(&tmp, &["links", "fix", "--apply"]);

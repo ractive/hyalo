@@ -145,3 +145,5 @@ mod iteration318_regression_dogfood;
 mod iteration319_link_ambiguity;
 mod iteration320_dogfood_leftovers;
 mod iteration321_content_safe_autofix;
+mod iteration322_link_writers_agree;
+mod iteration322_move_matrix;

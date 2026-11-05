@@ -470,9 +470,15 @@ pub fn summary(
         // unresolved, so `find --broken-links` and HYALO006 both count it.
         // BUG-2 (iteration 311): fold it in here too so all three
         // surfaces agree (162 on the Obsidian Hub, previously 154 vs. 162).
+        // iter-322 (A-7): relocations the shared reader still cannot resolve
+        // (a path-form `../note.md` found only by stem) are broken to those
+        // surfaces too, so they are counted here as well.
         LinkHealthSummary {
             total: report.total_links,
-            broken: report.broken.len() + report.ambiguous.len() + report.alias_fixes.len(),
+            broken: report.broken.len()
+                + report.ambiguous.len()
+                + report.alias_fixes.len()
+                + report.unresolved_relocations,
             // Targets above the vault root are out of scope, not broken.
             out_of_vault: report.out_of_vault.len(),
             broken_anchors,
