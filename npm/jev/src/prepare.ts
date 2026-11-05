@@ -77,12 +77,14 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
       const entry = object(found.results[0]);
       insist(entry.file === selected.file, "file resolution differs from selection");
       insist(typeof entry.size === "number" && entry.size <= LIMITS.input && (selected.section !== null || entry.size <= 18_000), "document too large; select a relevant section");
-      const readArgs = selected.section === null ? ["--lines", "1:"] : ["--section", selected.section];
-      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
-      insist(evidence.file === selected.file, "file resolution differs from selection");
+      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...(selected.section === null ? [] : ["--section", selected.section])])).results);
+      // `read --lines` is file-absolute (DEC-355) and includes the frontmatter block,
+      // which must stay local: a whole document takes its text from a plain read.
+      const text = selected.section === null ? object((await read(["read", "--file", selected.file])).results) : evidence;
+      insist(evidence.file === selected.file && text.file === selected.file, "file resolution differs from selection");
       const current = object(evidence.frontmatter ?? {});
-      insist(typeof evidence.content === "string" && !evidence.content.includes("\0"), "invalid evidence content");
-      const content = evidence.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
+      insist(typeof text.content === "string" && !text.content.includes("\0"), "invalid evidence content");
+      const content = text.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
       // A selected section starts with its own heading line; a heading alone is no evidence.
       const body = selected.section === null ? content : content.replace(/^#[^\n]*\n?/, "");
       insist(body.trim().length > 0, `${what} empty`);

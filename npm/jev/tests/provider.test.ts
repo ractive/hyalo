@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { manifest, evidenceHash, MODEL, policy } from "../src/protocol.ts";
+import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { manifest, evidenceHash, MODEL, payload, policy } from "../src/protocol.ts";
 import { ask, boundedFetch } from "../src/provider.ts";
 import { fixture, p, response } from "./fixtures.ts";
 test("explicit opt-in before dispatch; fixed endpoint and model override environment", async () => {
@@ -18,6 +19,26 @@ test("explicit opt-in before dispatch; fixed endpoint and model override environ
     const result = await ask(m, { allowNetwork: true, apiKey: "test-key", fetch: fetcher });
     expect(result.exitCode).toBe(0); expect(calls).toBe(1); expect(result.transmitted).toBe(1);
   } finally { names.forEach((n, i) => { if (old[i] === undefined) delete process.env[n]; else process.env[n] = old[i]; }); }
+});
+test("request bodies stay plain JSON at every size", async () => {
+  // Above the SDK's 1 KiB compression threshold; zstd is its default on Bun and Node 22.15+.
+  const m = fixture("Measurements show a 20 percent improvement. ".repeat(100)); let body: unknown, headers = new Headers();
+  const result = await ask(m, { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => {
+    body = init?.body; headers = new Headers(init?.headers);
+    return Response.json(response(JSON.parse(init?.body as string)));
+  } });
+  expect(result.exitCode).toBe(0); expect(typeof body).toBe("string");
+  expect(Buffer.byteLength(body as string)).toBeGreaterThan(1024);
+  expect(headers.get("content-encoding")).toBeNull(); expect(headers.get("content-type")).toBe("application/json");
+  expect(Object.keys(JSON.parse(body as string))).toEqual(["model", "state", "questions"]);
+});
+test("an unreported token count keeps the decisions and marks usage unknown", async () => {
+  for (const [usage, cost] of [[{ input_tokens: null, output_tokens: null }, null], [{ input_tokens: 100, output_tokens: null }, 100 * .042 / 1_000_000]] as const) {
+    const result = await ask(fixture(), { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => Response.json(response(JSON.parse(init?.body as string), { usage })) });
+    const row = result.results[0]!;
+    expect(result.exitCode).toBe(0); expect(row.status).toBe("ok"); expect(row.decisions.some(d => d.status === "suggestion")).toBe(true);
+    expect(row.usage).toEqual(usage); expect(row.usageUnknown).toBe(true); expect(row.estimatedCostUsd).toBe(cost);
+  }
 });
 test("one throttle retry; no auth, validation, server or connection retries", async () => {
   for (const status of [401, 422, 500, 429, 529]) {
@@ -79,4 +100,15 @@ test("failed tag requests retain independent local filing suggestions", async ()
     expect(result.results[0]?.decisions.find(d => d.field === "tag")?.status).toBe("defer");
     expect(result.results[0]?.decisions.filter(d => d.field === "folder")).toEqual("type" in current ? [{ field: "folder", status: "suggestion", value: "docs", reason: "local type-to-folder convention" }] : []);
   }
+});
+test("the SDK itself refuses what the image-reference guard defers", async () => {
+  // The guard copies a private SDK pattern; this fails if a bump moves that format.
+  let calls = 0;
+  const client = new TypeSafeClient({ apiKey: "test-key", baseURL: "https://api.typesafe.ai", defaultModel: MODEL, logLevel: "off", compression: false, fetch: async () => { calls++; return Response.json({}); } });
+  const request = payload(fixture().documents[0]!, p).request;
+  // `systemOne` returns a lazy thenable, which `.rejects` cannot read without awaiting it.
+  await expect((async () => await client.systemOne({ ...request, state: `See <image:${"0123456789abcdef".repeat(2)}>.` }))()).rejects.toThrow("image");
+  expect(calls).toBe(0);
+  await client.systemOne({ ...request, state: "See <image:not-a-reference>." }).catch(() => undefined);
+  expect(calls).toBeGreaterThan(0);
 });
