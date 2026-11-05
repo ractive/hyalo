@@ -471,7 +471,13 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | to read one bool (`summary`/`tags`/`properties`/`find
 /// |   |          | --property` on MDN: ~2x slower). The setting now lives
 /// |   |          | on the header, read without touching the BM25 section |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 7;
+/// | 8 | serde-saphyr | no new field (DEC-375, PR #392 review) — the YAML parser
+/// |   | 2.1      | reads `tRUE`/`nuLL`/`.nAn` as strings where 1.3 read a
+/// |   |          | bool/null/float, and an entry reused by an incremental
+/// |   |          | `create-index` (DEC-339) would keep the old reading in
+/// |   |          | `find --index --fields properties` while a disk scan
+/// |   |          | shows the new one, so a v7 snapshot must be rebuilt |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 8;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]

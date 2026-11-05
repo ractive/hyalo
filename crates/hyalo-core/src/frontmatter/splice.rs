@@ -1180,7 +1180,38 @@ fn trailing_trivia_start(yaml: &str, start: usize, end: usize) -> usize {
         }
         cut = ls;
     }
+    // A keep-chomped (`|+` / `>+`) block scalar owns the blank lines that
+    // follow its content, and serde-saphyr 2 writes them at column 0. They are
+    // value bytes, not trivia: detaching them would hand the scalar's trailing
+    // newlines to the next key and break the splice round trip.
+    if is_keep_chomped_header(&yaml[start..end]) {
+        while cut < end {
+            let line_end = yaml[cut..end].find('\n').map_or(end, |i| cut + i + 1);
+            if !yaml[cut..line_end]
+                .trim_end_matches(['\n', '\r'])
+                .is_empty()
+            {
+                break;
+            }
+            cut = line_end;
+        }
+    }
     cut
+}
+
+/// Whether the first line of `region` (a key line) opens a block scalar with
+/// the keep chomping indicator, e.g. `k: |+`, `k: >+2` or `k: |2+ # note`.
+fn is_keep_chomped_header(region: &str) -> bool {
+    let line = region.lines().next().unwrap_or("");
+    let line = line.split(" #").next().unwrap_or(line).trim_end();
+    let Some(idx) = line.rfind([' ', ':']) else {
+        return false;
+    };
+    let token = &line[idx + 1..];
+    let mut chars = token.chars();
+    matches!(chars.next(), Some('|' | '>'))
+        && token.contains('+')
+        && chars.all(|c| c == '+' || c.is_ascii_digit())
 }
 
 #[cfg(test)]

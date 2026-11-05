@@ -16,8 +16,30 @@ and this project adheres to
   array of the groups per match instead of the whole match. For the old
   result, drop the capture groups and use `first(scan(re))`.
 - Search treats the combining marks new in Unicode 18 as part of a word
-  (unicode-normalization 0.1.26). A note using one keeps its old token split
-  in an existing snapshot until `create-index --force` (DEC-373).
+  (unicode-normalization 0.1.26). The snapshot format bump below makes every
+  index rebuild, so no note keeps its old token split in this release
+  (DEC-373).
+- The YAML parser (serde-saphyr) moved from 1.3 to 2.1 (DEC-375). Frontmatter
+  that holds only comments, `~` or `null` still reads as no properties. Three
+  readings change: a wrong-case `tRUE`, `FAlse` or `nuLL` is now a string
+  (it was a bool or a null), and `.nAn` or `-.iNF` keeps its text (it was
+  `".nan"` or `"-.inf"`). A number, bool or `.nan` followed or preceded by a
+  no-break space or another Unicode space (`year: 2024<NBSP>`) is a string,
+  not the number. A tab after an explicit `?` key and a quoted multi-line
+  value whose continuation is indented one column now parse instead of
+  making the frontmatter unparsable. The notes of this repository, GitHub
+  Docs, MDN, the Obsidian Hub and kepano-obsidian read exactly as before.
+  The differences found are not claimed to be the only ones: a tagged scalar
+  the tag cannot hold (`!!bool tRUE`, `!!float .nAn`, `!!timestamp ~`) now makes
+  the frontmatter unparsable where 1.3 read it; a BOM inside the block changes
+  how `a: 0X1F` reads; and a kept trailing blank line in a `|+` or `>+` value
+  is written as an empty line instead of an indent-only one (the value reads
+  the same).
+- **Breaking: snapshot format 8.** An index written by an older binary is
+  refused with a warning and the command falls back to disk; rebuild it with
+  `hyalo create-index`. The parser change above makes a reused 7 entry wrong
+  (`flag: tRUE` stays `true` under `--index` while a disk scan says `"tRUE"`),
+  and an incremental `create-index` would have kept it (DEC-375).
 - The jev tidy helper moves to `@typesafe-ai/sdk` 0.7.0 and Bun 1.4.4. Its
   requests stay uncompressed JSON, a token count the API leaves `null` sets
   `usageUnknown` instead of failing the batch, and a note holding text the SDK
