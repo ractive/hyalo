@@ -306,3 +306,68 @@ fn explicit_key_tab_and_one_column_quoted_continuation_parse() {
         json!({"title": "one two", "n": 1})
     );
 }
+
+#[test]
+fn keep_chomped_block_scalars_survive_two_writes_with_comments_and_quoting() {
+    // serde-saphyr 2.1 writes the kept trailing blank lines of a `|+` / `>+`
+    // body at column 0 (upstream #249). They are value bytes: if the splice
+    // treated them as trivia, the second write would fall back to a whole
+    // block rewrite and drop the comment and the quoting.
+    for (indicator, value) in [("|+", "a\n\n"), (">+", "a\n\n"), ("|+", "\n")] {
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            "a.md",
+            &format!("---\n# keep me\nq: \"quoted\"\nk: {indicator}\n  a\n---\nbody\n"),
+        );
+        for property in [format!("k={value}"), "w=1".to_owned()] {
+            hyalo_no_hints()
+                .arg("--dir")
+                .arg(tmp.path())
+                .args(["set", "a.md", "--property", &property])
+                .assert()
+                .success()
+                .stderr(predicates::str::is_empty());
+        }
+        let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(text.contains("# keep me"), "{value:?}: {text}");
+        assert!(text.contains("q: \"quoted\""), "{value:?}: {text}");
+        assert_eq!(
+            properties(tmp.path(), "a.md")["k"],
+            json!(value),
+            "{value:?}: {text}"
+        );
+    }
+}
+
+#[test]
+fn an_unindented_blank_line_in_a_hand_written_keep_scalar_stays_with_its_key() {
+    for indicator in ["|+", ">+"] {
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            "a.md",
+            &format!(
+                "---\n# keep me\nq: \"quoted\"\nk: {indicator}\n  a\n\n# next\nz: 1\n---\nbody\n"
+            ),
+        );
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["set", "a.md", "--property", "w=1"])
+            .assert()
+            .success()
+            .stderr(predicates::str::is_empty());
+        let text = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(
+            text.contains("# keep me") && text.contains("# next"),
+            "{indicator}: {text}"
+        );
+        assert!(text.contains("q: \"quoted\""), "{indicator}: {text}");
+        assert_eq!(
+            properties(tmp.path(), "a.md")["k"],
+            json!("a\n\n"),
+            "{indicator}"
+        );
+    }
+}

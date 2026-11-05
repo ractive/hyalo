@@ -2270,6 +2270,11 @@ mod yaml_tests {
             "NULL\n",
             "!Foo null\n",
             "!!null ~\n",
+            // These carry a YAML 1.1 integer form, so they take the
+            // span-aware second pass; its `Option` wrapper must hold too.
+            "# 0x1F\n",
+            "# 1_000\n",
+            "~ # 0b1\n",
         ] {
             let props = parse_yaml_map(yaml).unwrap_or_else(|e| panic!("{yaml:?}: {e}"));
             assert!(props.is_empty(), "{yaml:?}: {props:?}");

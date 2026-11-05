@@ -8684,13 +8684,20 @@ entry of every vault. Such a note reads correctly on a disk scan and, under
 covers later Unicode table updates; a change to how an already assigned code
 point tokenizes still needs the bump.
 
-## DEC-375: serde-saphyr 2.1 — four changes in how frontmatter reads, one undone (2026-11-05) — amends DEC-350
+*Note 2026-11-05 (DEC-375):* for the release that carries the Unicode 18
+update the sentence "once it changes or after `create-index --force`" no
+longer applies, because the serde-saphyr 2.1 change bumped the snapshot format
+(v7 → v8); every older snapshot is refused and rebuilt, so every note is
+re-tokenized anyway. The decision itself stands for later updates.
+
+## DEC-375: serde-saphyr 2.1 — changes in how frontmatter reads and is written, one undone (2026-11-05) — amends DEC-350
 
 **Context.** Dependabot's PR #392 moved the YAML parser from serde-saphyr 1.3
 to 2.0, and the follow-up to 2.1. A 357-file edge matrix (one frontmatter
 shape per file, run through the 1.3 and the 2.1 binaries) and a probe on the
-raw crate at 1.3.0, 2.0.0 and 2.1.0 found exactly four user-visible
-differences. The DEC-293, DEC-350 and DEC-364 pins are unchanged, including
+raw crate at 1.3.0, 2.0.0 and 2.1.0 found the four user-visible reading
+differences numbered below. That list is what the matrix surfaced, not a proof
+of completeness: PR review found four more (the section after the list). The DEC-293, DEC-350 and DEC-364 pins are unchanged, including
 `01234`, `0x1F` / `0o17`, `1_000` / `0X1F` / `0b101`, `NaN` / `Infinity` as
 written, `.nan` / `.inf`, and the column-0 close of the fence.
 
@@ -8735,13 +8742,52 @@ choice: a frontmatter block that holds only a comment is plausible in a
 template, `find` / `summary` would have dropped it as skipped, HYALO005 would
 have errored on it and `set` would have refused it.
 
+**Found in PR review, not in the matrix.** These are true on 1.3 and 2.1
+binaries compared side by side:
+
+5. **Written bytes of a kept blank line (accepted, upstream #249).** In a
+   `|+` or `>+` body 2.1 writes each kept trailing blank line empty, where 1.3
+   wrote it as the two-space indent. `set k=$'a\n\n'`, `k=$'\n'`, `k=$'a\n\n\n'`
+   and `k=$'x\ny\n\n'` differ in those bytes (a whitespace-only line against
+   an empty one); `k=$'a\n'` and every other shape tried are identical, and the
+   value reads the same. The column-0 blank line had broken the splice
+   (`trailing_trivia_start` took it for trivia and detached it from its key,
+   so the next write fell back to a whole-block rewrite that dropped comments
+   and quoting). It now stays with a `|+` / `>+` key, which is the YAML rule:
+   the blank lines after a keep-chomped body belong to the scalar. The
+   alternative, marking such values unsafe in `hyalo_serializer_options_for`,
+   would have meant a rewrite on every write of them; the splice fix keeps
+   the surrounding text byte-identical, and hand-written files with an
+   unindented blank line in a `|+` body (comment following) are covered too.
+6. **A tagged scalar the tag cannot hold is an error (accepted).**
+   `k: !!bool tRUE`, `k: !!float .nAn` and `k: !!timestamp ~` read as `true`,
+   `".nan"` and null on 1.3 and make the block unparsable (HYALO005) on 2.1.
+7. **A BOM inside the block (accepted).** `---` / U+FEFF / `a: 0X1F`: 1.3 read
+   `{"a": "a: 0"}` and `set` wrote that back as `a: "a: 0"`; 2.1 reads
+   `{"a": "0X1F"}` and keeps the line's bytes. A BOM before the opening `---`
+   is unaffected.
+8. **`+.nan` and `-.nan` are not core spellings and still read `".nan"`.** No
+   change from 1.3, but it means change 2's "only the core schema's spellings"
+   describes the crate's matching of the bool and null words and of `.nan` /
+   `.inf` / `-.inf`, not every non-finite spelling.
+
 No option in serde-saphyr restores the old reading for changes 2 to 4 and
 re-implementing scalar resolution to do so would undo DEC-350's choice to let
 the crate resolve scalars. The pins are `frontmatter::parse::yaml_tests`
 (`null_documents_read_as_no_properties`, `wrong_case_spellings_read_as_strings`,
 `unicode_whitespace_around_a_scalar_makes_it_a_string`, `a_tab_after_an_explicit_key_marker_and_one_column_quoted_continuations_parse`)
-and the three e2e tests at the end of `iteration310_yaml_parser.rs`. Not
-reproduced: the block scalar change granit-parser 2.0 lists (a last line
-holding only indentation, with no final newline, yielding `"a\n"` instead of
-`"a\n\n"`). 28 block-scalar shapes (literal and folded, keep and strip
-chomping, CRLF, indentation-only at end of input) are byte-identical.
+and the e2e tests at the end of `iteration310_yaml_parser.rs`, including the
+two-write tests for `|+` / `>+`. Not reproduced: the block scalar change
+granit-parser 2.0 lists (a last line holding only indentation, with no final
+newline, yielding `"a\n"` instead of `"a\n\n"`) — reads of 28 block-scalar
+shapes (literal and folded, keep and strip chomping, CRLF, indentation-only at
+end of input) are identical; the written bytes differ only as in 5.
+
+**Snapshot format v8.** The reading changes make an old snapshot wrong, not
+just stale: a v7 snapshot built under 1.3 keeps `{"flag": true, "none": null}`
+for `flag: tRUE` / `none: nuLL`, where a disk scan now answers `"tRUE"` and
+`"nuLL"`, and an incremental `create-index` reuses an unchanged entry (DEC-339)
+and so would keep it. `SNAPSHOT_FORMAT_VERSION` bumps 7 → 8 with no field
+change, so an older snapshot is refused with the usual warning, falls back to
+disk, and must be rebuilt with `create-index`. This reverses DEC-373's
+"no bump" reasoning for this release only: see the note there.
