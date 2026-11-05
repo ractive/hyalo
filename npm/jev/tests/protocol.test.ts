@@ -13,10 +13,15 @@ test("canonical hashes and local-only metadata", () => {
   expect(() => selection(["../escape.md"])).toThrow();
   expect(() => selection(Array(26).fill("a.md"))).toThrow();
 });
+test("text the SDK would refuse as an unattached image reference defers before transmission", () => {
+  const reference = `<image:${"0123456789abcdef".repeat(2)}>`, doc = fixture().documents[0]!;
+  expect(() => payload({ ...doc, content: `See ${reference}.` }, p)).toThrow("image reference");
+  expect(() => payload({ ...doc, content: "See <image:not-a-reference>." }, p)).not.toThrow();
+});
 test("rejects malformed answers; unknown and uncertain choices defer", () => {
   const { request, bindings } = payload(fixture().documents[0]!, p), valid = response(request);
   expect(decisions(valid, request.questions, bindings).decisions[0]?.status).toBe("suggestion");
-  for (const overrides of [{ model: "jev-latest" }, { answers: {} }, { usage: { input_tokens: -1, output_tokens: 1 } }]) expect(() => decisions({ ...valid, ...overrides }, request.questions, bindings)).toThrow();
+  for (const overrides of [{ model: "jev-latest" }, { answers: {} }, { usage: { input_tokens: -1, output_tokens: 1 } }, { usage: { output_tokens: 1 } }, { usage: null }]) expect(() => decisions({ ...valid, ...overrides }, request.questions, bindings)).toThrow();
   for (const patch of [
     { choice: "intruder" }, { type: "score" }, { confidence: Infinity },
     { probabilities: { c0: .1, c1: .89, unknown: .01 } },

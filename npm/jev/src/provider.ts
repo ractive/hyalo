@@ -1,4 +1,4 @@
-import { TypeSafeClient, APIError, RateLimitError } from "@typesafe-ai/sdk";
+import { TypeSafeClient, APIError, RateLimitError, type Usage } from "@typesafe-ai/sdk";
 import { decisions, type Decision } from "./decisions.ts";
 import { type Manifest, MODEL, LIMITS, Invalid, Unavailable, insist, hash, payload, normalizedType } from "./protocol.ts";
 
@@ -33,7 +33,10 @@ export function boundedFetch(fetcher: Fetch, onDispatch: () => void, maxBytes: n
         bytes += part.value.byteLength;
         insist(bytes <= maxBytes, "provider response exceeds limit"); chunks.push(part.value);
       }
-      return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers });
+      // Stream-backed on purpose: Bun marks a buffer-backed Response as used once
+      // the SDK takes a reader on it, and the SDK's text() then throws.
+      const body = new ReadableStream<Uint8Array>({ start(c) { for (const chunk of chunks) c.enqueue(chunk); c.close(); } });
+      return new Response(body, { status: response.status, statusText: response.statusText, headers });
     } finally {
       init.signal?.removeEventListener("abort", cancel);
       void reader.cancel().catch(() => {});
@@ -45,7 +48,7 @@ export function boundedFetch(fetcher: Fetch, onDispatch: () => void, maxBytes: n
 export interface BatchResult {
   file: string; fingerprint: string; requestHash: string | null; status: "ok" | "unavailable" | "invalid";
   decisions: Decision[]; attempts: number; elapsedMs: number;
-  usage: { input_tokens: number; output_tokens: number } | null; usageUnknown: boolean; estimatedCostUsd: number | null;
+  usage: Usage | null; usageUnknown: boolean; estimatedCostUsd: number | null;
   reason?: string;
 }
 export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?: string; fetch?: Fetch; deadlineMs?: number }) {
@@ -70,16 +73,19 @@ export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?
         const transport = boundedFetch(options.fetch ?? fetch, () => { attempts++; });
         try {
           const client = new TypeSafeClient({
-            apiKey: key, baseURL: "https://api.typesafe.ai", defaultModel: MODEL, logLevel: "off", timeout: deadline,
+            // zstd is the SDK default on Node 22.15+ only; keep one plain JSON wire format.
+            apiKey: key, baseURL: "https://api.typesafe.ai", defaultModel: MODEL, logLevel: "off", timeout: deadline, compression: false,
             retry: { maxRetries: 1, httpStatuses: new Set([429, 529]), apiConnectionError: false, apiTimeoutError: false, respectRetryAfter: true, maxRetryAfterMs: LIMITS.deadline + 1, backoffInitialMs: 250, backoffMaxMs: 250, backoffJitter: 0 },
             fetch: async (input, init) => { try { return await transport(input, init); } catch (error) { if (error instanceof Invalid) transportInvalid = true; throw error; } },
           });
           const response: unknown = await client.systemOne(request, { signal: controller.signal });
           const validated = decisions(response, request.questions, bindings);
           row.decisions = validated.decisions; row.usage = validated.usage;
-          row.estimatedCostUsd = validated.usage.input_tokens * .042 / 1_000_000;
-          // A successful retry does not account for possible usage of its first attempt.
-          row.usageUnknown = attempts > 1;
+          const { input_tokens, output_tokens } = validated.usage;
+          row.estimatedCostUsd = input_tokens === null ? null : input_tokens * .042 / 1_000_000;
+          // A successful retry does not account for possible usage of its first
+          // attempt, and the API may leave a count unreported.
+          row.usageUnknown = attempts > 1 || input_tokens === null || output_tokens === null;
         } finally { clearTimeout(timer); }
       }
     } catch (error) {

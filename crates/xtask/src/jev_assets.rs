@@ -20,7 +20,7 @@ pub fn run(sync: bool) -> Result<bool> {
         .current_dir(&package)
         .env("HYALO_JEV_BUNDLE_OUT", &bundle)
         .status()
-        .context("building Jev bundle; Bun 1.4.2 is required for development")?;
+        .context("building Jev bundle; Bun 1.4.4 is required for development")?;
     ensure!(status.success(), "Jev bundle build failed");
     let script = fs::read(bundle)?;
     let reference = fs::read(root.join("plugins/hyalo/skills/hyalo-tidy/references/jev.md"))?;

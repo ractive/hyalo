@@ -18,6 +18,10 @@ and this project adheres to
 - Search treats the combining marks new in Unicode 18 as part of a word
   (unicode-normalization 0.1.26). A note using one keeps its old token split
   in an existing snapshot until `create-index --force` (DEC-373).
+- The jev tidy helper moves to `@typesafe-ai/sdk` 0.7.0 and Bun 1.4.4. Its
+  requests stay uncompressed JSON, a token count the API leaves `null` sets
+  `usageUnknown` instead of failing the batch, and a note holding text the SDK
+  reserves as an image reference is deferred during `prepare`.
 
 ## [0.25.1] - 2026-11-01
 
