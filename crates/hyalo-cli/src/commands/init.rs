@@ -702,13 +702,15 @@ fn initialize_observed(
                 .context("skill path has no parent directory")?;
             ensure_installation_dir(root, skill_dir, &mut report)
                 .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
-            publish_installation(
-                root,
-                &skill_path,
-                parameterize_template(SKILL_CONTENT, &dir_value).as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", skill_path.display()))?;
-            if skill_existed {
+            let skill_bytes = parameterize_template(SKILL_CONTENT, &dir_value);
+            let skill_same = already_installed(&skill_path, skill_bytes.as_bytes());
+            if !skill_same {
+                publish_installation(root, &skill_path, skill_bytes.as_bytes())
+                    .with_context(|| format!("failed to write {}", skill_path.display()))?;
+            }
+            if skill_same {
+                report.push("unchanged", ".claude/skills/hyalo/SKILL.md");
+            } else if skill_existed {
                 report.push("updated", ".claude/skills/hyalo/SKILL.md");
             } else {
                 report.push("created", ".claude/skills/hyalo/SKILL.md");
@@ -727,13 +729,15 @@ fn initialize_observed(
             ensure_installation_dir(root, tidy_skill_dir, &mut report).with_context(|| {
                 format!("failed to create directory {}", tidy_skill_dir.display())
             })?;
-            publish_installation(
-                root,
-                &tidy_skill_path,
-                parameterize_template(TIDY_SKILL_CONTENT, &dir_value).as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
-            if tidy_skill_existed {
+            let tidy_bytes = parameterize_template(TIDY_SKILL_CONTENT, &dir_value);
+            let tidy_same = already_installed(&tidy_skill_path, tidy_bytes.as_bytes());
+            if !tidy_same {
+                publish_installation(root, &tidy_skill_path, tidy_bytes.as_bytes())
+                    .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+            }
+            if tidy_same {
+                report.push("unchanged", ".claude/skills/hyalo-tidy/SKILL.md");
+            } else if tidy_skill_existed {
                 report.push("updated", ".claude/skills/hyalo-tidy/SKILL.md");
             } else {
                 report.push("created", ".claude/skills/hyalo-tidy/SKILL.md");
@@ -748,9 +752,14 @@ fn initialize_observed(
             ensure_installation_dir(root, rules_dir, &mut report)
                 .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
             let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
-            publish_installation(root, &rules_path, rule_content.as_bytes())
-                .with_context(|| format!("failed to write {}", rules_path.display()))?;
-            if rules_existed {
+            let rules_same = already_installed(&rules_path, rule_content.as_bytes());
+            if !rules_same {
+                publish_installation(root, &rules_path, rule_content.as_bytes())
+                    .with_context(|| format!("failed to write {}", rules_path.display()))?;
+            }
+            if rules_same {
+                report.push("unchanged", ".claude/rules/knowledgebase.md");
+            } else if rules_existed {
                 report.push("updated", ".claude/rules/knowledgebase.md");
             } else {
                 report.push("created", ".claude/rules/knowledgebase.md");
@@ -777,14 +786,28 @@ fn initialize_observed(
                 let existing = String::from_utf8(claude_source.bytes()?)
                     .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
                 let (new_content, action) = upsert_managed_section(&existing, &managed_section);
-                publish_captured_installation(
-                    root,
-                    &claude_md_path,
-                    Some(claude_source),
-                    new_content.as_bytes(),
-                )
-                .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-                report.push_detail("updated", ".claude/CLAUDE.md", action);
+                if new_content == existing {
+                    report.push_detail("unchanged", ".claude/CLAUDE.md", "managed section current");
+                } else {
+                    if action == "replaced managed section" {
+                        // The block is regenerated from the template on every
+                        // run, so a hand edit inside the markers does not
+                        // survive. Say so instead of overwriting in silence.
+                        crate::warn::warn(
+                            ".claude/CLAUDE.md: the managed section differed from the \
+                             installed template and was replaced; keep your own text \
+                             outside the hyalo:start / hyalo:end markers",
+                        );
+                    }
+                    publish_captured_installation(
+                        root,
+                        &claude_md_path,
+                        Some(claude_source),
+                        new_content.as_bytes(),
+                    )
+                    .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+                    report.push_detail("updated", ".claude/CLAUDE.md", action);
+                }
             } else {
                 // Create the file and any parent directories.
                 let claude_dir = claude_md_path
@@ -814,11 +837,20 @@ fn initialize_observed(
                     ensure_installation_dir(root, parent, &mut report).with_context(|| {
                         format!("failed to create directory {}", parent.display())
                     })?;
-                    publish_installation(root, &profile_skill_path, skill_body.as_bytes())
-                        .with_context(|| {
-                            format!("failed to write {}", profile_skill_path.display())
-                        })?;
-                    let verb = if existed { "updated" } else { "created" };
+                    let same = already_installed(&profile_skill_path, skill_body.as_bytes());
+                    if !same {
+                        publish_installation(root, &profile_skill_path, skill_body.as_bytes())
+                            .with_context(|| {
+                                format!("failed to write {}", profile_skill_path.display())
+                            })?;
+                    }
+                    let verb = if same {
+                        "unchanged"
+                    } else if existed {
+                        "updated"
+                    } else {
+                        "created"
+                    };
                     report.push(verb, format!(".claude/skills/{skill_dir}/SKILL.md"));
                 }
             }
@@ -1759,6 +1791,13 @@ fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str
     (appended, "appended managed section")
 }
 
+/// Whether `path` already holds exactly `bytes`, so a re-run reports
+/// `unchanged` instead of claiming an update (iter-320). A read error counts as
+/// "not the same": the write that follows reports the real failure.
+fn already_installed(path: &Path, bytes: &[u8]) -> bool {
+    std::fs::read(path).is_ok_and(|on_disk| on_disk == bytes)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2434,13 +2473,23 @@ mod tests {
         assert!(out1.contains("created  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
-        // Second run — should say "updated", not "created"
+        // Second run with nothing changed — "unchanged", never "created" or
+        // a claimed update (iter-320).
         let out2 = run_init_in(Some("docs"), true, false, None, tmp.path())
             .unwrap()
             .to_text();
-        assert!(out2.contains("updated  .claude/skills/hyalo/SKILL.md"));
-        assert!(out2.contains("updated  .claude/skills/hyalo-tidy/SKILL.md"));
-        assert!(out2.contains("updated  .claude/rules/knowledgebase.md"));
+        assert!(out2.contains("unchanged  .claude/skills/hyalo/SKILL.md"));
+        assert!(out2.contains("unchanged  .claude/skills/hyalo-tidy/SKILL.md"));
+        assert!(out2.contains("unchanged  .claude/rules/knowledgebase.md"));
+
+        // A stale copy is overwritten and reported as updated.
+        let skill = tmp.path().join(".claude/skills/hyalo/SKILL.md");
+        fs::write(&skill, "stale\n").unwrap();
+        let out3 = run_init_in(Some("docs"), true, false, None, tmp.path())
+            .unwrap()
+            .to_text();
+        assert!(out3.contains("updated  .claude/skills/hyalo/SKILL.md"));
+        assert!(out3.contains("unchanged  .claude/skills/hyalo-tidy/SKILL.md"));
     }
 
     #[test]

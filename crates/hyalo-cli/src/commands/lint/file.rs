@@ -1107,7 +1107,12 @@ fn lint_one_file_extended_with_after_frontmatter(
     let to_file_line =
         |body_line: usize| body_line.saturating_add(body_line_offset.saturating_sub(1));
 
-    warn_unknown_directive_rules(body_content, rel_path, engine, to_file_line);
+    // iter-320: `--rule X` reports rule X only (DEC-301). A directive typo is
+    // a finding about the directive, not about X, so it waits for a run that
+    // is not narrowed to one rule.
+    if rule_filter.is_empty() {
+        warn_unknown_directive_rules(body_content, rel_path, engine, to_file_line);
+    }
 
     // Group body diagnostics by rule: violations fixed across any pass,
     // followed by whatever remains after the loop above (or the single

@@ -1657,7 +1657,9 @@ type GlobalArgs = {
      * deadline. Source is capped at 64 KiB, serialized input at 64 MiB, and output at
      * 10 MiB / 1,000,000 values. The parent terminates and reaps failed, timed-out or
      * cancelled workers. Compilation failure precedes writes (exit 1); evaluation
-     * failure retains committed effects in the error report (exit 2).
+     * failure after a file was committed retains those effects in the error report
+     * (exit 2). A result over the 10 MiB cap from a run that wrote nothing (read-only,
+     * --dry-run, a no-op write) exits 1 and names --format json or a narrower filter.
      * Linux limits worker address space to 512 MiB. macOS and Windows have no hard
      * memory cap: intermediate allocations can still exhaust host memory before
      * termination. Process isolation is not a universal OOM guarantee.

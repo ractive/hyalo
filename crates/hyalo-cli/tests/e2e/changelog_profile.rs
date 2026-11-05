@@ -271,13 +271,20 @@ fn release_rotation_round_trip() {
     // Feature A moved into the dated section.
     let dated = content.find("## [1.1.0]").unwrap();
     assert!(content[dated..].contains("Feature A."));
+    // iter-320: both footer links are written from the `[Unreleased]` compare
+    // link, so the maintainer has nothing to fix by hand.
     assert!(
-        content.contains("[1.1.0]: TBD"),
-        "placeholder link ref added"
+        content.contains("\n[1.1.0]: https://x/compare/v1.0.0...v1.1.0\n"),
+        "release link written: {content}"
     );
+    assert!(
+        content.contains("\n[Unreleased]: https://x/compare/v1.1.0...HEAD\n"),
+        "unreleased link advanced: {content}"
+    );
+    assert!(!content.contains("TBD"), "no placeholder left: {content}");
+    assert_eq!(content.matches("[Unreleased]:").count(), 1);
 
-    // The rotated changelog still lints clean (once the TBD link is treated as a
-    // present ref — the LINK-REF rule only checks presence, not the URL value).
+    // The rotated changelog lints clean.
     let (lint_json, lint_out) = run(tmp.path(), &["lint", "--profile", "changelog"]);
     assert!(
         lint_out.status.success(),

@@ -2257,7 +2257,8 @@ pub(crate) fn run(
                 crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
             journal.rescan_modified(dir, &modified_files)?;
             journal.flush()?;
-            Ok(outcome.with_status(i32::from(had_failures)))
+            let outcome = outcome.with_status(i32::from(had_failures));
+            Ok(with_committed_files(outcome, &modified_files))
         }
         LinksAction::Auto {
             dry_run: _,
@@ -2317,7 +2318,8 @@ pub(crate) fn run(
                 crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
             journal.rescan_modified(dir, &modified_files)?;
             journal.flush()?;
-            Ok(outcome.with_status(i32::from(had_failures)))
+            let outcome = outcome.with_status(i32::from(had_failures));
+            Ok(with_committed_files(outcome, &modified_files))
         }
     }
 }
@@ -2458,4 +2460,27 @@ struct LinksAutoResult<'a> {
     /// Config exclusions; omitted when no titles were excluded.
     #[serde(skip_serializing_if = "Option::is_none")]
     config_excluded_mentions: Option<usize>,
+}
+
+/// Record the files a `links` write phase committed, so a later output failure
+/// (a `--jq` result over the cap) is judged against what was really written
+/// (DEC-378, iter-320). An empty list leaves the outcome untouched.
+fn with_committed_files(outcome: CommandOutcome, files: &[String]) -> CommandOutcome {
+    use crate::commands::apply::{ApplyReport, EffectState, IndexDisposition, PathEffect};
+    if files.is_empty() {
+        return outcome;
+    }
+    outcome.with_apply_report(ApplyReport {
+        paths: files
+            .iter()
+            .map(|file| PathEffect {
+                file: file.clone(),
+                state: EffectState::Committed,
+                error: None,
+                category: None,
+            })
+            .collect(),
+        index: IndexDisposition::NotUsed,
+        index_error: None,
+    })
 }

@@ -1329,17 +1329,21 @@ fn run_inner() -> Result<(), AppError> {
     // reject_write_with_unloadable_schema`). So `schema_invalid` only joins
     // the refusal when the command is a gate, never merely because it writes.
     let gate_diagnostic = config.malformed.as_deref().or_else(|| {
-        cli.command
-            .gates()
+        (cli.command.gates() || cli.command.reads_schema())
             .then_some(config.schema_invalid.as_deref())
             .flatten()
     });
     let previews_write = config.malformed.is_some() && cli.command.previews_write();
     if let Some(diagnostic) = gate_diagnostic
-        && (cli.command.writes() || cli.command.gates() || previews_write)
+        && (cli.command.writes()
+            || cli.command.gates()
+            || previews_write
+            || cli.command.reads_schema())
     {
         let kind = if cli.command.writes() || previews_write {
             "a mutating command"
+        } else if cli.command.reads_schema() && !cli.command.gates() {
+            "a command that reads the schema"
         } else {
             "a command whose exit code is a gate"
         };
@@ -1992,8 +1996,14 @@ fn run_inner() -> Result<(), AppError> {
                     &common,
                 ))
             }
-            Commands::New { file, dry_run, .. } => Some(HintContext::from_common(
+            Commands::New {
+                r#type,
+                file,
+                dry_run,
+                ..
+            } => Some(HintContext::from_common(
                 HintSource::New {
+                    type_name: r#type.clone(),
                     file: file.clone(),
                     dry_run: *dry_run,
                 },
@@ -2269,11 +2279,7 @@ fn run_inner() -> Result<(), AppError> {
             Ok(None) if index_path_named => {
                 return Err(AppError::Internal(crate::error::user_error_with(
                     format!("could not read index file: {}", p.display()),
-                    Some(
-                        "build it with `hyalo create-index --output <path>`, or drop \
-                         --index-file to scan the vault"
-                            .to_owned(),
-                    ),
+                    Some(build_index_hint(p, &dir)),
                     Some(if p.exists() {
                         "the file exists but is not a hyalo snapshot this binary can read"
                             .to_owned()
@@ -2297,11 +2303,7 @@ fn run_inner() -> Result<(), AppError> {
             Err(e) if index_path_named => {
                 return Err(AppError::Internal(crate::error::user_error_with(
                     format!("could not read index file: {}", p.display()),
-                    Some(
-                        "build it with `hyalo create-index --output <path>`, or drop \
-                         --index-file to scan the vault"
-                            .to_owned(),
-                    ),
+                    Some(build_index_hint(p, &dir)),
                     Some(e.to_string()),
                 )));
             }
@@ -2689,6 +2691,34 @@ fn run_inner() -> Result<(), AppError> {
     } else {
         Err(AppError::Exit(final_code))
     }
+}
+
+/// The "build it" hint for an unreadable `--index-file` (iter-320): names the
+/// path the caller gave and adds `--allow-outside-vault` when that path lies
+/// outside the vault, because `create-index` refuses to write there without it.
+fn build_index_hint(index_path: &Path, vault_dir: &Path) -> String {
+    let absolute = std::path::absolute(index_path).unwrap_or_else(|_| index_path.to_path_buf());
+    // The file itself may not exist; its directory resolves symlinks the same
+    // way the vault's does (`/var` vs `/private/var` on macOS).
+    let absolute = match (
+        absolute.parent().map(std::fs::canonicalize),
+        absolute.file_name(),
+    ) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => absolute,
+    };
+    let canonical_vault =
+        std::fs::canonicalize(vault_dir).unwrap_or_else(|_| vault_dir.to_path_buf());
+    let outside = !absolute.starts_with(&canonical_vault) && !absolute.starts_with(vault_dir);
+    format!(
+        "build it with `hyalo create-index --output {}{}`, or drop --index-file to scan the vault",
+        index_path.display(),
+        if outside {
+            " --allow-outside-vault"
+        } else {
+            ""
+        },
+    )
 }
 
 #[cfg(test)]

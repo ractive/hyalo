@@ -582,6 +582,20 @@ pub fn numbered_heading_repair(
     found.ok_or("no unique exact numbered-heading match; similar headings are advisory only")
 }
 
+/// The one heading `find --broken-links` suggests and `links fix` plans for a
+/// broken fragment (iter-320): the unique exact numbered-heading match
+/// ([`numbered_heading_repair`]) wins, because that is the heading `links fix
+/// --apply` would write; otherwise the unique prefix match
+/// ([`unique_heading_by_prefix`]). Both surfaces call this, so they cannot name
+/// different headings for the same anchor.
+#[must_use]
+pub fn suggest_heading(fragment: &str, sections: &[OutlineSection]) -> Option<String> {
+    numbered_heading_repair(fragment, sections)
+        .ok()
+        .map(|(heading, _)| heading)
+        .or_else(|| unique_heading_by_prefix(fragment, sections).map(str::to_owned))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

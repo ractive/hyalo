@@ -70,11 +70,20 @@ must all match the target:
 - `hyalo-core = { path = ..., version = "X.Y.Z" }`
 - `hyalo-mdlint = { path = ..., version = "X.Y.Z" }`
 
-The JSON manifests listed under "Version-sync prerequisites" in
-`docs/releasing.md` (root and pi `package.json`, the vendored pi copy, the
-Codex `plugin.json`, `npm/hyalo/package.json`) must match too — the xtask gates
-fail otherwise — and `npm-registry.yml`'s default `version` input is bumped
-alongside.
+Every other file that carries the version must match too — the xtask gates
+fail otherwise. The full set is **16 files**: `Cargo.toml`, `Cargo.lock`, root
+`package.json`, `pi-package/package.json`, the vendored
+`crates/hyalo-cli/templates/pi/package.json`,
+`plugins/hyalo/.codex-plugin/plugin.json`, `npm/hyalo/package.json`,
+`npm/hyalo/package-lock.json`, the seven `npm/platforms/*/package.json`, and
+`.github/workflows/npm-registry.yml` (its default `version` input). Run
+`./target/debug/xtask generate-npm-packages --generate` (build xtask first) to
+rewrite the npm manifests and the lockfile lines; it drops the lockfile
+`integrity` of the platform entries it moves, so after the npm job publishes,
+delete the seven `node_modules/@ractive-ch/hyalo-*` entries from
+`npm/hyalo/package-lock.json`, run `npm install --package-lock-only` in
+`npm/hyalo` (without the delete, npm keeps the hash-less entries) and commit
+the lockfile with the hashes. `docs/releasing.md` has the table.
 
 Often the bump already happened during the dev cycle (e.g. 0.18.0 was bumped
 in the changelog-conversion PR long before release day) — then just verify.

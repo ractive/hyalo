@@ -276,12 +276,19 @@ pub(super) fn hints_for_types(ctx: &HintContext, data: &serde_json::Value) -> Ve
     hints
 }
 
-pub(super) fn hints_for_new(ctx: &HintContext, file: &str, dry_run: bool) -> Vec<Hint> {
+pub(super) fn hints_for_new(
+    ctx: &HintContext,
+    type_name: &str,
+    file: &str,
+    dry_run: bool,
+) -> Vec<Hint> {
     // `--dry-run` never wrote `file`, so `lint --file <file>` would just fail
-    // to find it — no hint beats a hint pointing at a file that doesn't
-    // exist.
+    // to find it. Point at the real run instead (iter-320).
     if dry_run {
-        return Vec::new();
+        return vec![Hint::new(
+            "Create this file for real",
+            build_command_no_glob(ctx, &["new", "--type", type_name, "--file", file]),
+        )];
     }
     vec![Hint::new(
         "Validate the new file and see placeholder violations",

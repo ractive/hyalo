@@ -506,13 +506,47 @@ fn rotate_unreleased(cl: &mut Changelog, unreleased_idx: usize, version: &str, d
     // is: [Unreleased] / "" / [version] — correct.
 }
 
+/// The footer definitions a release writes, derived from the `[Unreleased]`
+/// compare link (iter-320): `[Unreleased]: <base>/compare/<prev>...HEAD`
+/// becomes `[Unreleased]: <base>/compare/<tag>...HEAD` and
+/// `[<version>]: <base>/compare/<prev>...<tag>`, where `<tag>` keeps the
+/// previous tag's non-digit prefix (`v`) in front of `version`.
+///
+/// `None` when the definition is not a `/compare/<prev>...HEAD` link (a
+/// custom host, a bare URL), in which case the caller falls back to `TBD`.
+fn release_footer_links(unreleased_def: &str, version: &str) -> Option<(String, String)> {
+    let url = unreleased_def.trim().split_once("]:")?.1.trim();
+    let (base, range) = url.rsplit_once("/compare/")?;
+    let (prev, head) = range.split_once("...")?;
+    if head != "HEAD" || prev.is_empty() {
+        return None;
+    }
+    // The previous ref must be a tag shaped `<prefix><X.Y.Z>`: a branch
+    // (`main`), a SHA (`abc123def`) or an already-advanced `v1.1.0...HEAD`
+    // would otherwise invent a tag or a range from a name to itself.
+    let prefix_len = prev.len() - prev.trim_start_matches(|c: char| !c.is_ascii_digit()).len();
+    if !is_semver(&prev[prefix_len..]) {
+        return None;
+    }
+    let tag = format!("{}{version}", &prev[..prefix_len]);
+    if tag == prev {
+        return None;
+    }
+    Some((
+        format!("[Unreleased]: {base}/compare/{tag}...HEAD"),
+        format!("[{version}]: {base}/compare/{prev}...{tag}"),
+    ))
+}
+
 /// Insert or refresh the footer link-reference definition for `version`.
 ///
 /// Appended just after the `[Unreleased]` definition (if any) or at the end of
-/// the footer link-ref block; a placeholder URL is used because the compare URL
-/// is repo-specific. Idempotent per version (guarded by the release check).
+/// the footer link-ref block. When the `[Unreleased]` definition is a compare
+/// link both are written correctly (see [`release_footer_links`]); otherwise
+/// the new definition is a `TBD` placeholder. Idempotent per version (guarded
+/// by the release check).
 fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
-    let def = format!("[{version}]: TBD");
+    let mut def = format!("[{version}]: TBD");
 
     // Find the footer link-ref block: contiguous trailing definition lines.
     // Prefer to insert right after the `[Unreleased]` definition so ordering
@@ -522,6 +556,10 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
         .iter()
         .position(|l| link_def_label(l).is_some_and(|lbl| lbl.eq_ignore_ascii_case("Unreleased")))
     {
+        if let Some((unreleased, released)) = release_footer_links(&cl.lines[idx], version) {
+            cl.lines[idx] = unreleased;
+            def = released;
+        }
         cl.lines.insert(idx + 1, def);
         return;
     }
@@ -1134,7 +1172,37 @@ mod tests {
         // A fresh Unreleased appears above the dated section.
         assert!(out.find("## [Unreleased]").unwrap() < idx_new);
         // Link ref inserted for the new version.
-        assert!(out.contains("[1.1.0]: TBD"));
+        assert!(out.contains("[1.1.0]: https://x/compare/v1.0.0...v1.1.0"));
+        assert!(out.contains("[Unreleased]: https://x/compare/v1.1.0...HEAD"));
+        assert!(!out.contains("TBD"));
+        assert_eq!(out.matches("[Unreleased]:").count(), 1);
+    }
+
+    #[test]
+    fn release_footer_links_follow_the_previous_tag_style() {
+        let d = "[Unreleased]: https://github.com/o/r/compare/v0.25.1...HEAD";
+        assert_eq!(
+            release_footer_links(d, "0.26.0"),
+            Some((
+                "[Unreleased]: https://github.com/o/r/compare/v0.26.0...HEAD".to_owned(),
+                "[0.26.0]: https://github.com/o/r/compare/v0.25.1...v0.26.0".to_owned()
+            ))
+        );
+        // A tag without a `v` prefix keeps none.
+        let d = "[Unreleased]: https://h/o/r/compare/1.2.3...HEAD";
+        assert_eq!(
+            release_footer_links(d, "1.3.0").map(|(_, r)| r),
+            Some("[1.3.0]: https://h/o/r/compare/1.2.3...1.3.0".to_owned())
+        );
+        // Anything that is not a compare-to-HEAD link falls back to TBD.
+        assert_eq!(
+            release_footer_links("[Unreleased]: https://h/o/r", "1.0.0"),
+            None
+        );
+        assert_eq!(
+            release_footer_links("[Unreleased]: https://h/o/r/compare/v1...v2", "3.0.0"),
+            None
+        );
     }
 
     #[test]

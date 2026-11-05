@@ -394,7 +394,9 @@ pub(crate) struct Cli {
     /// deadline. Source is capped at 64 KiB, serialized input at 64 MiB, and output at
     /// 10 MiB / 1,000,000 values. The parent terminates and reaps failed, timed-out or
     /// cancelled workers. Compilation failure precedes writes (exit 1); evaluation
-    /// failure retains committed effects in the error report (exit 2).
+    /// failure after a file was committed retains those effects in the error report
+    /// (exit 2). A result over the 10 MiB cap from a run that wrote nothing (read-only,
+    /// --dry-run, a no-op write) exits 1 and names --format json or a narrower filter.
     /// Linux limits worker address space to 512 MiB. macOS and Windows have no hard
     /// memory cap: intermediate allocations can still exhaust host memory before
     /// termination. Process isolation is not a universal OOM guarantee.
@@ -2276,6 +2278,9 @@ Repeatable (AND).\n\
             fragment matching an explicit HTML anchor in the target (<a id>/<a name>/<hN id>, \
             matched byte-for-byte) is not broken either. Missing targets never also count as \
             broken anchors. anchor_fixable/anchor_fixes reports unique numbered-heading proposals \
+            (counted apart from fixable, which stays the link bucket: a script that wants the count \
+            --apply would write must add fixable + anchor_fixable; the text Fixable line prints that \
+            sum and spells the split out as `(N links + M anchor repairs)`) \
             with source line, old/new fragment and heading; new_fragment is the heading TEXT for \
             a wikilink and the GFM slug for a markdown link, matching what --apply writes. \
             Plain --apply writes eligible numbered-heading repairs alongside file-target fixes. \
@@ -2760,17 +2765,16 @@ Repeatable (AND).\n\
               needed). Categories: Added, Changed, Deprecated, Removed, Fixed, Security.\n\
             - `changelog release <X.Y.Z> [--date YYYY-MM-DD]` rotates the accumulated\n\
               `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section, recreates\n\
-              an empty `[Unreleased]` above it, and appends a placeholder footer link\n\
-              reference (`[X.Y.Z]: TBD`). It refuses to release a version that already\n\
-              exists (idempotency guard).\n\n\
+              an empty `[Unreleased]` above it, and writes the footer compare links\n\
+              (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`).\n\
+              It refuses to release a version that already exists (idempotency guard).\n\n\
             Both default to --dry-run and exit non-zero on drift (a CI signal); pass\n\
             --apply to write.\n\n\
             The target file is `<vault>/CHANGELOG.md` unless `[changelog] path` names one\n\
             (resolved against the config directory — that is how a repo-root CHANGELOG.md\n\
             is used with a docs-subdir vault). Either way the file must still resolve\n\
             inside that root: a CHANGELOG.md symlinked out of it is refused (exit 1).\n\n\
-            VALIDATE: after releasing, replace the `TBD` link target with the real\n\
-            compare/tag URL and run `hyalo lint --profile changelog`.\n\n\
+            VALIDATE: after releasing, run `hyalo lint --profile changelog`.\n\n\
             EXAMPLES:\n\
             hyalo changelog add --category Added --message \"New export format\" --apply\n\
             hyalo changelog release 1.2.0 --dry-run\n\
@@ -3035,8 +3039,10 @@ pub(crate) enum ChangelogAction {
             dated `## [X.Y.Z] - <date>` version section.\n\n\
             The existing `## [Unreleased]` heading is relabelled to the new version (its\n\
             body — the categorised entries — moves with it), a fresh empty `## [Unreleased]`\n\
-            is inserted above it, and a placeholder footer link reference `[X.Y.Z]: TBD` is\n\
-            appended (replace `TBD` with the real compare/tag URL). The date defaults to\n\
+            is inserted above it, and the footer links are written from the `[Unreleased]`\n\
+            compare link (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]:\n\
+            …/compare/vX.Y.Z...HEAD`); an `[Unreleased]` definition that is not such a\n\
+            link gets a `[X.Y.Z]: TBD` placeholder instead. The date defaults to\n\
             today; override with --date YYYY-MM-DD.\n\n\
             Refuses to release a version that already appears in the file (idempotency\n\
             guard). Defaults to --dry-run and exits non-zero when the file would change;\n\

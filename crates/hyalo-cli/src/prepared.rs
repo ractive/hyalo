@@ -915,6 +915,28 @@ fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path
     if drift.is_empty() {
         return true;
     }
+    // iter-320: "changed" alone read wrong for a note that was only
+    // added or deleted, so say which kind of drift each file is.
+    let (mut modified, mut added, mut removed) = (0usize, 0usize, 0usize);
+    for rel in &drift {
+        if hyalo_core::index::VaultIndex::get(&*idx, rel).is_none() {
+            added += 1;
+        } else if dir.join(rel).exists() {
+            modified += 1;
+        } else {
+            removed += 1;
+        }
+    }
+    let kinds = [
+        (modified, "modified"),
+        (added, "added"),
+        (removed, "deleted"),
+    ]
+    .iter()
+    .filter(|(n, _)| *n > 0)
+    .map(|(n, label)| format!("{n} {label}"))
+    .collect::<Vec<_>>()
+    .join(", ");
     match idx.repair_drift(dir, &drift) {
         Ok(report) => {
             let count = drift.len();
@@ -924,9 +946,9 @@ fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path
                 named = format!("{named}, +{} more", count - 3);
             }
             crate::warn::note_always(format!(
-                "{count} {files} changed on disk since the index was built ({named}); repaired \
-                 in memory for this run (the index file is unchanged) — run `hyalo create-index` \
-                 to fold them in"
+                "{count} {files} changed on disk since the index was built ({kinds}: {named}); \
+                 repaired in memory for this run (the index file is unchanged) — run \
+                 `hyalo create-index` to fold them in"
             ));
             for (rel, reason) in &report.skipped {
                 crate::warn::warn_always(format!(

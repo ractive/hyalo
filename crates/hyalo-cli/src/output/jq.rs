@@ -204,6 +204,13 @@ pub(super) fn compile_jq_filter(
 /// from causing unbounded memory growth (e.g. exponential-expansion patterns).
 pub(super) const JQ_OUTPUT_CAP: usize = 10 * 1024 * 1024; // 10 MiB
 
+/// Whether a jq evaluation error is the output-cap refusal (iter-320), which
+/// the pipeline reports as a usage error rather than a renderer failure.
+#[must_use]
+pub(crate) fn is_jq_output_limit_error(error: &str) -> bool {
+    error.starts_with("jq filter output exceeds")
+}
+
 /// Maximum length (in `char`s) of a diagnostic string embedded in an error
 /// envelope — the jq runtime error message and the filter code that produced
 /// it (F-3, `deep-analysis-2-2026-08-23.md`). jaq's runtime `Display` embeds

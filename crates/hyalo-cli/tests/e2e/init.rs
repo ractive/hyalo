@@ -619,8 +619,8 @@ fn init_claude_updates_managed_section_on_rerun() {
     let stderr2 = String::from_utf8_lossy(&out2.stderr);
     assert!(out2.status.success(), "second run stderr: {stderr2}");
     assert!(
-        stdout2.contains("updated"),
-        "second run should report 'updated'; got: {stdout2}"
+        stdout2.contains("unchanged  .claude/CLAUDE.md"),
+        "an identical second run should report 'unchanged'; got: {stdout2}"
     );
 
     let content = fs::read_to_string(&claude_md_path).unwrap();

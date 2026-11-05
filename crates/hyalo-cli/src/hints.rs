@@ -129,6 +129,7 @@ pub enum HintSource {
         subcommand: Option<String>,
     },
     New {
+        type_name: String,
         file: String,
         dry_run: bool,
     },
@@ -576,7 +577,11 @@ pub fn generate_hints_with_counters(
         HintSource::ViewsList => hints_for_views_list(ctx, data),
         HintSource::LintRulesList => hints_for_lint_rules_list(ctx, data),
         HintSource::LintRulesShow => hints_for_lint_rules_show(ctx, data),
-        HintSource::New { file, dry_run } => hints_for_new(ctx, file, *dry_run),
+        HintSource::New {
+            type_name,
+            file,
+            dry_run,
+        } => hints_for_new(ctx, type_name, file, *dry_run),
         HintSource::OkfIndex => hints_for_okf_index(ctx, data),
         HintSource::OkfLog => hints_for_okf_log(ctx),
     };
