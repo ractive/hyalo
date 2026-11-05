@@ -7,7 +7,6 @@ tags: [dogfooding, review]
 related:
   - "[[iterations/iteration-321-content-safe-autofix]]"
 ---
-
 # Deep review: hyalo-cli, hyalo-mdlint, xtask at main d1801b5a
 
 Method: code reading plus the release binary on small vaults under scratch vaults (v1..v5). Nothing built or run through cargo.
@@ -276,4 +275,28 @@ anchor.rs `into_ids`, `explicit_anchor_ids_in_line`, `fragment_matches_explicit_
 
 ## Still not reached
 link_fix.rs fuzzy scoring (link_score.rs) and relocation planner internals beyond the CLI surface; link_graph internals beyond its catalog call; `index::tree_moved` / staleness probe (not exercised; only create-index reuse via CLI); schema.rs validation and filter/ parser (only skimmed via CLI); tokenizer stemming internals; auto_link zone detection beyond the Unicode test; Windows/Linux behaviour; ignore_classify precedence port vs the `ignore` crate.
+
+---
+# Part 3 (tree_moved/staleness probe, schema, filter parser, link_score/relocation, tokenizer/stemming)
+
+### C-16 MEDIUM (silent stale index) - the staleness probe never looks inside hidden directories, but `[scan] include` makes them part of the vault
+Where: index.rs `dir_mtimes_split` (`is_hidden(&entry) { continue; }`), used by `tree_moved` / `newest_dir_mtime`.
+Scenario (v24): `.hyalo.toml` has `[scan] include = [".claude/skills/**"]`; `create-index`; four seconds later a new `.claude/skills/s2.md` is added. `find --index` returns only s1.md and a.md, no note, no warning; the disk scan returns all three. The same holds for deletes and renames in any included dot-directory. The repo's own `.claude/` layout is exactly this use case.
+Fix: have the probe descend into hidden directories that `discovery::SCAN_INCLUDE` admits (it already holds `dir_prefixes`), still skipping `.git`.
+
+### C-17 LOW - an unusable per-note `language:` value silently falls back to the default
+Scenario (v20): `language: klingon`, `language: "de-CH"`, `[de]`, `123` produce no warning and are stemmed as the configured default (English), while `[search] language = "klingon"` in `.hyalo.toml` is a hard error. `"DE"`/`"german"` work. A BCP-47 tag such as `de-CH` is common in frontmatter and quietly gives the wrong stemmer, so the note stops matching inflections. Fix: strip a region subtag before lookup and emit a `-q`-proof warning (once per distinct value) for an unknown language.
+
+### C-18 LOW (perf, by design) - `links fix` is O(broken links x files)
+2,000 notes with 10,000 broken links (v21): 14.7 s for a dry run, no cap or progress. The DEC-325 prefilter bounds the per-pair cost, not the pair count, so a corpus 10x larger in both dimensions is roughly 100x slower (about 25 minutes). A bucket by first-token or by length band before scoring, or a `--limit`, would bound it.
+
+## Verified sound in pass 3
+- tree_moved logic itself (created_at + tolerance, excused index-dir bump, symlinks and dot-dirs skipped, depth cap 3): consistent with its documentation; `create-index` rerun after an in-place `set` refreshes the racily-clean entry once, then reports `written: false, reused: N`.
+- Filter parser (`--property` operators, empty operands, huge operands, dot paths, bad regex incl. nested quantifiers and huge repeats, `--sort`, `--glob`): ~45 hostile inputs, no panic except the argv-level C-3 for non-UTF-8.
+- Tokenizer/stemmer under all 15 supported languages with 1MB tokens, combining marks, ZWJ emoji, NUL, BOM, CJK, dotted/camel/snake runs: no panic, 0.2-0.4 s.
+- schema.rs: config-time regex compilation, enum/min/max validation, date maths (Hinnant civil_from_days) - no defects found by reading.
+- link_score.rs works on `chars`, no byte slicing; zero-length token sets are guarded; `links fix` on CJK/combining-mark/5000-char targets exits 0.
+
+## Still not reached
+Schema validation of real files against types (only config parsing was read; mdlint's schema.rs, which does the per-file validation, is another crate); the relocation planner's --apply path and ShortestPath rule tie-breaking; BM25 scoring numerics beyond the empty-corpus cases; stemmer correctness per language; Linux/Windows.
 
