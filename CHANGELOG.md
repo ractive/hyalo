@@ -23,6 +23,16 @@ and this project adheres to
   `usageUnknown` instead of failing the batch, and a note holding text the SDK
   reserves as an image reference is deferred during `prepare`.
 
+### Security
+
+- The jev tidy helper sent a note's frontmatter to TypeSafe. Since `read
+  --lines` became file-absolute (DEC-355), a whole-document selection passed
+  the raw frontmatter block as document text, so in 0.25.0 and 0.25.1 an
+  opted-in Jev run sent the property names and values of each selected whole
+  note along with its body, although `jev.md` promises body text only. Now
+  only the body is sent and frontmatter stays in the local manifest. A section
+  selection was never affected.
+
 ## [0.25.1] - 2026-11-01
 
 ### Changed

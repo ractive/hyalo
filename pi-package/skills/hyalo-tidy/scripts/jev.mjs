@@ -325,12 +325,12 @@ async function prepare(files, p, read) {
       const entry = object(found.results[0]);
       insist(entry.file === selected.file, "file resolution differs from selection");
       insist(typeof entry.size === "number" && entry.size <= LIMITS.input && (selected.section !== null || entry.size <= 18000), "document too large; select a relevant section");
-      const readArgs = selected.section === null ? ["--lines", "1:"] : ["--section", selected.section];
-      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
-      insist(evidence.file === selected.file, "file resolution differs from selection");
+      const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...selected.section === null ? [] : ["--section", selected.section]])).results);
+      const text = selected.section === null ? object((await read(["read", "--file", selected.file])).results) : evidence;
+      insist(evidence.file === selected.file && text.file === selected.file, "file resolution differs from selection");
       const current = object(evidence.frontmatter ?? {});
-      insist(typeof evidence.content === "string" && !evidence.content.includes("\x00"), "invalid evidence content");
-      const content = evidence.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
+      insist(typeof text.content === "string" && !text.content.includes("\x00"), "invalid evidence content");
+      const content = text.content, bytes = Buffer.byteLength(content), what = selected.section === null ? "document" : "section";
       const body = selected.section === null ? content : content.replace(/^#[^\n]*\n?/, "");
       insist(body.trim().length > 0, `${what} empty`);
       insist(bytes <= 18000, `${what} too large (${bytes} bytes > 18000)`);
