@@ -394,7 +394,9 @@ pub(crate) struct Cli {
     /// deadline. Source is capped at 64 KiB, serialized input at 64 MiB, and output at
     /// 10 MiB / 1,000,000 values. The parent terminates and reaps failed, timed-out or
     /// cancelled workers. Compilation failure precedes writes (exit 1); evaluation
-    /// failure retains committed effects in the error report (exit 2).
+    /// failure after a file was committed retains those effects in the error report
+    /// (exit 2). A result over the 10 MiB cap from a run that wrote nothing (read-only,
+    /// --dry-run, a no-op write) exits 1 and names --format json or a narrower filter.
     /// Linux limits worker address space to 512 MiB. macOS and Windows have no hard
     /// memory cap: intermediate allocations can still exhaust host memory before
     /// termination. Process isolation is not a universal OOM guarantee.
@@ -2276,8 +2278,9 @@ Repeatable (AND).\n\
             fragment matching an explicit HTML anchor in the target (<a id>/<a name>/<hN id>, \
             matched byte-for-byte) is not broken either. Missing targets never also count as \
             broken anchors. anchor_fixable/anchor_fixes reports unique numbered-heading proposals \
-            (counted apart from fixable, which stays the link bucket; the text Fixable line \
-            prints their sum and spells the split out as `(N links + M anchor repairs)`) \
+            (counted apart from fixable, which stays the link bucket: a script that wants the count \
+            --apply would write must add fixable + anchor_fixable; the text Fixable line prints that \
+            sum and spells the split out as `(N links + M anchor repairs)`) \
             with source line, old/new fragment and heading; new_fragment is the heading TEXT for \
             a wikilink and the GFM slug for a markdown link, matching what --apply writes. \
             Plain --apply writes eligible numbered-heading repairs alongside file-target fixes. \

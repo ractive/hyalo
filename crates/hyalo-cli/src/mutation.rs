@@ -221,6 +221,22 @@ impl Commands {
         }
     }
 
+    /// Commands whose answer is only meaningful against the loaded `[schema]`
+    /// (iter-320): `types list`/`types show` describe it and `new` scaffolds
+    /// from it. Under an unusable config or schema they used to answer from the
+    /// empty fallback ("type not found", an empty list); like a gate, they
+    /// refuse instead.
+    pub(crate) fn reads_schema(&self) -> bool {
+        match self {
+            Self::New { .. } => true,
+            Self::Types { action } => matches!(
+                action,
+                None | Some(TypesAction::List | TypesAction::Show { .. })
+            ),
+            _ => false,
+        }
+    }
+
     /// The vault-relative files this invocation explicitly named, if any.
     ///
     /// UX-7 (iter-265, DEC-280): the stale-index policy is "refresh what you

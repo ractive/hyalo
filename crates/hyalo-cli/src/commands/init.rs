@@ -704,8 +704,10 @@ fn initialize_observed(
                 .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
             let skill_bytes = parameterize_template(SKILL_CONTENT, &dir_value);
             let skill_same = already_installed(&skill_path, skill_bytes.as_bytes());
-            publish_installation(root, &skill_path, skill_bytes.as_bytes())
-                .with_context(|| format!("failed to write {}", skill_path.display()))?;
+            if !skill_same {
+                publish_installation(root, &skill_path, skill_bytes.as_bytes())
+                    .with_context(|| format!("failed to write {}", skill_path.display()))?;
+            }
             if skill_same {
                 report.push("unchanged", ".claude/skills/hyalo/SKILL.md");
             } else if skill_existed {
@@ -729,8 +731,10 @@ fn initialize_observed(
             })?;
             let tidy_bytes = parameterize_template(TIDY_SKILL_CONTENT, &dir_value);
             let tidy_same = already_installed(&tidy_skill_path, tidy_bytes.as_bytes());
-            publish_installation(root, &tidy_skill_path, tidy_bytes.as_bytes())
-                .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+            if !tidy_same {
+                publish_installation(root, &tidy_skill_path, tidy_bytes.as_bytes())
+                    .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+            }
             if tidy_same {
                 report.push("unchanged", ".claude/skills/hyalo-tidy/SKILL.md");
             } else if tidy_skill_existed {
@@ -749,8 +753,10 @@ fn initialize_observed(
                 .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
             let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
             let rules_same = already_installed(&rules_path, rule_content.as_bytes());
-            publish_installation(root, &rules_path, rule_content.as_bytes())
-                .with_context(|| format!("failed to write {}", rules_path.display()))?;
+            if !rules_same {
+                publish_installation(root, &rules_path, rule_content.as_bytes())
+                    .with_context(|| format!("failed to write {}", rules_path.display()))?;
+            }
             if rules_same {
                 report.push("unchanged", ".claude/rules/knowledgebase.md");
             } else if rules_existed {
@@ -832,10 +838,12 @@ fn initialize_observed(
                         format!("failed to create directory {}", parent.display())
                     })?;
                     let same = already_installed(&profile_skill_path, skill_body.as_bytes());
-                    publish_installation(root, &profile_skill_path, skill_body.as_bytes())
-                        .with_context(|| {
-                            format!("failed to write {}", profile_skill_path.display())
-                        })?;
+                    if !same {
+                        publish_installation(root, &profile_skill_path, skill_body.as_bytes())
+                            .with_context(|| {
+                                format!("failed to write {}", profile_skill_path.display())
+                            })?;
+                    }
                     let verb = if same {
                         "unchanged"
                     } else if existed {

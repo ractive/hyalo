@@ -265,9 +265,13 @@ impl OutputPipeline<'_> {
         &self,
         report: ExecutionReport,
     ) -> std::result::Result<RenderedReport, Box<crate::output::UserDiagnostic>> {
-        // A run that already wrote keeps the post-write failure contract
-        // (exit 2, effects retained); only a read-only run exits 1 (iter-320).
-        let no_effects = report.effects.is_none();
+        // A run that already committed a file keeps the post-write failure
+        // contract (exit 2, effects retained); a run that wrote nothing
+        // (read-only, `--dry-run`, a no-op write) exits 1 (DEC-378).
+        let no_effects = report
+            .effects
+            .as_ref()
+            .is_none_or(|effects| effects.committed_paths().is_empty());
         let mut rendered = RenderedReport {
             stdout: Vec::new(),
             stderr: Vec::new(),

@@ -1329,17 +1329,21 @@ fn run_inner() -> Result<(), AppError> {
     // reject_write_with_unloadable_schema`). So `schema_invalid` only joins
     // the refusal when the command is a gate, never merely because it writes.
     let gate_diagnostic = config.malformed.as_deref().or_else(|| {
-        cli.command
-            .gates()
+        (cli.command.gates() || cli.command.reads_schema())
             .then_some(config.schema_invalid.as_deref())
             .flatten()
     });
     let previews_write = config.malformed.is_some() && cli.command.previews_write();
     if let Some(diagnostic) = gate_diagnostic
-        && (cli.command.writes() || cli.command.gates() || previews_write)
+        && (cli.command.writes()
+            || cli.command.gates()
+            || previews_write
+            || cli.command.reads_schema())
     {
         let kind = if cli.command.writes() || previews_write {
             "a mutating command"
+        } else if cli.command.reads_schema() && !cli.command.gates() {
+            "a command that reads the schema"
         } else {
             "a command whose exit code is a gate"
         };

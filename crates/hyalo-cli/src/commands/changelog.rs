@@ -521,8 +521,17 @@ fn release_footer_links(unreleased_def: &str, version: &str) -> Option<(String, 
     if head != "HEAD" || prev.is_empty() {
         return None;
     }
+    // The previous ref must be a tag shaped `<prefix><X.Y.Z>`: a branch
+    // (`main`), a SHA (`abc123def`) or an already-advanced `v1.1.0...HEAD`
+    // would otherwise invent a tag or a range from a name to itself.
     let prefix_len = prev.len() - prev.trim_start_matches(|c: char| !c.is_ascii_digit()).len();
+    if !is_semver(&prev[prefix_len..]) {
+        return None;
+    }
     let tag = format!("{}{version}", &prev[..prefix_len]);
+    if tag == prev {
+        return None;
+    }
     Some((
         format!("[Unreleased]: {base}/compare/{tag}...HEAD"),
         format!("[{version}]: {base}/compare/{prev}...{tag}"),

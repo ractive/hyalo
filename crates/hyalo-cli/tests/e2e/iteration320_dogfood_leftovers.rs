@@ -172,16 +172,23 @@ fn read_frontmatter_on_a_note_without_frontmatter_warns() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn types_show_and_list_name_an_unusable_schema() {
-    let tmp = TempDir::new().unwrap();
-    std::fs::write(tmp.path().join(".hyalo.toml"), "[schema.bogus]\nx = 1\n").unwrap();
-    write_md(tmp.path(), "a.md", "x\n");
-    for args in [&["types", "show", "note"][..], &["types", "list"][..]] {
-        let out = run(tmp.path(), args);
-        assert_eq!(out.status.code(), Some(1), "{args:?}");
-        let err = stderr(&out);
-        assert!(err.contains("[schema] in .hyalo.toml is unusable"), "{err}");
-        assert!(!err.contains("not found"), "{err}");
+fn types_and_new_refuse_an_unusable_schema_or_config() {
+    for config in ["[schema.bogus]\nx = 1\n", "[schema\nbroken = \n"] {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".hyalo.toml"), config).unwrap();
+        write_md(tmp.path(), "a.md", "x\n");
+        for args in [
+            &["types", "show", "note"][..],
+            &["types", "list"][..],
+            &["new", "--type", "note", "--file", "n.md"][..],
+        ] {
+            let out = run(tmp.path(), args);
+            assert_eq!(out.status.code(), Some(1), "{config:?} {args:?}");
+            let err = stderr(&out);
+            assert!(err.contains("unusable"), "{config:?} {args:?}: {err}");
+            assert!(!err.contains("not found"), "{config:?} {args:?}: {err}");
+        }
+        assert!(!tmp.path().join("n.md").exists());
     }
 }
 
@@ -202,7 +209,22 @@ fn init_rerun_reports_unchanged_and_warns_about_a_hand_edited_block() {
     let first = init(&tmp);
     assert!(first.status.success(), "{}", stderr(&first));
 
+    // An `unchanged` file must really be left alone: backdate one and check
+    // the re-run does not rewrite it.
+    let skill = tmp.path().join(".claude/skills/hyalo/SKILL.md");
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&skill)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
     let again = init(&tmp);
+    assert_eq!(
+        std::fs::metadata(&skill).unwrap().modified().unwrap(),
+        old,
+        "an unchanged file was rewritten"
+    );
     let text = stdout(&again);
     for path in [
         ".claude/skills/hyalo/SKILL.md",
@@ -398,4 +420,85 @@ fn lint_rules_show_schema_is_not_autofixable() {
     let v = json(&out);
     assert_eq!(v["results"]["autofixable"], false, "{v}");
     assert_eq!(v["results"]["configurable"], false, "{v}");
+}
+
+#[test]
+fn mv_does_not_recompose_frontmatter_or_self_links() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "notes/Cafe\u{301}.md",
+        "---\ntitle: c\n---\nself [[Caf\u{e9}]]\n",
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\nrelated: \"[[Caf\u{e9}]]\"\n---\nx\n",
+    );
+    std::fs::create_dir(tmp.path().join("other")).unwrap();
+    let out = run(
+        tmp.path(),
+        &["mv", "notes/Cafe\u{301}.md", "--to", "other/", "--dry-run"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["results"]["total_links_updated"], 0, "{v}");
+}
+
+// ---------------------------------------------------------------------------
+// DEC-378: the jq cap exits 1 unless a file was committed
+// ---------------------------------------------------------------------------
+
+const OVER_CAP: &str = r#".results | .. | range(0;300000) | "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx""#;
+
+#[test]
+fn jq_cap_exit_follows_what_was_committed() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\nstatus: x\n---\n[[Target Note]]\n");
+    write_md(tmp.path(), "target-note.md", "# t\n");
+
+    // Nothing written: a dry run and a same-value (no-op) write exit 1.
+    for args in [
+        &[
+            "set",
+            "a.md",
+            "--property",
+            "status=y",
+            "--dry-run",
+            "--jq",
+            OVER_CAP,
+        ][..],
+        &["set", "a.md", "--property", "status=x", "--jq", OVER_CAP][..],
+    ] {
+        let out = run(tmp.path(), args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        assert!(stderr(&out).contains("--format json"), "{}", stderr(&out));
+    }
+
+    // A real write that then fails to render keeps exit 2.
+    let out = run(
+        tmp.path(),
+        &["set", "a.md", "--property", "status=z", "--jq", OVER_CAP],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        std::fs::read_to_string(tmp.path().join("a.md"))
+            .unwrap()
+            .contains("status: z")
+    );
+}
+
+#[test]
+fn jq_cap_after_links_fix_apply_exits_two() {
+    let tmp = TempDir::new().unwrap();
+    // A relocated note: the bare path is a certain, plain-`--apply` fix.
+    write_md(tmp.path(), "src.md", "[x](target-note.md)\n");
+    write_md(tmp.path(), "new/target-note.md", "# t\n");
+    let out = run(tmp.path(), &["links", "fix", "--apply", "--jq", OVER_CAP]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_ne!(
+        std::fs::read_to_string(tmp.path().join("src.md")).unwrap(),
+        "[x](target-note.md)\n",
+        "the fix was written before the render failed"
+    );
 }

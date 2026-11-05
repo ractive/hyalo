@@ -1209,7 +1209,15 @@ fn plan_inbound_rewrites(
         }
     }
 
+    drop_recompositions(&mut replacements);
     (replacements, skipped_ambiguous)
+}
+
+/// Drop replacements that only recompose the text they replace (DEC-354):
+/// every planner (inbound, outbound, self-links, frontmatter, batch) ends here,
+/// so no rewrite path can turn a precomposed `[[Café]]` into decomposed bytes.
+fn drop_recompositions(replacements: &mut Vec<Replacement>) {
+    replacements.retain(|r| !same_up_to_unicode_composition(&r.old_text, &r.new_text));
 }
 
 /// Whether two link texts differ only in Unicode composition (NFC vs NFD).
@@ -1457,6 +1465,7 @@ fn plan_outbound_rewrites(
         }
     }
 
+    drop_recompositions(&mut replacements);
     (replacements, skipped_ambiguous)
 }
 
@@ -2231,6 +2240,7 @@ fn plan_frontmatter_wikilink_rewrites(
         }
     }
 
+    drop_recompositions(&mut replacements);
     replacements
 }
 
@@ -2372,6 +2382,7 @@ fn plan_outbound_rewrites_batch(
         }
     }
 
+    drop_recompositions(&mut replacements);
     replacements
 }
 

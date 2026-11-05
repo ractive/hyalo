@@ -36,8 +36,11 @@ xtask gates in CI fail until these all carry the Cargo workspace version
 manifests *and* the lockfile lines above in one go. It drops the `integrity`
 of a platform entry whose version moves, because that hash names the previous
 tarball; npm records the new one once the version is published, so after the
-npm job succeeds run `npm install --package-lock-only` in `npm/hyalo` and
-commit the lockfile.
+npm job succeeds, delete the seven `node_modules/@ractive-ch/hyalo-*` entries
+from `npm/hyalo/package-lock.json` and run `npm install --package-lock-only` in
+`npm/hyalo`, then commit the lockfile. (Running the install without deleting the
+entries first keeps them hash-less: npm does not refetch an entry it already
+has. Checked on npm 11.17: 147 hashes before, 154 after the delete-then-install.)
 
 A full version bump therefore touches 16 files: `Cargo.toml`, `Cargo.lock`,
 `package.json`, `pi-package/package.json`,

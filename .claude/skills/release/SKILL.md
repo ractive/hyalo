@@ -80,8 +80,10 @@ fail otherwise. The full set is **16 files**: `Cargo.toml`, `Cargo.lock`, root
 `./target/debug/xtask generate-npm-packages --generate` (build xtask first) to
 rewrite the npm manifests and the lockfile lines; it drops the lockfile
 `integrity` of the platform entries it moves, so after the npm job publishes,
-run `npm install --package-lock-only` in `npm/hyalo` and commit the lockfile
-with the hashes. `docs/releasing.md` has the table.
+delete the seven `node_modules/@ractive-ch/hyalo-*` entries from
+`npm/hyalo/package-lock.json`, run `npm install --package-lock-only` in
+`npm/hyalo` (without the delete, npm keeps the hash-less entries) and commit
+the lockfile with the hashes. `docs/releasing.md` has the table.
 
 Often the bump already happened during the dev cycle (e.g. 0.18.0 was bumped
 in the changelog-conversion PR long before release day) — then just verify.

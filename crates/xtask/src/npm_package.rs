@@ -499,9 +499,10 @@ fn expected_metadata(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>
 /// `version` (twice), the seven `optionalDependencies` pins, and each platform
 /// entry's `version` and `resolved` URL. A platform entry whose version moves
 /// also loses its `integrity`, because that hash names the previous tarball and
-/// would fail `npm ci` for the new one. npm records the new hash on the first
-/// install after the version is published (`npm install --package-lock-only`
-/// in `npm/hyalo`); nothing here can know it earlier.
+/// would fail `npm ci` for the new one. npm only records the new hash for an
+/// entry it has to resolve, so after publication delete the seven platform
+/// entries and run `npm install --package-lock-only` in `npm/hyalo`; nothing
+/// here can know the hash earlier.
 fn rewrite_lockfile(text: &str, version: &str) -> String {
     /// `"key": "value"<rest>` with `value` replaced, or `None` when `body` is not
     /// a string-valued property line.
@@ -572,6 +573,43 @@ fn rewrite_lockfile(text: &str, version: &str) -> String {
     out
 }
 
+/// Semantic problems of a lockfile against `version`, independent of how its
+/// lines are laid out: every platform pin and entry must exist at `version`
+/// (`npm ci` fails with EUSAGE on a missing pin), and the root must carry it.
+fn lockfile_problems(text: &str, version: &str) -> Vec<String> {
+    let Ok(lock) = serde_json::from_str::<Value>(text) else {
+        return vec!["not valid JSON".to_owned()];
+    };
+    let mut problems = Vec::new();
+    if lock["version"] != version {
+        problems.push(format!("root version is not {version}"));
+    }
+    let packages = &lock["packages"];
+    if packages[""]["version"] != version {
+        problems.push(format!("root package version is not {version}"));
+    }
+    for platform in PLATFORMS {
+        let name = package_name(platform);
+        if packages[""]["optionalDependencies"][&name] != version {
+            problems.push(format!(
+                "optional dependency pin {name} is missing or not {version}"
+            ));
+        }
+        let entry = &packages[format!("node_modules/{name}")];
+        if entry["version"] != version {
+            problems.push(format!("entry for {name} is missing or not {version}"));
+        }
+        let suffix = format!("-{version}.tgz");
+        if !entry["resolved"]
+            .as_str()
+            .is_some_and(|url| url.ends_with(&suffix))
+        {
+            problems.push(format!("resolved URL of {name} does not end in {suffix}"));
+        }
+    }
+    problems
+}
+
 fn generate_metadata(root: &Path, version: &str) -> Result<()> {
     for (path, contents) in expected_metadata(root, version)? {
         if let Some(parent) = path.parent() {
@@ -634,17 +672,35 @@ fn check_metadata_with_version(root: &Path, version: &str) -> Result<bool> {
         }
     }
     let lock = root.join("npm/hyalo/package-lock.json");
-    if let Ok(actual) = fs::read_to_string(&lock)
-        && !generated_text_matches(
-            actual.as_bytes(),
-            rewrite_lockfile(&actual, version).as_bytes(),
-        )
-    {
-        eprintln!(
-            "npm metadata mismatch: {} (run generate-npm-packages --generate)",
-            display_path(root, &lock)
-        );
-        ok = false;
+    match fs::read_to_string(&lock) {
+        Ok(actual) => {
+            let mut problems = lockfile_problems(&actual, version);
+            if problems.is_empty()
+                && !generated_text_matches(
+                    actual.as_bytes(),
+                    rewrite_lockfile(&actual, version).as_bytes(),
+                )
+            {
+                problems.push("a version-bearing line is stale".to_owned());
+            }
+            for problem in problems {
+                eprintln!(
+                    "npm metadata mismatch: {}: {problem} (run generate-npm-packages --generate)",
+                    display_path(root, &lock)
+                );
+                ok = false;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "npm metadata missing: {} (run generate-npm-packages --generate after restoring it with `npm install --package-lock-only`)",
+                display_path(root, &lock)
+            );
+            ok = false;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", lock.display()));
+        }
     }
     for path in [
         root.join("npm/hyalo/README.md"),
@@ -1045,7 +1101,10 @@ mod tests {
         fs::write(root.join("npm/hyalo/src/index.ts"), b"source\n")?;
         fs::write(root.join("npm/hyalo/tsconfig.json"), b"{}\n")?;
         fs::write(root.join("npm/hyalo/tsconfig.test.json"), b"{}\n")?;
-        fs::write(root.join("npm/hyalo/package-lock.json"), b"{}\n")?;
+        fs::write(
+            root.join("npm/hyalo/package-lock.json"),
+            lockfile_fixture(VERSION),
+        )?;
         set_executable(&root.join("npm/hyalo/bin/hyalo.js"))?;
         generate_metadata(root, VERSION)?;
         Ok(temp)
@@ -1126,9 +1185,28 @@ mod tests {
         Ok(())
     }
 
-    /// A lockfile shaped like npm's, two platforms only, at `version`.
+    /// A lockfile shaped like npm's, with every platform, at `version`.
     fn lockfile_fixture(version: &str) -> String {
-        let name = "darwin-arm64";
+        let pins = PLATFORMS
+            .iter()
+            .map(|p| format!("        \"@ractive-ch/hyalo-{}\": \"{version}\"", p.name))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let entries = PLATFORMS
+            .iter()
+            .map(|p| {
+                let name = p.name;
+                format!(
+                    r#"    "node_modules/@ractive-ch/hyalo-{name}": {{
+      "version": "{version}",
+      "resolved": "https://registry.npmjs.org/@ractive-ch/hyalo-{name}/-/hyalo-{name}-{version}.tgz",
+      "integrity": "sha512-abc",
+      "optional": true
+    }},"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
             r#"{{
   "name": "@ractive-ch/hyalo",
@@ -1139,15 +1217,10 @@ mod tests {
       "name": "@ractive-ch/hyalo",
       "version": "{version}",
       "optionalDependencies": {{
-        "@ractive-ch/hyalo-{name}": "{version}"
+{pins}
       }}
     }},
-    "node_modules/@ractive-ch/hyalo-{name}": {{
-      "version": "{version}",
-      "resolved": "https://registry.npmjs.org/@ractive-ch/hyalo-{name}/-/hyalo-{name}-{version}.tgz",
-      "integrity": "sha512-abc",
-      "optional": true
-    }},
+{entries}
     "node_modules/other": {{
       "version": "4.0.0",
       "resolved": "https://registry.npmjs.org/other/-/other-4.0.0.tgz",
@@ -1183,8 +1256,33 @@ mod tests {
         assert!(!fixed.contains("1.2.2"), "{fixed}");
         assert!(!fixed.contains("sha512-abc"), "stale integrity survived");
         assert!(fixed.contains("sha512-keep"), "unrelated integrity lost");
-        assert_eq!(fixed.matches(VERSION).count(), 5, "{fixed}");
+        assert_eq!(fixed.matches("sha512-abc").count(), 0, "{fixed}");
+        assert_eq!(fixed.matches("sha512-keep").count(), 1, "{fixed}");
         let _: Value = serde_json::from_str(&fixed)?;
+
+        // A missing lockfile, a removed pin and a removed entry all fail.
+        fs::remove_file(&lock)?;
+        assert!(!check_metadata(root)?, "missing lockfile was accepted");
+        let no_pin = current.replace("        \"@ractive-ch/hyalo-linux-x64\": \"1.2.3\",\n", "");
+        assert_ne!(no_pin, current);
+        fs::write(&lock, no_pin)?;
+        assert!(!check_metadata(root)?, "removed pin was accepted");
+        let no_entry = current.replace(
+            "node_modules/@ractive-ch/hyalo-linux-x64\"",
+            "node_modules/gone\"",
+        );
+        fs::write(&lock, no_entry)?;
+        assert!(!check_metadata(root)?, "removed entry was accepted");
+        // A stale version on a line the rewriter cannot parse is still caught.
+        fs::write(
+            &lock,
+            current.replacen("\"version\": \"1.2.3\"", "\"version\":\"1.2.2\"", 2),
+        )?;
+        assert!(
+            !check_metadata(root)?,
+            "unparsed stale version was accepted"
+        );
+        fs::write(&lock, &current)?;
 
         // CRLF lockfile content is judged by its content, not its newlines.
         fs::write(&lock, with_crlf(current.as_bytes()))?;

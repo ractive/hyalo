@@ -59,6 +59,10 @@ Found while cutting 0.25.0 and 0.25.1:
 - [x] `generate-npm-packages --generate` rewrites `npm/hyalo/package-lock.json` (root version, pins, platform `version`/`resolved`) and `--check` fails on a stale one; a moved platform entry loses its stale `integrity`; the seven 0.25.1 entries got their registry `integrity` (DEC-379)
 - [x] The release skill and `docs/releasing.md` list all 16 files a version bump touches (DEC-379)
 
+Review round (PR #401):
+
+- [x] Review findings fixed: lockfile integrity step verified on real npm (delete the entries, then install); `--jq` cap decided by committed paths, `links fix`/`links auto` report their effects; changelog footer needs a `<prefix>X.Y.Z` previous tag that differs from the new one; `mv` drops recompositions for frontmatter and self-links; `--check` fails closed (missing lockfile, pins, entries, unparsed stale lines); `types list/show` and `new` refuse under an unusable schema or config; `init` no longer rewrites `unchanged` files; DEC-376/377/378/379/380 corrected
+
 Housekeeping:
 
 - [x] CHANGELOG, DEC-376 to DEC-380, help text and skill text in the same PR
