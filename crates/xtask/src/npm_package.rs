@@ -392,13 +392,13 @@ fn main_manifest(version: &str) -> Value {
         "engines": {"node": ">=22.14.0", "npm": ">=11.5.1"},
         "dependencies": {"detect-libc": "2.1.2"},
         "devDependencies": {
-            "@types/node": "26.6.4",
+            "@types/node": "26.6.6",
             "@typescript/typescript6": "6.0.2",
             "esbuild": "0.28.2",
-            "rollup": "4.64.0",
+            "rollup": "4.67.5",
             "rollup-plugin-dts": "6.5.1",
             "typescript": "7.0.2",
-            "vitest": "5.0.3"
+            "vitest": "5.1.0"
         },
         "optionalDependencies": optional,
         "main": "./dist/index.cjs",
