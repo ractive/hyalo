@@ -435,6 +435,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directive warns (`-q`-proof) instead of suppressing nothing. `--max-per-rule 0` means
   unlimited. MD010's `code_blocks` option is deliberately not exposed (DEC-316) — silence a
   tab-laden page with `<!-- markdownlint-disable no-hard-tabs -->`.
+- **Autofix and `links auto` leave content alone** (iter-321): prose rules, `lint --fix` and
+  `links auto` share one model of what is not prose — raw HTML blocks, HTML tags and attribute
+  values, the text of `<a>`/`<code>`/`<pre>`, `$$`/`$` math, `{{ }}`/`{% %}` macro calls,
+  `^block-id`s, code spans (which never cross a list item). MD034 flags prose URLs only, MD010
+  reports a tab in code but never rewrites it, MD022/MD031 do not fix inside a block quote, two
+  fixes meeting at one offset are a reported conflict, `--fix-rule` rejects an unknown id, and
+  `links auto`/`links fix` write `[[x\|alias]]` inside a table row.
 - **A schema typo is a config error** (iter-276): an unknown key under `[schema]`,
   `[schema.types.<t>]`, or the wrong nesting `[schema.<t>]`, is refused with the same
   "unknown field `x`, expected one of …" diagnostic `[scan]` gives. `hyalo config` reports

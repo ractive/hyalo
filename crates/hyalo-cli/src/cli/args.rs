@@ -2491,11 +2491,16 @@ Repeatable (AND).\n\
             questions.\n\n\
             CODE BLOCKS AND SUPPRESSION: a rule that lints prose does not fire on a line inside a\n\
             fenced (``` or ~~~) or indented code block, or inside an HTML comment — the sample is\n\
-            the content, not a defect. The exceptions are the rules whose subject IS the block:\n\
-            MD031/MD040/MD046/MD048 (the fence itself), MD047 (the file's final newline), and\n\
-            MD010 (a hard tab in a sample is a real portability problem — markdownlint checks\n\
-            code blocks for it too). MD031 also stays quiet at the opener of a fence that never\n\
-            closes, where a \"blank line after\" would land inside the sample.\n\
+            the content, not a defect. The same holds for every other region that is not prose:\n\
+            raw HTML blocks (<pre>, <div> …), HTML tags and their attribute values, the content of\n\
+            <a>/<code>/<pre>, $$ and $ math, {{ }} / {% %} macro calls and ^block-ids. Only MD033\n\
+            (inline HTML) still looks there. The exceptions are the rules whose subject IS the\n\
+            block: MD031/MD040/MD046/MD048 (the fence itself), MD047 (the file's final newline),\n\
+            and MD010 (a hard tab in a sample is a real portability problem — markdownlint checks\n\
+            code blocks for it too — but --fix never rewrites a tab inside code or raw HTML).\n\
+            MD031 also stays quiet at the opener of a fence that never closes, where a \"blank line\n\
+            after\" would land inside the sample. Inside a block quote MD022/MD031 report but do not\n\
+            fix (a blank line would need the `> ` prefix). An unknown --fix-rule id exits 1.\n\
             markdownlint's own suppression comments are honoured, with rule ids or aliases and\n\
             case-insensitively: `<!-- markdownlint-disable no-hard-tabs -->` … \n\
             `<!-- markdownlint-enable no-hard-tabs -->`, plus `-disable-line`,\n\
@@ -3487,12 +3492,15 @@ pub(crate) enum LinksAction {
             2. Frontmatter `title` property\n\
             3. Frontmatter `aliases` property (list of alternate names)\n\n\
             Exclusion zones: frontmatter, fenced code blocks, inline code (CommonMark rules —\n\
-            an unmatched backtick is literal text and a span never crosses a blank line),\n\
+            an unmatched backtick is literal text and a span never crosses a blank line or a\n\
+            list item),\n\
             existing [[wikilinks]] and [markdown](links) — label AND destination, whether the\n\
             destination is internal or external — bare URLs and <autolinks> in prose, headings,\n\
             comment fences (%%), Liquid/Jinja expressions ({% ... %} and {{ ... }}),\n\
             raw HTML tags including attribute values (<img src=\"...\">, <a name=\"...\">, HTML\n\
-            comments) — text BETWEEN tags stays linkable — and ANY well-formed `[...]` bracket\n\
+            comments), raw HTML blocks (<div> … up to the blank line, <pre>), the text of <a>,\n\
+            <code>, <pre>, <kbd>, <script> and <style> elements, $$ / $ math and ^block-ids —\n\
+            text between inline tags in a paragraph stays linkable — and ANY well-formed `[...]` bracket\n\
             span, not only real links. This covers CommonMark reference links (`[label][ref]`,\n\
             collapsed `[ref][]`, shortcut `[ref]`, `![ref][ref]` images, and the `[ref]: url\n\
             \"title\"` definition line itself) but goes wider: an undefined bracketed mention —\n\
@@ -3511,7 +3519,8 @@ pub(crate) enum LinksAction {
             ALIAS EMISSION: when the matched surface text differs from the emitted target —\n\
             including by case alone (`Pulls` vs `pulls`) — the replacement is\n\
             `[[target|matched_text]]`, preserving what the page renders. A plain `[[target]]`\n\
-            is only written when the matched text is byte-identical to the target.\n\n\
+            is only written when the matched text is byte-identical to the target. In a table\n\
+            row the alias separator is written `\\|`, so the cell does not split.\n\n\
             Filtering options:\n\
             --first-only          Only emit the first mention of each target per source file. An\n\
                                    existing [[wikilink]] (or aliased [[target|label]]) to a target\n\

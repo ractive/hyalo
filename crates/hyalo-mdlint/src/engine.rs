@@ -803,7 +803,14 @@ impl HyaloLintEngine {
                     // parenthesized "text" part contains characters that a
                     // reversed *link* text essentially never carries but a
                     // regex alternation/character class always does.
-                    if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
+                    if *rule_id == "MD011"
+                        && (is_regex_false_positive(&v.message)
+                            || is_call_or_index_false_positive(
+                                &v.message,
+                                v.line.checked_sub(1).and_then(|i| doc.lines.get(i)),
+                                v.column,
+                            ))
+                    {
                         continue;
                     }
                     // Iteration 269, Part C: a frontmatter-only file (`---\n…\n---\n`)
@@ -848,19 +855,7 @@ impl HyaloLintEngine {
                     {
                         continue;
                     }
-                    let mut fix = convert_fix(&v, body_content);
-                    if !CODE_BLOCK_AWARE_RULE_IDS.contains(rule_id)
-                        && fix
-                            .as_ref()
-                            .is_some_and(|fix| spans.fix_intersects_protected(fix.start, fix.end))
-                    {
-                        // Some upstream fixes span several physical lines.
-                        // The diagnostic may begin in ordinary prose while
-                        // the replacement would delete bytes inside a code or
-                        // HTML-comment block; retain the finding but suppress
-                        // that unsafe edit.
-                        fix = None;
-                    }
+                    let protected_aware = !CODE_BLOCK_AWARE_RULE_IDS.contains(rule_id);
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
                     // `BYTE_COLUMN_RULE_IDS` (DEC-073, iter-218 NEW-11).
@@ -888,6 +883,95 @@ impl HyaloLintEngine {
                     // `[![](img)](url)`), and MD042 calls a link whose text
                     // is an image "empty".
                     let line_text = v.line.checked_sub(1).and_then(|i| doc.lines.get(i));
+                    // DEC-381: a rule that lints prose does not fire where
+                    // the text is not prose. `HTML_AWARE_RULE_IDS` are the
+                    // rules whose subject is the markup itself.
+                    let diag_byte = line_text.map(|line| {
+                        line.char_indices()
+                            .nth(column.saturating_sub(1))
+                            .map_or(line.len(), |(b, _)| b)
+                    });
+                    if protected_aware
+                        && !HTML_AWARE_RULE_IDS.contains(rule_id)
+                        && diag_byte.is_some_and(|byte| spans.position_is_protected(v.line, byte))
+                    {
+                        continue;
+                    }
+                    if *rule_id == "MD034"
+                        && diag_byte
+                            .is_some_and(|byte| spans.position_is_in_link_destination(v.line, byte))
+                    {
+                        continue;
+                    }
+                    // MD023 cannot judge indentation inside a container: the
+                    // upstream rule counts the container's own prefix, so a
+                    // heading flush with its list item's content looks
+                    // "indented by 3" and is not.
+                    if *rule_id == "MD023" && spans.line_in_container(v.line) {
+                        continue;
+                    }
+                    let mut fix = convert_fix(&v, body_content);
+                    // Narrow first: the protected-region check below judges
+                    // the bytes the edit really changes.
+                    if *rule_id == "MD034"
+                        && let Some(f) = fix.as_mut()
+                    {
+                        narrow_md034_autolink_fix(f);
+                    }
+                    if protected_aware
+                        && fix.as_ref().is_some_and(|fix| {
+                            spans.edit_touches_protected(
+                                body_content,
+                                fix.start,
+                                fix.end,
+                                &fix.replacement,
+                            )
+                        })
+                    {
+                        // Some upstream fixes span several physical lines, or
+                        // change bytes the diagnostic's own position does not
+                        // show. The finding stays; an edit that would rewrite
+                        // a code line, a comment, raw HTML, a tag, math, a
+                        // macro call or a block id does not (DEC-381).
+                        fix = None;
+                    }
+                    // L-4 (iteration 321, DEC-382): MD010 keeps *reporting* a
+                    // tab inside a code block (DEC-294), but its fixer never
+                    // rewrites code: a Makefile recipe or a Go sample is
+                    // tab-significant, and the author decides.
+                    if *rule_id == "MD010"
+                        && (spans.line_is_fence_delimiter(v.line)
+                            || fix.as_ref().is_some_and(|fix| {
+                                spans.edit_touches_protected(
+                                    body_content,
+                                    fix.start,
+                                    fix.end,
+                                    &fix.replacement,
+                                )
+                            }))
+                    {
+                        fix = None;
+                    }
+                    // L-2 (iteration 321): the heading and fence rules
+                    // insert or re-indent whole lines without the block-quote
+                    // or list-item prefix, splitting the container. Keep the
+                    // finding, drop the edit.
+                    if BLOCK_QUOTE_BLIND_FIX_RULE_IDS.contains(rule_id)
+                        && spans.line_in_block_quote(v.line)
+                    {
+                        fix = None;
+                    }
+                    // A scheme with nothing after it (`"mailto:"`,
+                    // `https://` as a word) is not a URL to wrap.
+                    if *rule_id == "MD034"
+                        && fix.as_ref().is_some_and(|fix| {
+                            body_content
+                                .get(fix.start..fix.end)
+                                .is_some_and(scheme_without_address)
+                        })
+                    {
+                        continue;
+                    }
                     if *rule_id == "MD034"
                         && line_text.is_some_and(|line| {
                             crate::rules::obsidian::url_is_inside_link_markup(line, column)
@@ -908,11 +992,6 @@ impl HyaloLintEngine {
                     // autolink. Narrow the fix's span rather than dropping the
                     // diagnostic — the URL really is bare and really should be
                     // wrapped, just not that far.
-                    if *rule_id == "MD034"
-                        && let Some(f) = fix.as_mut()
-                    {
-                        narrow_md034_autolink_fix(f);
-                    }
                     // UX-10 (dogfood v0.22.0) / DEC-272: MD001 keeps
                     // *reporting* a skipped heading level but is no longer
                     // autofixable — rewriting a deliberate `######` caption
@@ -1045,6 +1124,55 @@ impl HyaloLintEngine {
 ///   it with `<!-- markdownlint-disable no-hard-tabs -->` (Part E), which is
 ///   the escape hatch markdownlint itself offers.
 const CODE_BLOCK_AWARE_RULE_IDS: &[&str] = &["MD010", "MD031", "MD040", "MD046", "MD047", "MD048"];
+
+/// Rules whose subject is inline HTML itself. They keep reporting inside the
+/// protected regions of [`hyalo_core::protected`] — silencing `MD033`
+/// (no-inline-html) in an HTML block would switch it off entirely.
+const HTML_AWARE_RULE_IDS: &[&str] = &["MD033"];
+
+/// Rules whose fix inserts whole lines with no knowledge of the enclosing
+/// block quote (L-2, iteration 321). Inside a quote their findings stand and
+/// their edits are withheld: a blank line without the `> ` prefix splits one
+/// quote into three. A list item needs no prefix on a blank line, so those
+/// fixes stay; MD023 is dropped in any container, see its branch below.
+const BLOCK_QUOTE_BLIND_FIX_RULE_IDS: &[&str] = &["MD022", "MD031"];
+
+/// Whether an MD034 span is not a URL to wrap: a bare scheme with no address
+/// after it (`mailto:`, `https://`), or a word the rule measured without any
+/// `:` at all.
+fn scheme_without_address(flagged: &str) -> bool {
+    flagged
+        .split_once(':')
+        .is_none_or(|(_, rest)| rest.trim_start_matches('/').is_empty())
+}
+
+/// MD011 reads `getGamepads()[0]` as the reversed link `(…)[…]` with empty
+/// text — and its "fix" `getGamepads[](0)` creates an MD042 (B-2, iteration
+/// 321). A reversed link has link text, is not glued to the identifier or
+/// bracket before its `(`, and its bracket holds a destination, not an index.
+fn is_call_or_index_false_positive(message: &str, line: Option<&String>, column: usize) -> bool {
+    let Some(start) = message.find("syntax: ").map(|i| i + "syntax: ".len()) else {
+        return false;
+    };
+    let Some(end) = message[start..].find(". Should be: ") else {
+        return false;
+    };
+    let Some((text, url)) = message[start..start + end]
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .and_then(|rest| rest.split_once(")["))
+    else {
+        return false;
+    };
+    if text.trim().is_empty() {
+        return true;
+    }
+    if !url.is_empty() && url.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        return true;
+    }
+    line.and_then(|line| column.checked_sub(2).and_then(|i| line.chars().nth(i)))
+        .is_some_and(|before| before.is_alphanumeric() || matches!(before, '_' | ')' | ']'))
+}
 
 /// Rule IDs whose upstream `Violation.column` (the *reported* diagnostic
 /// position, distinct from the `Fix` range `convert_fix` handles above) is
@@ -2260,5 +2388,107 @@ mod tests {
             "the catalog description must explain why: {}",
             entry.description
         );
+    }
+
+    // ---- iteration 321: protected regions, containers, MD011/MD034 ----
+
+    fn lint_rule(body: &str, rule: &str) -> Vec<Diagnostic> {
+        HyaloLintEngine::create()
+            .unwrap()
+            .lint_body(
+                body,
+                "t.md",
+                None,
+                false,
+                &LintConfig::default(),
+                &[rule.to_owned()],
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn md034_is_quiet_in_html_math_macros_and_link_text() {
+        for body in [
+            "<a href=\"https://a.example/x\">link</a>\n",
+            "<p><code>https://a.example/x</code></p>\n",
+            "<pre>\n\"u\": \"https://a.example/x\"\n</pre>\n",
+            "{{domxref(\"w\",\"https://a.example/x\")}}\n",
+            "$$\na = https://a.example/x\n$$\n",
+            "x $a = https://a.example/x$ y\n",
+            "[two line\nhttps://a.example/x](https://b.example/y)\n",
+            "Your \"mailto:\" link\n",
+        ] {
+            assert!(
+                lint_rule(body, "MD034").iter().all(|d| d.fix.is_none()),
+                "{body:?}: {:?}",
+                lint_rule(body, "MD034")
+            );
+        }
+        let prose = lint_rule("Visit https://a.example/x today\n", "MD034");
+        assert_eq!(prose.len(), 1);
+        assert!(prose[0].fix.is_some());
+    }
+
+    #[test]
+    fn md011_ignores_calls_indexes_and_empty_text_but_not_reversed_links() {
+        for body in ["a.getGamepads()[0] ok\n", "f(x)[1] ok\n", "x = ()[y]\n"] {
+            assert!(lint_rule(body, "MD011").is_empty(), "{body:?}");
+        }
+        assert_eq!(
+            lint_rule("see (text)[https://a.example] now\n", "MD011").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn heading_rules_stay_out_of_html_blocks_and_containers() {
+        let pre = "<pre>\n  # comment\n</pre>\n";
+        for rule in ["MD022", "MD023", "MD018", "MD019"] {
+            assert!(lint_rule(pre, rule).is_empty(), "{rule}");
+        }
+        let quote = "> quote\n> ```sh\n> ls\n> ```\n> after\n";
+        assert!(lint_rule(quote, "MD031").iter().all(|d| d.fix.is_none()));
+        let list = "1. step\n   # not heading?\n";
+        assert!(
+            lint_rule(list, "MD023").is_empty(),
+            "no indentation to judge in a list item"
+        );
+    }
+
+    #[test]
+    fn md033_still_sees_inline_html() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let mut config = LintConfig::default();
+        config.rules.insert(
+            "MD033".to_owned(),
+            crate::config::RuleOverride::Enabled(true),
+        );
+        let found = engine
+            .lint_body(
+                "<div>\nx\n</div>\n",
+                "t.md",
+                None,
+                false,
+                &config,
+                &["MD033".to_owned()],
+            )
+            .unwrap();
+        assert!(!found.is_empty(), "MD033 is HTML-aware");
+    }
+
+    #[test]
+    fn md010_reports_tabs_in_code_without_offering_a_fix() {
+        let in_code = lint_rule("```make\nall:\n\techo\n```\n", "MD010");
+        assert_eq!(in_code.len(), 1);
+        assert!(in_code[0].fix.is_none());
+        let in_prose = lint_rule("a\ttab\n", "MD010");
+        assert!(in_prose[0].fix.is_some());
+    }
+
+    #[test]
+    fn a_heading_containing_a_code_span_is_still_fixable() {
+        let found = lint_rule("  ## Using `x`\n", "MD023");
+        assert!(found.iter().all(|d| d.fix.is_some()), "{found:?}");
+        assert!(!found.is_empty());
     }
 }

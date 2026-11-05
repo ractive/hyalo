@@ -908,6 +908,18 @@ fn scan_file_for_matches(
 ) -> Vec<AutoLinkMatch> {
     let mut results = Vec::new();
 
+    // The shared protected-region model (DEC-381): raw HTML, tags and the
+    // content of `<a>`/`<code>`, math, macro calls and `^block-id`s are not
+    // prose, whatever the paragraph scanner below makes of them.
+    let body_start =
+        crate::frontmatter::DocumentFrame::parse(content).map_or(0, |frame| frame.body_offset());
+    let frontmatter_lines = content
+        .get(..body_start)
+        .map_or(0, |head| head.bytes().filter(|b| *b == b'\n').count());
+    let syntax = content
+        .get(body_start..)
+        .map(crate::body_syntax::BodySyntax::with_protected);
+
     for_each_block(content, |block| {
         // ---- Zones that are syntactically part of a link or tag
         // (iter-200 H-2, iter-207 BUG-2/BUG-3, iter-217 NEW-1/NEW-2/NEW-10) ----
@@ -957,6 +969,17 @@ fn scan_file_for_matches(
 
                 // Existing link overlap check.
                 if overlaps_any_link(&link_spans, start, end) {
+                    continue;
+                }
+
+                // Protected regions, in body-byte coordinates.
+                if let Some(syntax) = &syntax
+                    && let Some(regions) = syntax.protected()
+                    && let Some(line_start) = line_num
+                        .checked_sub(frontmatter_lines)
+                        .and_then(|body_line| syntax.line_start(body_line))
+                    && regions.overlaps_or_destination(&(line_start + start..line_start + end))
+                {
                     continue;
                 }
 
@@ -1020,13 +1043,16 @@ fn scan_file_for_matches(
 /// (`Pulls` vs `pulls`), means substituting the target alone would change
 /// what the page renders, so the original surface text is preserved as an
 /// explicit alias instead: `[[link_target|matched_text]]`.
-fn wikilink_replacement_text(matched_text: &str, link_target: &str) -> String {
+fn wikilink_replacement_text(matched_text: &str, link_target: &str, line: &str) -> String {
     let encoded =
         crate::link_write::encode_destination(link_target, crate::links::LinkKind::Wikilink);
     if matched_text == link_target && encoded == link_target {
         format!("[[{encoded}]]")
     } else {
-        format!("[[{encoded}|{matched_text}]]")
+        format!(
+            "[[{encoded}{}{matched_text}]]",
+            crate::link_write::alias_separator(line)
+        )
     }
 }
 
@@ -1109,13 +1135,22 @@ fn apply_matches(
         // Build a `Replacement` per match. `col` is the 0-based byte offset
         // within the line; `apply_replacements` sorts right-to-left per line so
         // earlier offsets stay valid.
+        let source_lines: Vec<&str> = content.split('\n').collect();
         let replacements: Vec<Replacement> = file_matches
             .iter()
             .map(|m| Replacement {
                 line: m.line,
                 byte_offset: m.byte_col,
                 old_text: m.matched_text.clone(),
-                new_text: wikilink_replacement_text(&m.matched_text, &m.link_target),
+                new_text: wikilink_replacement_text(
+                    &m.matched_text,
+                    &m.link_target,
+                    m.line
+                        .checked_sub(1)
+                        .and_then(|i| source_lines.get(i))
+                        .copied()
+                        .unwrap_or_default(),
+                ),
             })
             .collect();
 
@@ -3507,7 +3542,7 @@ mod tests {
     #[test]
     fn encoded_auto_destinations_keep_display_text_and_resolve_once() {
         for name in ["C#", "Release (final)", "literal%23"] {
-            let emitted = wikilink_replacement_text(name, name);
+            let emitted = wikilink_replacement_text(name, name, "");
             let spans = crate::links::extract_link_spans(&emitted);
             assert_eq!(spans.len(), 1);
             let mut catalog = crate::CaseInsensitiveIndex::new();

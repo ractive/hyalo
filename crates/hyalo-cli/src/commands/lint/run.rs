@@ -332,6 +332,27 @@ pub(crate) fn run(
             },
             None => None,
         };
+        // A-19 (iteration 321): `--fix-rule` names rules too, and an unknown
+        // id used to exit 0 with "fixed 0" — the same silent no-op M-10
+        // removed for `--rule`. Validate each one the same way and
+        // canonicalize to the catalog spelling.
+        let mut fix_rule_ids: Vec<String> = Vec::with_capacity(fix_rule.len());
+        for raw in &fix_rule {
+            match md_engine.rule_entry_ci(raw) {
+                Some(entry) => fix_rule_ids.push(entry.id.clone()),
+                None => {
+                    return Ok(crate::output::CommandOutcome::UserError(
+                        crate::output::user_diagnostic(
+                            ctx.user_format,
+                            &format!("no such rule: {raw}"),
+                            None,
+                            Some("run `hyalo lint-rules list` to see available rules"),
+                            None,
+                        ),
+                    ));
+                }
+            }
+        }
         // iter-210 BUG-5: a prefix that selects no rule is as much a typo
         // as an unknown `--rule` id, and it used to be *worse* than one:
         // the empty filter fell through to "no filtering", so `--rule-prefix
@@ -443,7 +464,7 @@ pub(crate) fn run(
             rule_prefix: rule_prefix.as_deref(),
             max_per_rule: max_per_rule_eff,
             max_files: max_files_eff,
-            fix_rules: &fix_rule,
+            fix_rules: &fix_rule_ids,
             snapshot_index,
             index_path,
             vault_dir: dir,

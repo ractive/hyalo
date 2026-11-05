@@ -19,6 +19,10 @@ and this project adheres to
   still broken, so `find --broken-links`, `summary.links.broken` and HYALO006
   count it as before (DEC-374).
 
+- `lint --fix` over 200 or more files prints `lint --fix: N/M files` on stderr
+  every 200 files and `lint --fix: M/M files, done` at the end, like the other
+  bulk write phases; `-q` silences it (DEC-383).
+
 ### Changed
 
 - On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
@@ -71,6 +75,50 @@ and this project adheres to
   The same target spellings (`?query`, `%20`, a leading `./`, `.md`) give
   one answer in every command (DEC-374).
 
+- One model of what is not prose now serves the lint prose rules, `lint --fix`
+  and `links auto`: raw HTML blocks, HTML tags and their attribute values, the
+  text of `<a>`/`<code>`/`<pre>`/`<kbd>`/`<script>`/`<style>`, `$$` and `$`
+  math, `{{ }}`/`{% %}` macro calls, `^block-id`s, link destinations, and a
+  link label that wraps over lines (`hyalo_core::protected`, DEC-381). A rule
+  does not fire there (`MD033` still does), a fix is withheld when the bytes it
+  changes reach one, and `links auto` proposes nothing inside one. On MDN the
+  changed edits inside such a region fell from 341 of 425 to 0 of 76.
+- `MD010` still reports a hard tab inside a code block, but `--fix` no longer
+  rewrites one (a Makefile recipe or a Go sample is tab-significant), nor a tab
+  on a fence delimiter or inside a raw HTML block (DEC-382).
+- MD022 and MD031 report but no longer fix inside a block quote, where the
+  blank line they insert would split the quote; MD023 stays quiet inside a list
+  item or quote (DEC-383).
+- A code span no longer crosses from one list item into the next, and the
+  search for the closer of an unmatched backtick run stops after 128 lines, so
+  a block of any size is scanned in linear time (it was quadratic: 22 s for a
+  60 000-line note). A code span longer than 128 lines is read as literal text.
+  A fence indented with tabs under a list item is now recognised as a fence
+  (DEC-381).
+
+### Fixed
+
+- `links fix` and `find --broken-links` name the same heading for a broken anchor (the numbered-heading repair `--apply` writes wins over a prefix match), and the text `Fixable:` line spells out its split, `Fixable: 5 (0 links + 5 anchor repairs)`, beside the unchanged JSON `fixable` and `anchor_fixable` (DEC-376).
+- `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter and `types list`/`types show` under an unusable `[schema]` say so; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).
+- A `--jq` result over the 10 MiB cap exits 1 and names `--format json` or a narrower filter on a read-only run; a mutation that already wrote keeps exit 2 with its effects (DEC-378).
+- `hyalo changelog release` writes the footer links (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`) instead of `[X.Y.Z]: TBD`; `xtask generate-npm-packages --generate` rewrites the versions in `npm/hyalo/package-lock.json`, `--check` fails on a stale one, and the release docs list all 16 files a bump touches (DEC-379).
+- `lint --fix` no longer leaves stray text when two fixes meet at one offset: an
+  insertion at the start of a replaced range (MD022's blank line and MD023's
+  de-indent on `# Wide\n ## Indented`) used to be applied together, leaving a
+  `d` line behind and reporting `conflicts 0`. The loser is now a reported
+  conflict and the next pass applies it (DEC-383).
+- `MD034` flags prose URLs only: not an `href="…"`, a `<code>` or `<pre>`
+  sample, a `{{ }}` macro argument, math, the text of a link that wraps over two
+  lines, or `"mailto:"`. `MD011` no longer reads `getGamepads()[0]` as a
+  reversed link (its fix wrote `getGamepads[](0)` and a new MD042). MD022 and
+  MD023 no longer treat `# comment` inside `<pre>` as a heading.
+- `links auto --apply` no longer wraps text inside `<a>…</a>` or `$$…$$`, no
+  longer rewrites an Obsidian `^block-id`, and no longer pairs a backtick across
+  list items. `links auto` and `links fix` write `[[x\|alias]]` inside a table
+  row, so the cell does not split.
+- `lint --fix --fix-rule BOGUS` exits 1 with `no such rule`, like `--rule`
+  (it exited 0 with "fixed 0").
+
 ### Security
 
 - The jev tidy helper sent a note's frontmatter to TypeSafe. Since `read
@@ -80,13 +128,6 @@ and this project adheres to
   note along with its body, although `jev.md` promises body text only. Now
   only the body is sent and frontmatter stays in the local manifest. A section
   selection was never affected.
-
-### Fixed
-
-- `links fix` and `find --broken-links` name the same heading for a broken anchor (the numbered-heading repair `--apply` writes wins over a prefix match), and the text `Fixable:` line spells out its split, `Fixable: 5 (0 links + 5 anchor repairs)`, beside the unchanged JSON `fixable` and `anchor_fixable` (DEC-376).
-- `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter and `types list`/`types show` under an unusable `[schema]` say so; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).
-- A `--jq` result over the 10 MiB cap exits 1 and names `--format json` or a narrower filter on a read-only run; a mutation that already wrote keeps exit 2 with its effects (DEC-378).
-- `hyalo changelog release` writes the footer links (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`) instead of `[X.Y.Z]: TBD`; `xtask generate-npm-packages --generate` rewrites the versions in `npm/hyalo/package-lock.json`, `--check` fails on a stale one, and the release docs list all 16 files a bump touches (DEC-379).
 
 ## [0.25.1] - 2026-11-01
 

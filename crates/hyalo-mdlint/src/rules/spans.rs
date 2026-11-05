@@ -74,7 +74,7 @@ impl BodySpans {
     /// Classify every line of `body`.
     #[must_use]
     pub fn new(body: &str) -> Self {
-        let syntax = hyalo_core::body_syntax::BodySyntax::new(body);
+        let syntax = hyalo_core::body_syntax::BodySyntax::with_protected(body);
         let mut spans = Self {
             syntax,
             disable_events: Vec::new(),
@@ -102,11 +102,89 @@ impl BodySpans {
         self.syntax.line_is_html_comment(line_1based)
     }
 
-    /// Whether a converted autofix span reaches into code or a wholly
-    /// commented line, even when the diagnostic itself starts in prose.
+    /// Whether an edit reaches into a line that is code or a comment, or
+    /// rewrites bytes of a protected region (raw HTML, a tag, math, a macro
+    /// call, a code span, a block id — see [`hyalo_core::protected`]).
+    ///
+    /// The diagnostic may begin in ordinary prose while its replacement
+    /// would change bytes inside a protected region, so the edit is judged by
+    /// what it actually *changes*: the common prefix and suffix of the
+    /// original and the replacement are not touched, and a zero-width
+    /// insertion only counts when it lands strictly inside an inline region.
+    /// A heading that merely contains a code span is therefore still fixable.
     #[must_use]
-    pub fn fix_intersects_protected(&self, start: usize, end: usize) -> bool {
-        self.syntax.range_intersects_protected(start..end)
+    pub fn edit_touches_protected(
+        &self,
+        body: &str,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> bool {
+        if self.syntax.range_intersects_protected(start..end) {
+            return true;
+        }
+        let Some(regions) = self.syntax.protected() else {
+            return false;
+        };
+        let Some(original) = body.get(start..end) else {
+            return false;
+        };
+        let (old, new) = (original.as_bytes(), replacement.as_bytes());
+        let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+        let suffix = old[prefix..]
+            .iter()
+            .rev()
+            .zip(new[prefix..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let changed = start + prefix..end - suffix;
+        regions.overlaps(&changed)
+    }
+
+    /// Whether a diagnostic starting at the 1-based `line` and 0-based byte
+    /// `byte_in_line` points into protected text.
+    #[must_use]
+    pub fn position_is_protected(&self, line_1based: usize, byte_in_line: usize) -> bool {
+        let (Some(regions), Some(line_start)) =
+            (self.syntax.protected(), self.syntax.line_start(line_1based))
+        else {
+            return false;
+        };
+        regions.contains(line_start + byte_in_line)
+    }
+
+    /// Whether the diagnostic position lies inside a link destination
+    /// (`](url)`, `[ref]: url`, `<https://…>`), where a bare URL is already a
+    /// link.
+    #[must_use]
+    pub fn position_is_in_link_destination(&self, line_1based: usize, byte_in_line: usize) -> bool {
+        let (Some(regions), Some(line_start)) =
+            (self.syntax.protected(), self.syntax.line_start(line_1based))
+        else {
+            return false;
+        };
+        regions.in_destination(line_start + byte_in_line)
+    }
+
+    /// Whether the 1-based body line sits inside a block quote.
+    #[must_use]
+    pub fn line_in_block_quote(&self, line_1based: usize) -> bool {
+        self.syntax.line_in_block_quote(line_1based)
+    }
+
+    /// Whether the 1-based body line sits inside a block quote or a list
+    /// item. A fix that inserts or re-indents whole lines does not know the
+    /// container prefix, so it must not run there (L-2, iteration 321).
+    #[must_use]
+    pub fn line_in_container(&self, line_1based: usize) -> bool {
+        self.syntax.line_in_block_quote(line_1based) || self.syntax.line_in_list_item(line_1based)
+    }
+
+    /// Whether the 1-based body line is the opening or closing delimiter of a
+    /// fenced code block.
+    #[must_use]
+    pub fn line_is_fence_delimiter(&self, line_1based: usize) -> bool {
+        self.syntax.line_is_fence_delimiter(line_1based)
     }
 
     /// Whether the 1-based body line opens a fenced code block that is never

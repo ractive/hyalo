@@ -293,10 +293,40 @@ destructive autofixes, so five rules are narrowed. Each deviation is stated in
 | Rule | Narrowed to |
 |------|-------------|
 | **MD018** | A single `#` followed by a tag token — letters, digits, `_`, `-`, `/`, non-ASCII word characters, at least one non-digit — is an Obsidian tag, not a heading missing its space (DEC-271). `##Heading`, `#1`, `#!bang` and a capitalized word followed by prose (`#Heading typo`) still fire. |
-| **MD034** | A URL already inside link markup — a markdown link or image destination, an autolink, a wikilink, a reference definition — is not bare. Only prose URLs are flagged. The autolink it proposes also stops before a following HTML tag (iter-269): `https://…/x<br>` fixes to `<https://…/x><br>`, never `<https://…/x<br>>`. |
+| **MD034** | A URL already inside link markup — a markdown link or image destination, an autolink, a wikilink, a reference definition, the text of a link that wraps over lines — is not bare, and neither is one inside raw HTML (an attribute value, `<code>`, `<pre>`, a block), math, a `{{ }}`/`{% %}` macro call, or a scheme with no address (`"mailto:"`). Only prose URLs are flagged (iter-321, DEC-381). The autolink it proposes also stops before a following HTML tag (iter-269): `https://…/x<br>` fixes to `<https://…/x><br>`, never `<https://…/x<br>>`. |
 | **MD047** | Skipped on a file with no body at all (iter-269): a frontmatter-only note ends with the newline that closes its `---` block, so there is no line left to terminate. A non-empty body genuinely missing its terminator still fires. |
 | **MD042** | An image is valid link text: `[![](img.png)](https://…)` is neither an empty link nor a missing-alt warning. A standalone `![](img.png)` still warns, and `[](url)` / `[ ](url)` still error. |
 | **MD001** | Reported, never autofixed (DEC-272): renumbering a deliberate `###### Caption` to `##` rewrites authored structure. `hyalo lint-rules list` shows `AUTOFIX no`; silence the warning with `hyalo lint-rules set MD001 --enabled false`. |
+
+### Protected regions (iter-321, DEC-381)
+
+One model decides what is not prose, and every consumer reads it: the stock prose
+rules, `lint --fix` and `links auto`. A region is protected when it is
+
+- a **raw HTML block** (CommonMark §4.6): a line starting `<div>`, `<table>`, `<p>` … runs to the
+  next blank line; `<pre>`, `<script>`, `<style>` and `<textarea>` run to their closing tag, blank
+  lines included, at any list indentation;
+- an **inline HTML tag**, attribute values and all, even when it wraps over lines, and the content of
+  `<a>`, `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<script>`, `<style>` and `<textarea>`;
+- **math** (`$$ … $$` blocks and `$…$` spans), a **macro call** (`{{ … }}`, `{% … %}`) or an Obsidian
+  **block id** (`^id` ending a line);
+- a **code span** (which cannot cross a list item or a blank line) or an HTML comment;
+- for MD034 and `links auto`, a **link destination** or the text of a link that wraps lines.
+
+A prose rule does not fire there (`MD033`, which is about inline HTML, still does), a fix is withheld
+when the bytes it changes reach such a region, and `links auto` proposes nothing inside one. A
+heading that merely contains a code span is still fixed. Block-quote and list context is respected
+too: MD022/MD031 report but do not fix inside a block quote, MD023 stays quiet inside any container.
+`MD010` keeps *reporting* a tab in a code block (DEC-294) but `--fix` never rewrites one (DEC-382).
+Silence a region by hand with `<!-- markdownlint-disable … -->` as before.
+
+Two fixes that touch the same offset — an insertion at the start of a replaced range — are reported
+as a conflict, not applied together (DEC-383). In a table row `links auto` and `links fix` write the
+alias separator as `\|`.
+
+Measured (changed edits inside a protected region, by an independent classifier): MDN 341 of 425 → 0
+of 76, GitHub Docs 709 of 1,368 → 0 of 658, Obsidian Hub 88 of 24,127 → 4 of 24,036 (artefacts of the
+classifier). A second `lint --fix` changes nothing on any of the three.
 
 Measured on the Obsidian Hub vault (6,520 files): MD018 fix proposals 162 → 0,
 MD034 209 → 116 (all remaining ones are prose URLs), MD001 17 → 0, and MD042's

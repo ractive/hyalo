@@ -16,7 +16,8 @@ pub use visitor::FileVisitor;
 pub(crate) use fence::{detect_opening_fence, is_closing_fence};
 pub(crate) use frontmatter::FrontmatterCollector;
 pub(crate) use strip::{
-    block_lookahead, code_run_exists, is_atx_heading, is_block_boundary, is_comment_fence,
+    block_lookahead, code_run_exists, ends_inline_construct, is_atx_heading, is_block_boundary,
+    is_comment_fence,
 };
 
 #[cfg(test)]

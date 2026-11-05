@@ -1959,7 +1959,11 @@ fn build_replacements_for_file(
                         && span.link.label.is_none()
                         && !span.link.embed
                     {
-                        format!("{path_text}|{}", span.link.target.trim())
+                        format!(
+                            "{path_text}{}{}",
+                            crate::link_write::alias_separator(line),
+                            span.link.target.trim()
+                        )
                     } else {
                         path_text
                     };

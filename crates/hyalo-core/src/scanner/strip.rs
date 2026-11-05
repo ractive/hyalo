@@ -89,12 +89,22 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
 /// - a fenced-code-block delimiter (``` ``` ``` or `~~~`, up to 3 spaces of
 ///   indent).
 ///
+/// - a list-item marker line (see [`ends_inline_construct`]): a code span
+///   cannot cross from one list item into the next (B-14, iteration 321).
+///
 /// Truncating conservatively can only *shorten* the lookahead, which makes an
 /// unmatched run stay literal — exactly what CommonMark prescribes.
+///
+/// The lookahead is also capped at [`MAX_CODE_SPAN_LOOKAHEAD_LINES`] lines
+/// (DEC-381). Every unmatched backtick run asks "does a closer exist later in
+/// this block?", and a block with no blank line and a stray backtick on every
+/// line made that O(block) per run — 22 s for a 60k-line note (deep review
+/// C-2). The cap makes the cost per run constant, so a block of any size is
+/// linear; a genuine code span longer than the cap is left as literal text.
 pub(crate) fn block_lookahead(rest: &str) -> &str {
     let mut offset = 0usize;
-    for line in rest.split('\n') {
-        if is_block_boundary(line) {
+    for (n, line) in rest.split('\n').enumerate() {
+        if n >= MAX_CODE_SPAN_LOOKAHEAD_LINES || ends_inline_construct(line) {
             return &rest[..offset];
         }
         offset += line.len() + 1;
@@ -104,6 +114,10 @@ pub(crate) fn block_lookahead(rest: &str) -> &str {
     }
     rest
 }
+
+/// How many following lines an unmatched backtick run searches for its
+/// closer. See [`block_lookahead`].
+pub(crate) const MAX_CODE_SPAN_LOOKAHEAD_LINES: usize = 128;
 
 /// Whether `line` ends the paragraph a code span could have been opened in.
 /// See [`block_lookahead`] for the rationale and the list of boundaries.
@@ -128,6 +142,38 @@ pub(crate) fn is_block_boundary(line: &str) -> bool {
         return true;
     }
     is_atx_heading(body)
+}
+
+/// Whether `line` ends an inline construct that began on an earlier line: a
+/// code span, a tag or a macro cannot cross a block boundary, and neither can
+/// it cross from one list item into the next (B-14, iteration 321).
+///
+/// Wider than [`is_block_boundary`] on purpose: a list-item line is content
+/// that other scanners must still read, so it is not a boundary for them.
+pub(crate) fn ends_inline_construct(line: &str) -> bool {
+    is_block_boundary(line) || starts_list_item(line)
+}
+
+/// Whether `line` opens a list item (`- x`, `* x`, `+ x`, `1. x`, `2) x`) at
+/// any indentation. An empty marker (`-` alone) counts; `---` and `***` do
+/// not, and neither does a marker with no space after it.
+fn starts_list_item(line: &str) -> bool {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let marker_len = match rest.as_bytes().first() {
+        Some(b'-' | b'*' | b'+') => 1,
+        Some(b'0'..=b'9') => {
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 9 || !matches!(rest.as_bytes().get(digits), Some(b'.' | b')')) {
+                return false;
+            }
+            digits + 1
+        }
+        _ => return false,
+    };
+    rest[marker_len..]
+        .chars()
+        .next()
+        .is_none_or(|c| c == ' ' || c == '\t')
 }
 
 /// Whether `body` (already stripped of any leading indent) is a CommonMark
@@ -212,13 +258,10 @@ pub fn strip_inline_code_stateful<'a>(
     // A code span is an inline construct: it cannot survive a block boundary
     // (iter-207, BUG-1). If one is somehow still open when a new block starts,
     // drop it rather than blanking the rest of the document.
-    if open.is_some() && is_block_boundary(line) {
+    if open.is_some() && ends_inline_construct(line) {
         *open = None;
         return Cow::Borrowed(line);
     }
-
-    // Only look ahead within the current block for a matching closing run.
-    let rest = block_lookahead(rest);
 
     let bytes = line.as_bytes();
     let len = bytes.len();
@@ -306,7 +349,7 @@ pub fn strip_inline_code_stateful<'a>(
                 // document (CommonMark closing rule). Otherwise the backticks
                 // are literal stray text — leave them and the rest of the line
                 // untouched so real links are not swallowed.
-                if code_run_exists(rest, backtick_count) {
+                if code_run_exists(block_lookahead(rest), backtick_count) {
                     for b in &mut result[start..len] {
                         *b = b' ';
                     }
@@ -589,6 +632,57 @@ mod tests {
     fn block_lookahead_returns_whole_rest_when_no_boundary() {
         assert_eq!(block_lookahead("only one line `"), "only one line `");
         assert_eq!(block_lookahead(""), "");
+    }
+
+    #[test]
+    fn a_list_item_marker_ends_an_inline_construct_but_not_a_block() {
+        for item in [
+            "- next",
+            "* next",
+            "+ next",
+            "1. next",
+            "12) next",
+            "   - nested",
+            "-",
+        ] {
+            assert!(ends_inline_construct(item), "{item:?}");
+            assert!(
+                !is_block_boundary(item),
+                "{item:?} must stay readable content"
+            );
+        }
+        for text in ["---", "***", "-no space", "1.5 apples", "text - dash", "+1"] {
+            assert!(!ends_inline_construct(text), "{text:?}");
+        }
+    }
+
+    /// B-14: a code span cannot cross from one list item into the next.
+    #[test]
+    fn stateful_code_span_does_not_open_across_list_items() {
+        let mut open = None;
+        let rest = "- Alpha Note and `closer
+";
+        let out = strip_inline_code_stateful("- see `@person", &mut open, rest);
+        assert_eq!(out.as_ref(), "- see `@person");
+        assert_eq!(open, None, "the closer sits in the next list item");
+        // A span carried into a list-item line is dropped there.
+        let mut open = Some(1);
+        let out = strip_inline_code_stateful("- Alpha Note", &mut open, "");
+        assert_eq!(out.as_ref(), "- Alpha Note");
+        assert_eq!(open, None);
+    }
+
+    /// C-2: the closer search is capped, so a block with a stray backtick on
+    /// every line is linear (was O(n^2): 22 s for a 60k-line note).
+    #[test]
+    fn code_span_lookahead_is_capped() {
+        let far = format!("{}`\n", "text\n".repeat(MAX_CODE_SPAN_LOOKAHEAD_LINES + 5));
+        assert!(
+            !code_run_exists(block_lookahead(&far), 1),
+            "closer beyond the cap"
+        );
+        let near = format!("{}`\n", "text\n".repeat(MAX_CODE_SPAN_LOOKAHEAD_LINES - 5));
+        assert!(code_run_exists(block_lookahead(&near), 1));
     }
 
     /// BUG-1 minimal repro: `` press <kbd>`</kbd> `` used to pair its stray

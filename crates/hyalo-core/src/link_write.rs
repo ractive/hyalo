@@ -37,6 +37,24 @@ pub(crate) fn encode_destination(path: &str, kind: LinkKind) -> String {
     encoded
 }
 
+/// The alias separator to write into a wikilink on `line`: `\|` inside a GFM
+/// table row, `|` everywhere else.
+///
+/// An unescaped `|` in a table cell ends the cell, so `[[beta|Beta Doc]]`
+/// splits one cell into two (A-3, iteration 321). The reader already treats
+/// `[[x\|y]]` as target `x` with label `y`, and `mv`/`links fix` preserve an
+/// existing escaped form, so writing it is the matching half. A row is a line
+/// whose first non-blank byte is `|` — the shape every table row hyalo has met
+/// has, and the only one decidable from a single line.
+#[must_use]
+pub(crate) fn alias_separator(line: &str) -> &'static str {
+    if line.trim_start().starts_with('|') {
+        "\\|"
+    } else {
+        "|"
+    }
+}
+
 /// A computed text replacement for a single span within a line.
 ///
 /// This is a thin companion to [`crate::link_rewrite::Replacement`]; the
@@ -336,6 +354,14 @@ impl LinkWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_separator_escapes_the_pipe_only_in_table_rows() {
+        assert_eq!(alias_separator("| [[a]] | x |"), "\\|");
+        assert_eq!(alias_separator("   |a|b|"), "\\|");
+        assert_eq!(alias_separator("text [[a]] here"), "|");
+        assert_eq!(alias_separator("- item | pipe"), "|");
+    }
     use crate::links::{LinkKind, extract_link_spans};
 
     #[test]

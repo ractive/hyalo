@@ -81,3 +81,4 @@ pub use fs_util::{
 pub use user_error::{UserFacingError, user_error, user_error_with};
 pub use util::{is_iso8601_date, is_iso8601_datetime, is_iso8601_datetime_tz, levenshtein};
 pub mod body_syntax;
+pub mod protected;
