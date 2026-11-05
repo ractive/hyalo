@@ -299,4 +299,3 @@ Scenario (v20): `language: klingon`, `language: "de-CH"`, `[de]`, `123` produce 
 
 ## Still not reached
 Schema validation of real files against types (only config parsing was read; mdlint's schema.rs, which does the per-file validation, is another crate); the relocation planner's --apply path and ShortestPath rule tie-breaking; BM25 scoring numerics beyond the empty-corpus cases; stemmer correctness per language; Linux/Windows.
-
