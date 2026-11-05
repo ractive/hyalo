@@ -21,6 +21,13 @@ and this project adheres to
 
 ### Changed
 
+- `--jq`: `scan` now follows jq (jaq-std 3.0.4). `scan(re)` returns every
+  match instead of only the first, and a regex with capture groups yields an
+  array of the groups per match instead of the whole match. For the old
+  result, drop the capture groups and use `first(scan(re))`.
+- Search treats the combining marks new in Unicode 18 as part of a word
+  (unicode-normalization 0.1.26). A note using one keeps its old token split
+  in an existing snapshot until `create-index --force` (DEC-373).
 - `mv`'s `skipped_ambiguous`, HYALO006's "matches N candidates", `links fix`'s
   `ambiguous_links` and the link resolver behind `backlinks` now share one
   definition of an ambiguous name, `CaseInsensitiveIndex::ambiguity`, instead of
