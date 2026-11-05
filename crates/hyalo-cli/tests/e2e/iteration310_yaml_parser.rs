@@ -5,6 +5,8 @@
 //! - `.nan` keeps its string fallback; the words `NaN` / `Infinity` stay
 //!   as written.
 //! - A value with an inner `#` is written double-quoted, as before.
+//! - serde-saphyr 2.1 (DEC-375): a null-document block reads as no
+//!   properties; wrong-case spellings and Unicode-padded scalars are strings.
 use super::common::{hyalo_no_hints, write_md};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -199,5 +201,108 @@ fn set_writes_hash_values_quoted_and_dates_plain() {
     assert_eq!(
         text,
         "---\ntitle: t\nlang: \"C#\"\ndate: 2026-01-01\nflag: \"yes\"\n---\nbody\n"
+    );
+}
+
+#[test]
+fn null_document_frontmatter_reads_as_no_properties() {
+    // serde-saphyr 2.1 rejects a null document where a mapping is expected
+    // (#233). A block holding only comments, `~` or `null` is frontmatter
+    // with no properties, as it was before (DEC-375): it must neither be
+    // skipped by a scan, flagged by HYALO005, nor refuse a write.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "comment.md",
+        "---\n# only a comment\n---\nbody\n",
+    );
+    write_md(tmp.path(), "tilde.md", "---\n~\n---\nbody\n");
+    write_md(tmp.path(), "null.md", "---\nnull\n---\nbody\n");
+    write_md(tmp.path(), "ok.md", "---\ntitle: ok\n---\nbody\n");
+
+    let find = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--fields", "properties", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(find.status.success());
+    let stderr = String::from_utf8_lossy(&find.stderr);
+    assert!(!stderr.contains("unparsable"), "no skip warning: {stderr}");
+    let json: Value = serde_json::from_slice(&find.stdout).unwrap();
+    assert_eq!(json["total"], json!(4));
+
+    let summary = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["summary", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(summary.status.success());
+    let json: Value = serde_json::from_slice(&summary.stdout).unwrap();
+    assert_eq!(json["results"]["files"]["total"], json!(4));
+    assert_eq!(json["results"]["files"]["skipped"], json!(0));
+
+    hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["lint", "--rule", "HYALO005"])
+        .assert()
+        .success();
+
+    for file in ["comment.md", "tilde.md", "null.md"] {
+        assert_eq!(properties(tmp.path(), file), json!({}), "{file}");
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["set", file, "--property", "status=draft"])
+            .assert()
+            .success();
+        assert_eq!(
+            properties(tmp.path(), file),
+            json!({"status": "draft"}),
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn spellings_outside_the_yaml_12_core_schema_read_as_strings() {
+    // DEC-375: serde-saphyr 2.1 matches the core schema's bool, null and
+    // non-finite spellings exactly, so a wrong-case one is a string, and a
+    // no-break space (or any other Unicode space) around a number or bool
+    // makes it one too.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\nflag: tRUE\nnone: nuLL\nnan: .nAn\ninf: -.iNF\nnbsp: 1\u{a0}\nlist: [true\u{a0}, 2]\nnuLL: key\nreal: True\nreal_null: Null\n---\nbody\n",
+    );
+    let props = properties(tmp.path(), "a.md");
+    assert_eq!(props["flag"], json!("tRUE"));
+    assert_eq!(props["none"], json!("nuLL"));
+    assert_eq!(props["nan"], json!(".nAn"));
+    assert_eq!(props["inf"], json!("-.iNF"));
+    assert_eq!(props["nbsp"], json!("1\u{a0}"));
+    assert_eq!(props["list"], json!(["true\u{a0}", 2]));
+    assert_eq!(props["nuLL"], json!("key"));
+    assert_eq!(props["real"], json!(true));
+    assert_eq!(props["real_null"], json!(null));
+}
+
+#[test]
+fn explicit_key_tab_and_one_column_quoted_continuation_parse() {
+    // DEC-375: both were unparsable frontmatter under serde-saphyr 1.x.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "key.md", "---\n?\ta\n: b\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "quoted.md",
+        "---\ntitle: \"one\n two\"\nn: 1\n---\nbody\n",
+    );
+    assert_eq!(properties(tmp.path(), "key.md"), json!({"a": "b"}));
+    assert_eq!(
+        properties(tmp.path(), "quoted.md"),
+        json!({"title": "one two", "n": 1})
     );
 }

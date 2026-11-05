@@ -9,6 +9,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The YAML parser (serde-saphyr) moved from 1.3 to 2.1 (DEC-375). Frontmatter
+  that holds only comments, `~` or `null` still reads as no properties. Three
+  readings change: a wrong-case `tRUE`, `FAlse` or `nuLL` is now a string
+  (it was a bool or a null), and `.nAn` or `-.iNF` keeps its text (it was
+  `".nan"` or `"-.inf"`); only the spellings YAML 1.2 lists are a bool, a null
+  or a non-finite float. A number, bool or `.nan` followed or preceded by a
+  no-break space or another Unicode space (`year: 2024<NBSP>`) is a string,
+  not the number. A tab after an explicit `?` key and a quoted multi-line
+  value whose continuation is indented one column now parse instead of
+  making the frontmatter unparsable. The notes of this repository, GitHub
+  Docs, MDN, the Obsidian Hub and kepano-obsidian read exactly as before.
+
 ## [0.25.1] - 2026-11-01
 
 ### Changed

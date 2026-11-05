@@ -8665,3 +8665,65 @@ clap usage error (help on stderr, exit 2).
   as `hyalo -h`: the short help page on stdout, exit 0. Any argument without
   a command (`hyalo --dir x`, `hyalo --no-hints`) stays a usage error with
   exit 2.
+
+## DEC-375: serde-saphyr 2.1 — four changes in how frontmatter reads, one undone (2026-11-05) — amends DEC-350
+
+**Context.** Dependabot's PR #392 moved the YAML parser from serde-saphyr 1.3
+to 2.0, and the follow-up to 2.1. A 357-file edge matrix (one frontmatter
+shape per file, run through the 1.3 and the 2.1 binaries) and a probe on the
+raw crate at 1.3.0, 2.0.0 and 2.1.0 found exactly four user-visible
+differences. The DEC-293, DEC-350 and DEC-364 pins are unchanged, including
+`01234`, `0x1F` / `0o17`, `1_000` / `0X1F` / `0b101`, `NaN` / `Infinity` as
+written, `.nan` / `.inf`, and the column-0 close of the fence.
+
+**Decision.**
+
+1. **A null document is an empty mapping again (undone).** 2.1 stopped
+   reading a document that is only comments, `~`, `null` or `!Tag null` as
+   an empty mapping (upstream #233) and fails with "expected mapping start".
+   `frontmatter::parse_yaml_map` parses both its fast and its span-aware
+   pass into `Option<IndexMap<..>>` and takes `unwrap_or_default()`, so such
+   a block is frontmatter with no properties, as in 1.3 and 2.0. Every
+   frontmatter reader goes through that function (`read_frontmatter`, the
+   scan visitor, the `set` / `append` splice, HYALO005), so there is one
+   site. `parse_yaml_value` needs nothing: a `Value` target still reads
+   null. A bare non-mapping document (`hello`, `1`, a list) is still an error.
+2. **Only the core schema's spellings are a bool, a null or a non-finite
+   float (accepted, 2.1).** `tRUE`, `TRuE`, `FAlse` read as strings (were
+   bool); `nuLL`, `nULL`, `NUlL` read as strings (were null), and a `nuLL:`
+   key parses as a string key; `.nAn`, `.iNf`, `-.iNF` keep the text as
+   written (were `".nan"`, `".inf"`, `"-.inf"`). `True`, `TRUE`, `Null`,
+   `NULL`, `~`, `.NaN`, `.INF` and the signed forms are core spellings and
+   unchanged. A document that is just `nuLL` is a string and so an error,
+   where 1.3 read it as null and an empty mapping.
+3. **A scalar is trimmed of space, tab, CR and LF only (accepted, 2.0).**
+   `1<NBSP>`, `<NBSP>true`, `0x1F<NBSP>`, `01234<NBSP>`, `.nan<NBSP>` and the
+   U+2003, U+3000 and U+0085 variants are strings at every depth; 1.3 trimmed
+   all Unicode whitespace and read them as the number or bool.
+4. **Two shapes that were unparsable now parse (accepted, 2.0).** A tab after
+   an explicit key marker (`?<TAB>a`), and a quoted multi-line scalar whose
+   continuation is indented one column (`a: "one` / ` two"` is `"one two"`).
+
+**Why.** Changes 2 to 4 move toward the YAML 1.2 core schema that DEC-350
+commits to and that Obsidian follows: core lists `true|True|TRUE`,
+`null|Null|NULL|~` and `.nan|.NaN|.NAN` (likewise `.inf`) literally, a plain
+scalar's text is the characters written, and the extra Unicode whitespace
+was a Rust `trim()` accident rather than a YAML rule. 25 208 notes read by
+`find --fields properties --limit 0` across the five reference corpora (this
+vault 529, GitHub Docs 3 710, MDN 14 375, Obsidian Hub 6 519, kepano-obsidian
+75) produce byte-identical JSON on 1.3 and on 2.1, and so do the HYALO005
+results (29 notes are unparsable on both). Change 1 is a regression, not a
+choice: a frontmatter block that holds only a comment is plausible in a
+template, `find` / `summary` would have dropped it as skipped, HYALO005 would
+have errored on it and `set` would have refused it.
+
+No option in serde-saphyr restores the old reading for changes 2 to 4 and
+re-implementing scalar resolution to do so would undo DEC-350's choice to let
+the crate resolve scalars. The pins are `frontmatter::parse::yaml_tests`
+(`null_documents_read_as_no_properties`, `wrong_case_spellings_read_as_strings`,
+`unicode_whitespace_around_a_scalar_makes_it_a_string`, `a_tab_after_an_explicit_key_marker_and_one_column_quoted_continuations_parse`)
+and the three e2e tests at the end of `iteration310_yaml_parser.rs`. Not
+reproduced: the block scalar change granit-parser 2.0 lists (a last line
+holding only indentation, with no final newline, yielding `"a\n"` instead of
+`"a\n\n"`). 28 block-scalar shapes (literal and folded, keep and strip
+chomping, CRLF, indentation-only at end of input) are byte-identical.
