@@ -774,7 +774,11 @@ impl PreparedInvocation {
             return Ok(());
         };
         let reads_graph = match &self.command {
-            PreparedCommand::Backlinks { .. } => true,
+            // R1: HYALO006 resolves each link against the whole vault, so a
+            // named `lint` reads other notes' presence too.
+            PreparedCommand::Backlinks { .. } | PreparedCommand::Legacy(Commands::Lint { .. }) => {
+                true
+            }
             PreparedCommand::Find(query) => query.reads_link_graph(),
             _ => false,
         };

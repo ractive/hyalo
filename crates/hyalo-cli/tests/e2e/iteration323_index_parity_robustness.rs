@@ -468,3 +468,285 @@ fn m2_a_relative_wikilink_stays_relative_after_the_note_moves() {
         "---\nrel: \"[[../../t]]\"\n---\n[[../../t]] [[../../sub/sib]] [[../../t#H]] [[../../t|al]]\n"
     );
 }
+
+// ---- PR review round -------------------------------------------------------
+
+fn run_text(dir: &Path, args: &[&str]) -> std::process::Output {
+    hyalo_no_hints()
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn m4_severity_accepts_exact_values_and_the_historic_warning_only() {
+    for (value, usable) in [
+        ("error", true),
+        ("warn", true),
+        ("warning", true),
+        ("Error", false),
+        ("ERROR", false),
+        ("eror", false),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path();
+        fs::write(
+            d.join(".hyalo.toml"),
+            format!("[lint.rules.MD009]\nseverity = \"{value}\"\n"),
+        )
+        .unwrap();
+        write_md(d, "a.md", "# T\n\ntrailing   \n");
+        let (_, err, code) = run(d, &["lint"]);
+        assert_eq!(
+            code == 1 && err.contains("severity must be"),
+            !usable,
+            "{value}: {err}"
+        );
+        let (config, _, _) = run(d, &["config"]);
+        assert_eq!(config["results"]["malformed"], !usable, "{value}");
+        // A plain write is unaffected; `--validate` refuses (DEC-290 route).
+        let (_, _, code) = run(d, &["set", "a.md", "--property", "k=v"]);
+        assert_eq!(code, 0, "{value}");
+        let (_, err, code) = run(d, &["set", "a.md", "--property", "k2=v", "--validate"]);
+        assert_eq!(code == 1, !usable, "{value}: {err}");
+    }
+}
+
+#[test]
+fn m4_the_printed_repair_runs_and_lint_passes_afterwards() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join(".hyalo.toml"),
+        "[lint.rules.MD009]\nseverity = \"Error\"\n",
+    )
+    .unwrap();
+    write_md(d, "a.md", "# T\n");
+    let (_, err, code) = run(d, &["lint"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("--severity warn") && err.contains("--severity error"),
+        "{err}"
+    );
+    let (_, err, code) = run(d, &["lint-rules", "set", "MD009", "--severity", "warn"]);
+    assert_eq!(code, 0, "{err}");
+    let (_, err, code) = run(d, &["lint"]);
+    assert_eq!(code, 0, "{err}");
+}
+
+#[test]
+fn r1_a_named_lint_reads_the_current_graph_under_index() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join(".hyalo.toml"),
+        "[lint.rules.HYALO006]\nseverity = \"error\"\n",
+    )
+    .unwrap();
+    write_md(d, "a.md", "[[b]]\n");
+    write_md(d, "b.md", "# b\n");
+    run(d, &["create-index"]);
+    outlive_tolerance();
+    fs::remove_file(d.join("b.md")).unwrap();
+    let (_, _, disk) = run(d, &["lint", "a.md"]);
+    let (_, _, indexed) = run(d, &["lint", "a.md", "--index"]);
+    assert_eq!((disk, indexed), (1, 1));
+}
+
+#[test]
+fn r3_r11_changelog_fences_wrapping_and_hash_text() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    write_md(
+        d,
+        "CHANGELOG.md",
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- x\n\n```\n[x]: url\n```\n",
+    );
+    run(
+        d,
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "y",
+            "--apply",
+        ],
+    );
+    let text = fs::read_to_string(d.join("CHANGELOG.md")).unwrap();
+    let close = text.rfind("```").unwrap();
+    assert!(
+        text.find("### Fixed").unwrap() > close,
+        "heading inside the fence: {text}"
+    );
+    // `#123` is prose; a wrapped `[foo]:` is a link definition.
+    let (_, _, ok) = run(
+        d,
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "see\n#123 here",
+            "--apply",
+        ],
+    );
+    assert_eq!(ok, 0);
+    let (_, _, bad) = run(
+        d,
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "aaaa bbbb [foo]: http://x",
+            "--wrap",
+            "12",
+        ],
+    );
+    assert_eq!(bad, 1);
+}
+
+#[test]
+fn r7_deinit_keeps_a_config_it_cannot_read() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join(".hyalo.toml"),
+        b"dir = \".\"\n# \xff\n[lint.rules.MD009]\nenabled = false\n",
+    )
+    .unwrap();
+    let out = run_text(d, &["deinit"]);
+    assert!(out.status.success());
+    assert!(d.join(".hyalo.toml").is_file(), "{out:?}");
+}
+
+#[test]
+fn r4_init_on_broken_toml_names_the_parse_location() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join(".hyalo.toml"),
+        "dir = \"docs\"\n[schema.types.note]\nrequired = [\"title\"\n",
+    )
+    .unwrap();
+    let out = run_text(d, &["init", "--dir", "docs"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("line 3") || err.contains("TOML parse error"),
+        "{err}"
+    );
+    assert!(err.contains("fix the TOML error"), "{err}");
+}
+
+#[test]
+fn r6_pathological_link_lines_stay_linear() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(d.join("a.md"), "[a](<".repeat(50_000)).unwrap();
+    fs::write(d.join("b.md"), format!("{}]", "[".repeat(200_000))).unwrap();
+    fs::write(d.join("c.md"), "[a](".repeat(50_000)).unwrap();
+    let started = std::time::Instant::now();
+    run(d, &["find", "--fields", "links", "--limit", "0"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn r10_a_trailing_comment_on_a_flow_list_and_comments_in_a_block_list_survive() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    write_md(d, "f.md", "---\n# keep\ntitle: x\ntags: [a, b] # n\n---\n");
+    let (_, err, _) = run(d, &["tags", "rename", "--from", "a", "--to", "c"]);
+    assert!(!err.contains("rewriting the entire"), "{err}");
+    assert_eq!(
+        fs::read_to_string(d.join("f.md")).unwrap(),
+        "---\n# keep\ntitle: x\ntags: [c, b] # n\n---\n"
+    );
+    run(d, &["remove", "f.md", "--tag", "b"]);
+    run(d, &["append", "f.md", "--property", "tags=z"]);
+    assert_eq!(
+        fs::read_to_string(d.join("f.md")).unwrap(),
+        "---\n# keep\ntitle: x\ntags: [c, z] # n\n---\n"
+    );
+    write_md(
+        d,
+        "g.md",
+        "---\n# keep\ntags:\n  # first\n  - a\n  - b\n---\n",
+    );
+    let (_, err, _) = run(d, &["tags", "rename", "--from", "a", "--to", "q"]);
+    assert!(!err.contains("rewriting the entire"), "{err}");
+    assert_eq!(
+        fs::read_to_string(d.join("g.md")).unwrap(),
+        "---\n# keep\ntags:\n  # first\n  - q\n  - b\n---\n"
+    );
+}
+
+#[test]
+fn r12_read_section_finds_a_heading_after_a_bom() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join("h.md"),
+        b"\xef\xbb\xbf# Title\ntext\n## Part\nbody\n",
+    )
+    .unwrap();
+    let out = run_text(d, &["read", "h.md", "--section", "Title"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("text"));
+}
+
+#[test]
+fn r13_a_padded_relative_wikilink_keeps_its_form_through_mv_and_links_fix() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    write_md(d, "Tgt.md", "# t\n");
+    write_md(d, "sub/m.md", "[[ ../Tgt ]]\n");
+    run(d, &["mv", "sub/m.md", "--to", "deep/er/m.md"]);
+    assert_eq!(
+        fs::read_to_string(d.join("deep/er/m.md")).unwrap(),
+        "[[../../Tgt]]\n"
+    );
+    write_md(d, "sub/s.md", "---\nr: \"[[../tgt]]\"\n---\n[[../tgt]]\n");
+    run(d, &["links", "fix", "--apply"]);
+    assert_eq!(
+        fs::read_to_string(d.join("sub/s.md")).unwrap(),
+        "---\nr: \"[[../Tgt]]\"\n---\n[[../Tgt]]\n"
+    );
+}
+
+#[test]
+fn r14_a_mutating_command_refuses_a_lossy_argument() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path();
+        write_md(d, "a.md", "---\nt: 1\n---\n");
+        for dry in [false, true] {
+            let mut cmd = hyalo_no_hints();
+            cmd.current_dir(d).args(["set", "a.md", "--property"]);
+            cmd.arg(std::ffi::OsStr::from_bytes(b"t=\xff"));
+            if dry {
+                cmd.arg("--dry-run");
+            }
+            let out = cmd.output().unwrap();
+            assert_eq!(out.status.code(), Some(1), "dry={dry}: {out:?}");
+        }
+        assert_eq!(
+            fs::read_to_string(d.join("a.md")).unwrap(),
+            "---\nt: 1\n---\n"
+        );
+    }
+}

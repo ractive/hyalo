@@ -109,7 +109,7 @@ static SEARCH_SETTINGS: OnceLock<SearchSettings> = OnceLock::new();
 /// it right after config resolution, before any command runs, which keeps the
 /// settings off the signature of every scanner, index builder and scorer.
 pub fn set_search_settings(settings: SearchSettings) {
-    if SEARCH_SETTINGS.set(settings).is_err() && search_settings() != settings {
+    if crate::discovery::install_once(&SEARCH_SETTINGS, settings) {
         // C-11: first call wins; say so rather than diverge silently.
         crate::warn::warn(
             "[search] settings were already installed for this process with different \

@@ -25,7 +25,7 @@ Group by root cause (DEC-389 to DEC-392); no new flags or config keys. Snapshot 
 | --- | --- | --- |
 | Snapshot used only when it describes the vault and the settings | A-5, A-6, A-12, A-18, C-16 | fixed, DEC-389 |
 | Exit codes, installers and generators | A-9, A-10, A-11, A-14, A-15, A-13 (init half), L-5, L-6, L-7, L-14, L-15, L-16, L-20, A-20 | fixed, DEC-390 |
-| Comments in frontmatter | A-8, A-16, A-17 | fixed (splice keeps header comments, trailing comments and flow lists) |
+| Comments in frontmatter | A-8, A-16, A-17 | fixed for the common shapes: header and comment-only blocks, a trailing comment on a scalar, on a single-line flow list and on a block item, comments between block items, `''` inside single quotes. Any remaining whole-block fallback (unmodellable YAML) now warns that every comment in the block is lost |
 | Relative wikilink form | M2 | fixed, DEC-391 |
 | Hostile input | C-3, C-4, C-5, C-6, C-8a, C-10, C-11, C-14, C-17, L-19 | fixed, DEC-392 |
 | Decided without a code change | A-13 (create-index), A-21, C-8b, C-9 | DEC-392 |

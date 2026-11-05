@@ -564,6 +564,7 @@ fn replacement_link_spans(text: &str) -> Vec<crate::links::LinkSpan> {
 /// `.md` suffix — it is stripped here). Returns `None` when the rebuild would
 /// be a no-op (the new bracket text is identical to the old), so callers can
 /// skip emitting an empty replacement.
+#[cfg(test)]
 pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str) -> Option<String> {
     rewrite_frontmatter_wikilink_text_from(occ_target, new_ref, None)
 }

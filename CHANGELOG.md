@@ -138,11 +138,14 @@ and this project adheres to
   fixed in place is picked up, and the staleness probe looks inside a hidden
   directory that `[scan] include` admits. A snapshot written by a newer binary
   is refused like an older one, and `create-index` no longer reuses its
-  entries. The snapshot format is now 10: rebuild with `hyalo create-index`.
+  entries. A named `lint FILE --index` repairs the drift too, so HYALO006 sees
+  a deleted target. The snapshot format is now 10: rebuild with `hyalo create-index`.
 - Frontmatter comments survive writes: removing the last key keeps the block's
   own comments, `set` on a comment-only block keeps them, a trailing `# note`
-  stays on a changed scalar or a renamed tag, and `tags rename` keeps a flow
-  list flow with the untouched items' quoting.
+  stays on a changed scalar, a renamed tag or a flow list, comments between
+  block-list items stay put, and `tags rename` keeps a flow list flow with the
+  untouched items' quoting. A whole-block rewrite that is still needed now warns
+  that every comment in the block is lost.
 - `init` refuses a `.hyalo.toml` that does not parse (exit 1, nothing created)
   instead of replacing it with `dir = ...`, and reports a byte-identical config
   as `unchanged`. `deinit` keeps a `.hyalo.toml` that holds more than `dir`.
@@ -157,8 +160,10 @@ and this project adheres to
   as a heading or a link definition; a fenced example is not mistaken for the
   footer or a version heading.
 - `append` onto a mapping exits 1, not 2.
-- `[lint.rules.X] severity` must be `error` or `warn`; `eror` made the config
-  unusable instead of reading as `warn` and letting a CI gate pass.
+- `[lint.rules.X] severity` must be exactly `error`, `warn` or `warning`;
+  `eror` or `Error` makes `lint`, `find --strict` and `views run` refuse (like an
+  unloadable `[schema]`) instead of reading as `warn` and letting a CI gate
+  pass, and the message names `lint-rules set` for both repairs.
 - `new --file` requires `<stem>.md`; `\` is a path separator only on Windows
   in `new`, `okf`, `changelog`, `madr`, `--files-from` and `dir`.
 - `--jq` keeps leading empty-string outputs (`"", "", "a"` prints three lines).
@@ -171,7 +176,8 @@ and this project adheres to
   `# Title` after a BOM is its H1; `- [x]ample` is prose, not a checkbox; a
   line of `[a](` repeated 40 000 times takes 0.06 s instead of 11.7 s; a
   `language: de-CH` note is stemmed as German; a Windows-reserved name
-  (`CON.md`, `a:b.md`) is refused on Windows (DEC-392).
+  (`CON.md`, `a:b.md`) is refused on Windows; a mutating command refuses an
+  argument that is not valid UTF-8 instead of writing U+FFFD (DEC-392).
 
 ### Security
 

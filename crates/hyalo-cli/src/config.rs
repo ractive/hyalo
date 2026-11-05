@@ -1105,13 +1105,6 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         return ResolvedDefaults::dir_out_of_bounds_for(dir, boundary_err.diagnostic());
     }
 
-    // L-5: a `severity` that is not `error` or `warn` used to be read as warn
-    // without a word, so a CI gate the author believed was an error never
-    // failed. `lint-rules set` validates; a hand-edited file gets the same.
-    if let Some(diagnostic) = invalid_lint_severity(cfg.lint.as_ref()) {
-        return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
-    }
-
     // Deprecation: warn when the kebab-case `required-sections` key is used.
     // The canonical key is `required_sections`; the alias is kept for one
     // release. Checked against the already-parsed `[schema]` value (which the
@@ -1159,6 +1152,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .or(cfg.validate_on_write)
         .unwrap_or(false);
     let (schema, schema_invalid) = parse_schema_from_toml(cfg.schema.as_ref());
+    // L-5 (DEC-390): a severity the engine would read as warn is the same kind
+    // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
+    // `hyalo config` reports it, a plain write is unaffected.
+    let schema_invalid = match (schema_invalid, invalid_lint_severity(cfg.lint.as_ref())) {
+        (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
+        (schema, severity) => schema.or(severity),
+    };
 
     // Parse [links] fields — borrow before moving.
     let (case_insensitive_mode, case_insensitive_resolve) = match parse_case_insensitive_setting(
@@ -1369,27 +1369,29 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
     }
 }
 
-/// Parse `[lint]` into a `hyalo_mdlint::LintConfig` for markdown body linting.
-///
-/// Rule IDs are not validated against the catalog here — any string is
-/// accepted as a key, so forward-compat with newer rule IDs is preserved.
-/// Only unexpected value types (neither bool nor table) emit a warning.
-/// The diagnostic for the first `[lint.rules.X] severity` that is not `error`
-/// or `warn`, or `None` when every one is valid.
+/// The diagnostic for the first `[lint.rules.X] severity` that is not exactly
+/// `error`, `warn` or the historic `warning` (read as warn), or `None` when
+/// every one is valid. The engine matches case-sensitively, so `Error` is as
+/// invalid as `eror`. Both repairs are named; neither is picked for the user.
 fn invalid_lint_severity(lint: Option<&LintConfig>) -> Option<String> {
     let rules = lint?.rules.as_ref()?.as_table()?;
     rules.iter().find_map(|(rule_id, value)| {
         let severity = value.as_table()?.get("severity")?;
         match severity.as_str() {
-            Some(s) if s.eq_ignore_ascii_case("error") || s.eq_ignore_ascii_case("warn") => None,
+            Some("error" | "warn" | "warning") => None,
             _ => Some(format!(
-                "malformed .hyalo.toml: [lint.rules.{rule_id}] severity must be \"error\" or \
-                 \"warn\", found {severity}\n  fix: `hyalo lint-rules set {rule_id} --severity error`"
+                "[lint.rules.{rule_id}] severity must be \"error\" or \"warn\", found {severity}; \
+                 repair with `hyalo lint-rules set {rule_id} --severity warn` or `--severity error`"
             )),
         }
     })
 }
 
+/// Parse `[lint]` into a `hyalo_mdlint::LintConfig` for markdown body linting.
+///
+/// Rule IDs are not validated against the catalog here — any string is
+/// accepted as a key, so forward-compat with newer rule IDs is preserved.
+/// Only unexpected value types (neither bool nor table) emit a warning.
 fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
     let Some(lc) = raw else {
         return hyalo_mdlint::LintConfig::default();

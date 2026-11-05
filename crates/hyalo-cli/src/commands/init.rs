@@ -1362,16 +1362,20 @@ fn deinitialize_observed(
         // views, lint rules, a profile) is the user's work, and deleting it
         // took all of that with it; one that does not parse is kept as well.
         let toml_path = root.join(".hyalo.toml");
-        let hand_written = fs::read_to_string(&toml_path).is_ok_and(|text| {
-            text.parse::<toml_edit::DocumentMut>()
+        // R7: any read failure other than "not there" (a stray non-UTF-8 byte,
+        // a permission error) keeps the file: it cannot be shown to be ours.
+        let keep_reason = match fs::read_to_string(&toml_path) {
+            Ok(text) => text
+                .parse::<toml_edit::DocumentMut>()
                 .map_or(true, |doc| doc.iter().any(|(key, _)| key != "dir"))
-        });
-        if hand_written {
-            report.push_detail(
-                "skipped",
-                ".hyalo.toml",
-                "holds settings beyond `dir`; delete it yourself if you want it gone",
-            );
+                .then_some("holds settings beyond `dir`; delete it yourself if you want it gone"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => Some(
+                "could not be read as UTF-8 text; kept, delete it yourself if you want it gone",
+            ),
+        };
+        if let Some(reason) = keep_reason {
+            report.push_detail("skipped", ".hyalo.toml", reason);
         } else {
             remove_artifact(root, &toml_path, ".hyalo.toml", &mut report)?;
         }

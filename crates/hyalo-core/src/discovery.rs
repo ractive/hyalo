@@ -103,11 +103,15 @@ pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
             patterns: kept,
         })
     };
-    let patterns_installed = compiled.as_ref().map(|exclude| exclude.patterns.clone());
-    if let Err(ignored) = SCAN_EXCLUDE.set(compiled)
-        && ignored.as_ref().map(|exclude| &exclude.patterns) != patterns_installed.as_ref()
-    {
-        warn_ignored_global("[scan] exclude");
+    // `ScanExclude` has no `PartialEq` of its own; its patterns identify it.
+    let wanted = compiled.as_ref().map(|exclude| exclude.patterns.clone());
+    if SCAN_EXCLUDE.set(compiled).is_err() {
+        let installed = SCAN_EXCLUDE
+            .get()
+            .and_then(|exclude| exclude.as_ref().map(|e| &e.patterns));
+        if installed != wanted.as_ref() {
+            warn_ignored_global("[scan] exclude");
+        }
     }
     errors
 }
@@ -300,8 +304,17 @@ static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 /// keeps the setting off the signature of every resolver, index builder and
 /// graph pass that would otherwise have to forward it.
 pub fn set_link_aliases(enabled: bool) {
-    if LINK_ALIASES.set(enabled).is_err() && link_aliases_enabled() != enabled {
+    if install_once(&LINK_ALIASES, enabled) {
         warn_ignored_global("[links] aliases");
+    }
+}
+
+/// Install `value` in a first-call-wins cell. Returns `true` when the cell
+/// already held a *different* value, which the caller reports (C-11).
+pub(crate) fn install_once<T: PartialEq>(cell: &OnceLock<T>, value: T) -> bool {
+    match cell.set(value) {
+        Ok(()) => false,
+        Err(wanted) => cell.get() != Some(&wanted),
     }
 }
 
@@ -359,11 +372,14 @@ pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
             patterns: patterns.to_vec(),
         })
     };
-    let patterns_installed = compiled.as_ref().map(|include| include.patterns.clone());
-    if let Err(ignored) = SCAN_INCLUDE.set(compiled)
-        && ignored.as_ref().map(|include| &include.patterns) != patterns_installed.as_ref()
-    {
-        warn_ignored_global("[scan] include");
+    let wanted = compiled.as_ref().map(|include| include.patterns.clone());
+    if SCAN_INCLUDE.set(compiled).is_err() {
+        let installed = SCAN_INCLUDE
+            .get()
+            .and_then(|include| include.as_ref().map(|i| &i.patterns));
+        if installed != wanted.as_ref() {
+            warn_ignored_global("[scan] include");
+        }
     }
     errors
 }
@@ -3317,6 +3333,20 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn install_once_reports_only_a_conflicting_second_install() {
+        // C-11, R5: `OnceLock::set` hands back the *rejected* value, so the
+        // comparison has to be against what the cell holds.
+        let cell = OnceLock::new();
+        assert!(!install_once(&cell, 1));
+        assert!(
+            !install_once(&cell, 1),
+            "the same value again is not a conflict"
+        );
+        assert!(install_once(&cell, 2), "a different value is");
+        assert_eq!(cell.get(), Some(&1), "first call wins");
+    }
+
     use super::*;
     use std::fs;
 

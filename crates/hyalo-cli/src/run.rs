@@ -18,10 +18,6 @@ use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::OutputPipeline;
 use hyalo_core::index::SnapshotIndex;
 
-/// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
-/// accepts an ephemeral `--profile` overlay today; the scan-include installer
-/// consults this so a `--profile skills` run reaches `.claude/skills/` even on
-/// a vault not yet initialized with the profile.
 /// Whether two frontmatter-link allow-lists scan the same properties (`None`
 /// is every value; order does not matter).
 pub(crate) fn same_link_props(a: Option<&[String]>, b: Option<&[String]>) -> bool {
@@ -40,6 +36,10 @@ pub(crate) fn same_link_props(a: Option<&[String]>, b: Option<&[String]>) -> boo
     }
 }
 
+/// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
+/// accepts an ephemeral `--profile` overlay today; the scan-include installer
+/// consults this so a `--profile skills` run reaches `.claude/skills/` even on
+/// a vault not yet initialized with the profile.
 fn active_profile_name(command: &Commands) -> Option<&str> {
     match command {
         Commands::Lint {
@@ -136,6 +136,14 @@ fn emit_init_failure(
         .collect::<Vec<_>>()
         .join(": ");
     diagnostic.cause = (!cause.is_empty()).then_some(cause);
+    // R4: a user-facing refusal (an unparsable config) carries its own hint
+    // and cause, which the chain does not.
+    if let Some(user) = failure.error.downcast_ref::<hyalo_core::UserFacingError>() {
+        diagnostic.hint.clone_from(&user.hint);
+        if user.cause.is_some() {
+            diagnostic.cause.clone_from(&user.cause);
+        }
+    }
     diagnostic.category = Some("mutation_failure");
     diagnostic.effects = Some(failure.report.effects());
     let code =
@@ -818,6 +826,7 @@ fn run_inner() -> Result<(), AppError> {
     // C-3: `std::env::args()` panics on a non-UTF-8 argument. Read it lossily
     // and say so; the usual "no such file" answer follows from clap or the
     // command, with exit 1 rather than an abort.
+    let mut lossy_argument: Option<String> = None;
     let raw_args: Vec<String> = std::env::args_os()
         .map(|arg| match arg.into_string() {
             Ok(arg) => arg,
@@ -827,6 +836,7 @@ fn run_inner() -> Result<(), AppError> {
                     "argument {lossy:?} is not valid UTF-8; reading it lossily (a note named \
                      with non-UTF-8 bytes cannot be addressed)"
                 ));
+                lossy_argument.get_or_insert(lossy.clone());
                 lossy
             }
         })
@@ -1375,6 +1385,24 @@ fn run_inner() -> Result<(), AppError> {
             .then_some(config.schema_invalid.as_deref())
             .flatten()
     });
+    // R14: a lossy read answers "no such file"; a lossy *write* would store
+    // U+FFFD in place of the bytes the caller meant. A dry run is the same
+    // command and refuses the same way.
+    if let Some(argument) = &lossy_argument
+        && (cli.command.writes() || cli.command.previews_write())
+    {
+        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+        return Err(AppError::User(crate::output::format_error(
+            fmt,
+            &format!(
+                "refusing to run a mutating command with an argument that is not valid UTF-8 \
+                 ({argument:?}); nothing was written"
+            ),
+            None,
+            Some("pass the value as UTF-8"),
+            None,
+        )));
+    }
     let previews_write = config.malformed.is_some() && cli.command.previews_write();
     if let Some(diagnostic) = gate_diagnostic
         && (cli.command.writes()

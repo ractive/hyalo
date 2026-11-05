@@ -1692,7 +1692,7 @@ pub fn check_frontmatter_size_budget(
 /// silently — the user must be able to tell reformatting churn from a bug.
 fn warn_full_frontmatter_rewrite(path: &Path, reason: FallbackReason) {
     crate::warn::warn(format!(
-        "{}: rewriting the entire frontmatter block because {}; formatting of untouched keys may change",
+        "{}: rewriting the entire frontmatter block because {}; formatting of untouched keys may change and every comment in the block is lost",
         path.display(),
         reason.as_str()
     ));

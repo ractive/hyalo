@@ -376,10 +376,6 @@ impl LinkWriter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 /// The wikilink path from the folder of `source_rel` to `target_stem` (both
 /// vault-relative, forward slashes): `../` once per folder walked up, `./` in
 /// front when it does not walk up at all.
@@ -407,6 +403,10 @@ pub(crate) fn relative_wikilink_path(source_rel: &str, target_stem: &str) -> Str
     out.push_str(name[0]);
     out
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

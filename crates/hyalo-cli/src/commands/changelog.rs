@@ -322,7 +322,13 @@ fn fence_mask(lines: &[String]) -> Vec<bool> {
 /// A line that opens a block of its own in Markdown: an ATX heading, a link
 /// reference definition, a thematic break or a fence.
 fn is_block_construct(line: &str) -> bool {
-    line.starts_with('#')
+    let hashes = line.bytes().take_while(|b| *b == b'#').count();
+    let atx_heading = (1..=6).contains(&hashes)
+        && line[hashes..]
+            .chars()
+            .next()
+            .is_none_or(|c| c == ' ' || c == '\t');
+    atx_heading
         || link_def_label(line).is_some()
         || line.starts_with("```")
         || line.starts_with("~~~")
@@ -799,11 +805,12 @@ fn run_add_with_journal(
         insert_at
     };
 
-    // L-16: a continuation line is hanging-indented under its bullet, but a
-    // heading or a link definition needs only up to three spaces of indent
-    // to be one — a message must not smuggle either into the changelog.
-    if let Some(line) = message
-        .lines()
+    let entry_lines = render_entry(message.trim(), wrap);
+    // L-16, R11: a continuation line is hanging-indented under its bullet, but
+    // a heading or a link definition needs only up to three spaces of indent
+    // to be one. The rendered lines are what lands in the file, wrapped or not.
+    if let Some(line) = entry_lines
+        .iter()
         .skip(1)
         .find(|line| is_block_construct(line.trim_start()))
     {
@@ -818,8 +825,6 @@ fn run_add_with_journal(
             None,
         ));
     }
-
-    let entry_lines = render_entry(message.trim(), wrap);
     insert_entry(&mut cl, unreleased_idx, canonical, &entry_lines);
 
     let new_content = cl.render();
@@ -960,20 +965,20 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, entry
     // producing a non-conformant file that then fails its own lint (RB-4). We
     // therefore also stop at the first footer link-ref line so entries always
     // land inside the section body.
+    // R3: a fenced example in the section is not its end, nor a heading.
+    let fenced = fence_mask(&cl.lines);
     let section_end = cl
         .lines
         .iter()
         .enumerate()
         .skip(unreleased_idx + 1)
-        .find(|(_, l)| l.starts_with("## ") || link_def_label(l).is_some())
+        .find(|(i, l)| !fenced[*i] && (l.starts_with("## ") || link_def_label(l).is_some()))
         .map_or(cl.lines.len(), |(i, _)| i);
 
     let cat_heading = format!("### {category}");
     // Locate an existing `### <category>` within the section.
-    let cat_idx = cl.lines[unreleased_idx + 1..section_end]
-        .iter()
-        .position(|l| l.trim() == cat_heading)
-        .map(|rel| unreleased_idx + 1 + rel);
+    let cat_idx = (unreleased_idx + 1..section_end)
+        .find(|&i| !fenced[i] && cl.lines[i].trim() == cat_heading);
 
     if let Some(cat_idx) = cat_idx {
         // Insert after the *complete* last bullet block under this category

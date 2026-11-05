@@ -35,7 +35,8 @@ use crate::index::VaultIndex;
 use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
-    find_frontmatter_wikilinks, rewrite_frontmatter_alias_text, rewrite_frontmatter_wikilink_text,
+    find_frontmatter_wikilinks, rewrite_frontmatter_alias_text,
+    rewrite_frontmatter_wikilink_text_from,
 };
 use crate::link_score::{self, candidate_confidence_with_claim};
 use crate::link_target::TargetParts;
@@ -1984,7 +1985,11 @@ fn build_replacements_for_file(
                         let rewritten = if fix.strategy == FixStrategy::Alias {
                             rewrite_frontmatter_alias_text(occ.target, &fix.new_target)
                         } else {
-                            rewrite_frontmatter_wikilink_text(occ.target, &fix.new_target)
+                            rewrite_frontmatter_wikilink_text_from(
+                                occ.target,
+                                &fix.new_target,
+                                Some(source_rel),
+                            )
                         };
                         // B-12 / A-1: the bytes written between the brackets are
                         // what `emitted_target` reports for a frontmatter link,
@@ -2067,14 +2072,39 @@ fn build_replacements_for_file(
                     // Use stem (without .md) for wikilinks; wikilink targets
                     // are vault-relative as written, so the plan's target is
                     // already in the right coordinate system.
-                    let path_text = crate::link_write::encode_destination(
-                        strip_md_suffix(&fix.new_target),
-                        LinkKind::Wikilink,
-                    );
-                    let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
+                    let raw_target = &line[span.target_start..span.target_end];
+                    // R13 (DEC-391): a link written relative to its note's
+                    // folder stays relative, from where the note sits.
+                    let written_relative = {
+                        let written = TargetParts::split(raw_target).path.trim_start();
+                        written.starts_with("./") || written.starts_with("../")
+                    };
+                    let (path_text, ok) = if written_relative {
+                        let relative = crate::link_write::relative_wikilink_path(
+                            source_rel,
+                            strip_md_suffix(&fix.new_target),
+                        );
+                        let reads_back = normalize_target(Path::new(source_rel), &relative)
+                            .strip_suffix(".md")
+                            .map_or_else(
+                                || normalize_target(Path::new(source_rel), &relative),
+                                str::to_owned,
+                            )
+                            == strip_md_suffix(&fix.new_target);
+                        (
+                            crate::link_write::encode_destination(&relative, LinkKind::Wikilink),
+                            reads_back,
+                        )
+                    } else {
+                        let path_text = crate::link_write::encode_destination(
+                            strip_md_suffix(&fix.new_target),
+                            LinkKind::Wikilink,
+                        );
+                        let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
+                        (path_text, ok)
+                    };
                     // R6 (iter-322): the `?query` the reader strips stays as
                     // written, exactly as `mv` and the frontmatter writer keep it.
-                    let raw_target = &line[span.target_start..span.target_end];
                     let query_tail = if path_text.contains('?') {
                         ""
                     } else {
