@@ -787,6 +787,7 @@ fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<C
             effective_format,
             allow_outside_vault,
             ctx.config_language,
+            ctx.frontmatter_link_props,
             force,
         ),
         Commands::DropIndex {

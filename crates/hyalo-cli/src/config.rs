@@ -741,7 +741,7 @@ fn validate_project_local_dir(
         reason,
     };
 
-    let raw_norm = raw_dir.replace('\\', "/");
+    let raw_norm = hyalo_core::discovery::native_separator_to_forward_slash(raw_dir).into_owned();
     if Path::new(&raw_norm).is_absolute() || raw_norm.starts_with('/') {
         return Err(err(DirBoundaryReason::Absolute));
     }
@@ -798,7 +798,7 @@ fn validate_project_local_dir(
 /// exactly like writing `"kb"` directly, matching how every existing `dir`
 /// value (which never contained `..`) already behaved.
 fn lexically_normalize_relative(raw: &str) -> PathBuf {
-    let raw_norm = raw.replace('\\', "/");
+    let raw_norm = hyalo_core::discovery::native_separator_to_forward_slash(raw).into_owned();
     let mut out = PathBuf::new();
     for comp in Path::new(&raw_norm).components() {
         match comp {
@@ -1152,6 +1152,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .or(cfg.validate_on_write)
         .unwrap_or(false);
     let (schema, schema_invalid) = parse_schema_from_toml(cfg.schema.as_ref());
+    // L-5 (DEC-390): a severity the engine would read as warn is the same kind
+    // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
+    // `hyalo config` reports it, a plain write is unaffected.
+    let schema_invalid = match (schema_invalid, invalid_lint_severity(cfg.lint.as_ref())) {
+        (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
+        (schema, severity) => schema.or(severity),
+    };
 
     // Parse [links] fields — borrow before moving.
     let (case_insensitive_mode, case_insensitive_resolve) = match parse_case_insensitive_setting(
@@ -1360,6 +1367,24 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
             (SchemaConfig::default(), Some(e))
         }
     }
+}
+
+/// The diagnostic for the first `[lint.rules.X] severity` that is not exactly
+/// `error`, `warn` or the historic `warning` (read as warn), or `None` when
+/// every one is valid. The engine matches case-sensitively, so `Error` is as
+/// invalid as `eror`. Both repairs are named; neither is picked for the user.
+fn invalid_lint_severity(lint: Option<&LintConfig>) -> Option<String> {
+    let rules = lint?.rules.as_ref()?.as_table()?;
+    rules.iter().find_map(|(rule_id, value)| {
+        let severity = value.as_table()?.get("severity")?;
+        match severity.as_str() {
+            Some("error" | "warn" | "warning") => None,
+            _ => Some(format!(
+                "[lint.rules.{rule_id}] severity must be \"error\" or \"warn\", found {severity}; \
+                 repair with `hyalo lint-rules set {rule_id} --severity warn` or `--severity error`"
+            )),
+        }
+    })
 }
 
 /// Parse `[lint]` into a `hyalo_mdlint::LintConfig` for markdown body linting.

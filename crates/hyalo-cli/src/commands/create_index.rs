@@ -30,7 +30,7 @@ use crate::output::{CommandOutcome, Format, output_value};
 /// unchanged — the snapshot file itself is left untouched rather than
 /// rewritten byte-for-byte identical content (`results.written: false`,
 /// iter-313).
-#[allow(clippy::fn_params_excessive_bools)]
+#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub fn create_index(
     dir: &Path,
     site_prefix: Option<&str>,
@@ -38,6 +38,7 @@ pub fn create_index(
     format: Format,
     allow_outside_vault: bool,
     default_language: Option<&str>,
+    frontmatter_link_props: Option<&[String]>,
     force: bool,
 ) -> Result<CommandOutcome> {
     // Determine output path
@@ -121,6 +122,14 @@ pub fn create_index(
     } else {
         SnapshotIndex::load_for_reuse(&index_path)
             .filter(|prev| prev.validate(&vault_dir_str, site_prefix))
+            // A-6: entries scanned under another `[links] frontmatter`
+            // setting hold the wrong link set; re-scan them all.
+            .filter(|prev| {
+                crate::run::same_link_props(
+                    hyalo_core::index::VaultIndex::frontmatter_link_props(prev),
+                    frontmatter_link_props,
+                )
+            })
     };
     let mut old_bm25 = previous.as_mut().and_then(SnapshotIndex::take_bm25_index);
     if old_bm25.is_none() {
@@ -148,7 +157,7 @@ pub fn create_index(
             scan_body: true,
             bm25_tokenize: true,
             default_language,
-            frontmatter_link_props: None,
+            frontmatter_link_props,
         },
         true,
         &reuse,
@@ -182,6 +191,7 @@ pub fn create_index(
                     format,
                     allow_outside_vault,
                     default_language,
+                    frontmatter_link_props,
                     true,
                 );
             }

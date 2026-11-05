@@ -128,10 +128,11 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<(usize
     let syntax = BodySyntax::new(&body_lines.join("\n"));
 
     for (index, line) in body_lines.iter().enumerate() {
-        let visible = syntax.visible_line(index + 1).unwrap_or(line);
+        // R12: a BOM in front of `# Title` is not part of the heading.
+        let visible = without_bom(index, syntax.visible_line(index + 1).unwrap_or(line));
 
         if let Some((level, _)) = parse_atx_heading(visible) {
-            let text = parse_atx_heading(line).map_or("", |(_, text)| text);
+            let text = parse_atx_heading(without_bom(index, line)).map_or("", |(_, text)| text);
             // Flush current section if a heading of equal or higher level is encountered
             if let Some((sec_level, start, sec_lines)) = current_section.take() {
                 if level <= sec_level {
@@ -161,14 +162,23 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<(usize
     sections
 }
 
+/// `line` without a leading BOM when it is the first line of the body.
+fn without_bom(index: usize, line: &str) -> &str {
+    if index == 0 {
+        line.strip_prefix('\u{feff}').unwrap_or(line)
+    } else {
+        line
+    }
+}
+
 /// Collect all heading texts from body lines (for error messages).
 fn collect_headings(body_lines: &[String]) -> Vec<String> {
     let syntax = BodySyntax::new(&body_lines.join("\n"));
     let mut headings = Vec::new();
     for (index, line) in body_lines.iter().enumerate() {
-        let visible = syntax.visible_line(index + 1).unwrap_or(line);
+        let visible = without_bom(index, syntax.visible_line(index + 1).unwrap_or(line));
         if let Some((level, _)) = parse_atx_heading(visible) {
-            let text = parse_atx_heading(line).map_or("", |(_, text)| text);
+            let text = parse_atx_heading(without_bom(index, line)).map_or("", |(_, text)| text);
             let hashes = "#".repeat(level as usize);
             headings.push(format!("{hashes} {text}"));
         }

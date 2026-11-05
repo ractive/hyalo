@@ -313,35 +313,12 @@ impl LinkWriter {
         match form {
             WrittenForm::Bare => new_basename_stem.to_string(),
             WrittenForm::PathRelative => new_stem.to_string(),
-            WrittenForm::DotRelative => {
-                // DotRelative (`[[./foo]]`) means the user wrote the target with
-                // an explicit `./` prefix. Preserve the `./` form when the new
-                // target is reachable from the linker's directory via `./…`.
-                //
-                // Same-directory case: source_dir == new_dir → `./{basename}`.
-                // Cross-directory case (NEW-2): if new_stem starts with
-                // `source_dir/`, emit `./tail` where tail is the portion after
-                // the source dir prefix. This handles moves like
-                // `mv bulk/f.md bulk/g.md` from `linker.md` with `[[./bulk/f]]`
-                // — source_dir="" and new_stem="bulk/g", so tail="bulk/g" and
-                // the result is `./bulk/g`, preserving the `./` prefix.
-                // When neither condition holds, fall back to PathRelative (full
-                // vault-relative stem), which is always unambiguous.
-                let source_dir = source_rel.rsplit_once('/').map_or("", |(d, _)| d);
-                let new_dir = new_stem.rsplit_once('/').map_or("", |(d, _)| d);
-                if source_dir == new_dir {
-                    // Same directory: keep `./basename`.
-                    format!("./{new_basename_stem}")
-                } else if source_dir.is_empty() {
-                    // Linker is at vault root; any target is reachable as `./path`.
-                    format!("./{new_stem}")
-                } else if let Some(tail) = new_stem.strip_prefix(&format!("{source_dir}/")) {
-                    // New target is under the linker's directory: `./tail`.
-                    format!("./{tail}")
-                } else {
-                    // Different directory hierarchy — upgrade to PathRelative.
-                    new_stem.to_string()
-                }
+            WrittenForm::DotRelative | WrittenForm::ParentRelative => {
+                // A link authored relative to its note's folder (`[[./foo]]`,
+                // `[[../foo]]`) stays relative from wherever either end now
+                // sits (DEC-391): the path from the linker's directory to the
+                // new target, `./` in front when it does not walk up.
+                relative_wikilink_path(source_rel, new_stem)
             }
             WrittenForm::MdSuffixed => {
                 // MdSuffixed: preserve the `.md` suffix on the basename only.
@@ -397,6 +374,34 @@ impl LinkWriter {
             relative_path_between(source_rel, styled_target)
         }
     }
+}
+
+/// The wikilink path from the folder of `source_rel` to `target_stem` (both
+/// vault-relative, forward slashes): `../` once per folder walked up, `./` in
+/// front when it does not walk up at all.
+pub(crate) fn relative_wikilink_path(source_rel: &str, target_stem: &str) -> String {
+    let source_dir: Vec<&str> = source_rel
+        .rsplit_once('/')
+        .map_or(Vec::new(), |(dir, _)| dir.split('/').collect());
+    let target: Vec<&str> = target_stem.split('/').collect();
+    let (target_dir, name) = target.split_at(target.len() - 1);
+    let common = source_dir
+        .iter()
+        .zip(target_dir)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ups = source_dir.len() - common;
+    let mut out = if ups == 0 {
+        String::from("./")
+    } else {
+        "../".repeat(ups)
+    };
+    for part in &target_dir[common..] {
+        out.push_str(part);
+        out.push('/');
+    }
+    out.push_str(name[0]);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -522,10 +527,9 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dot_relative_wikilink_upgrades_to_path_when_linker_nested() {
+    fn rewrite_dot_relative_wikilink_stays_relative_when_linker_nested() {
         // [[./b]] — source at sub/a.md (nested linker). New target moves to
-        // other/b.md. source_dir="sub", new_stem="other/b", "other/b" does NOT
-        // start with "sub/" → upgrade to PathRelative.
+        // other/b.md, which is not below sub/ → the link walks up (DEC-391).
         let line = "See [[./b]] here";
         let span = span_from(line, 0);
         let r = LinkWriter::rewrite(
@@ -537,7 +541,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(r.new_text, "[[other/b]]");
+        assert_eq!(r.new_text, "[[../other/b]]");
     }
 
     #[test]
@@ -822,7 +826,7 @@ mod tests {
 
     #[test]
     fn roundtrip_dot_relative_nested_linker_different_dir() {
-        // [[./b]] in notes/, target moves to other/b.md — upgrade to PathRelative
+        // [[./b]] in notes/, target moves to other/b.md — stays relative (DEC-391)
         let line = "[[./b]]";
         let span = span_from(line, 0);
         let r = LinkWriter::rewrite(
@@ -834,9 +838,9 @@ mod tests {
             None,
         )
         .unwrap();
-        // notes/ does not prefix other/b → upgrade to path-relative
-        assert_eq!(r.new_text, "[[other/b]]");
-        assert_eq!(round_trip_target(&r.new_text), "other/b");
+        // notes/ does not prefix other/b → the link walks up one folder
+        assert_eq!(r.new_text, "[[../other/b]]");
+        assert_eq!(round_trip_target(&r.new_text), "../other/b");
     }
 
     #[test]

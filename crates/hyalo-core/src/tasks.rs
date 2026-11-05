@@ -64,6 +64,11 @@ pub fn detect_task_checkbox(line: &str) -> Option<(char, bool)> {
     if close != ']' {
         return None;
     }
+    // C-14: GFM and Obsidian need whitespace (or the end of the line) after
+    // `]`; `- [x]ample` is prose.
+    if chars.next().is_some_and(|after| !after.is_whitespace()) {
+        return None;
+    }
 
     let done = marker == 'x' || marker == 'X';
     Some((marker, done))
@@ -286,6 +291,7 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
 /// Replace the status char in a task line.
 /// Returns `(modified_line, TaskInfo)` if the line is a valid task, or `None`.
 fn mutate_task_line(line: &str, line_num: usize, new_status: char) -> Option<(String, TaskInfo)> {
+    detect_task_checkbox(line)?;
     let trimmed = line.trim_start();
 
     // Find list marker length (including the whitespace after it)
@@ -547,7 +553,8 @@ mod tests {
             "  - [ ] indented",
             "* [ ] star",
             "+ [ ] plus",
-            "- [ ]no space after bracket",
+            "- [ ]",
+            "- [x]\ttab after bracket",
         ] {
             assert!(
                 detect_task_checkbox(line).is_some(),
@@ -564,6 +571,8 @@ mod tests {
             "-[ ] no space after the dash",
             "1234567890. [ ] ten digits",
             "text - [ ] mid-line",
+            "- [ ]no space after bracket",
+            "- [x]ample",
         ] {
             assert!(
                 detect_task_checkbox(line).is_none(),

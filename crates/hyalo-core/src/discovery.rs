@@ -103,7 +103,16 @@ pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
             patterns: kept,
         })
     };
-    let _ = SCAN_EXCLUDE.set(compiled);
+    // `ScanExclude` has no `PartialEq` of its own; its patterns identify it.
+    let wanted = compiled.as_ref().map(|exclude| exclude.patterns.clone());
+    if SCAN_EXCLUDE.set(compiled).is_err() {
+        let installed = SCAN_EXCLUDE
+            .get()
+            .and_then(|exclude| exclude.as_ref().map(|e| &e.patterns));
+        if installed != wanted.as_ref() {
+            warn_ignored_global("[scan] exclude");
+        }
+    }
     errors
 }
 
@@ -198,6 +207,14 @@ pub fn reset_gitignore_dropped_count() {
     GITIGNORE_DROPPED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether `[scan] include` opens the hidden vault-relative directory `rel`
+/// (forward-slash, no trailing slash) to the walk. `.git` never is. The
+/// staleness probe asks this so it looks where discovery does (C-16).
+#[must_use]
+pub fn scan_include_allows_dir(rel: &str) -> bool {
+    matches!(SCAN_INCLUDE.get(), Some(Some(include)) if include.allows_dir(rel))
+}
+
 /// Compiled `[scan] include` configuration.
 #[derive(Clone)]
 struct ScanInclude {
@@ -208,6 +225,8 @@ struct ScanInclude {
     /// hidden directory: the walker enters a dir when it lies on the path to,
     /// or beneath, one of these prefixes.
     dir_prefixes: Vec<String>,
+    /// The configured globs, to tell a repeated install from a conflicting one.
+    patterns: Vec<String>,
 }
 
 impl ScanInclude {
@@ -285,7 +304,28 @@ static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 /// keeps the setting off the signature of every resolver, index builder and
 /// graph pass that would otherwise have to forward it.
 pub fn set_link_aliases(enabled: bool) {
-    let _ = LINK_ALIASES.set(enabled);
+    if install_once(&LINK_ALIASES, enabled) {
+        warn_ignored_global("[links] aliases");
+    }
+}
+
+/// Install `value` in a first-call-wins cell. Returns `true` when the cell
+/// already held a *different* value, which the caller reports (C-11).
+pub(crate) fn install_once<T: PartialEq>(cell: &OnceLock<T>, value: T) -> bool {
+    match cell.set(value) {
+        Ok(()) => false,
+        Err(wanted) => cell.get() != Some(&wanted),
+    }
+}
+
+/// C-11: the process-wide settings are first-call-wins, so a second call that
+/// carries a different value (an embedder or a multi-vault process) would
+/// otherwise be dropped without a word.
+fn warn_ignored_global(setting: &str) {
+    crate::warn::warn(format!(
+        "{setting} was already installed for this process with a different value; \
+         the new value is ignored"
+    ));
 }
 
 /// Whether frontmatter `aliases:` resolve links in this process. Defaults to
@@ -326,12 +366,21 @@ pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
                 Err(e) => errors.push((pat.clone(), e.to_string())),
             }
         }
-        builder
-            .build()
-            .ok()
-            .map(|set| ScanInclude { set, dir_prefixes })
+        builder.build().ok().map(|set| ScanInclude {
+            set,
+            dir_prefixes,
+            patterns: patterns.to_vec(),
+        })
     };
-    let _ = SCAN_INCLUDE.set(compiled);
+    let wanted = compiled.as_ref().map(|include| include.patterns.clone());
+    if SCAN_INCLUDE.set(compiled).is_err() {
+        let installed = SCAN_INCLUDE
+            .get()
+            .and_then(|include| include.as_ref().map(|i| &i.patterns));
+        if installed != wanted.as_ref() {
+            warn_ignored_global("[scan] include");
+        }
+    }
     errors
 }
 
@@ -3284,6 +3333,20 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn install_once_reports_only_a_conflicting_second_install() {
+        // C-11, R5: `OnceLock::set` hands back the *rejected* value, so the
+        // comparison has to be against what the cell holds.
+        let cell = OnceLock::new();
+        assert!(!install_once(&cell, 1));
+        assert!(
+            !install_once(&cell, 1),
+            "the same value again is not a conflict"
+        );
+        assert!(install_once(&cell, 2), "a different value is");
+        assert_eq!(cell.get(), Some(&1), "first call wins");
+    }
+
     use super::*;
     use std::fs;
 
@@ -3681,6 +3744,7 @@ mod tests {
         }
         ScanInclude {
             set: builder.build().unwrap(),
+            patterns: patterns.iter().map(|p| (*p).to_owned()).collect(),
             dir_prefixes,
         }
     }

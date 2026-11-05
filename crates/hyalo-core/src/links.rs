@@ -19,6 +19,10 @@ pub enum WrittenForm {
     PathRelative,
     /// `[[./note]]` — explicit current-directory prefix.
     DotRelative,
+    /// `[[../note]]` — relative to the linking note's folder, walking up
+    /// (DEC-384). Moving the note or its target rewrites it to the relative
+    /// path from where the note now sits (DEC-391).
+    ParentRelative,
     /// `[[note.md]]` — bare stem with `.md` suffix.
     MdSuffixed,
     /// `[text](/site/note.md)` — site-absolute path (markdown link only).
@@ -256,6 +260,31 @@ pub fn extract_links_and_self_anchors(
     extract_links_and_anchors(cleaned, original, out, Some(anchors));
 }
 
+/// The first unescaped `]` after an opener, remembered across the openers
+/// that precede it: for openers that only move forward, every one in front of a
+/// `]` finds that same `]`, so a line of 200 000 `[` is scanned once, not
+/// 200 000 times (C-6, R6).
+#[derive(Default)]
+struct LabelCloseScan {
+    /// Where the last scan started, and its answer (`None`: no `]` follows).
+    scanned: Option<(usize, Option<usize>)>,
+}
+
+impl LabelCloseScan {
+    /// Whether the label opened at `open` closes with a `]` that `(` follows.
+    fn closes_into_paren(&mut self, bytes: &[u8], open: usize) -> bool {
+        let close = match self.scanned {
+            Some((from, found)) if from <= open && found.is_none_or(|close| close > open) => found,
+            _ => {
+                let found = find_unescaped_byte(bytes, open + 1, b']');
+                self.scanned = Some((open, found));
+                found
+            }
+        };
+        close.is_some_and(|close| bytes.get(close + 1) == Some(&b'('))
+    }
+}
+
 fn extract_links_and_anchors(
     cleaned: &str,
     original: &str,
@@ -264,6 +293,7 @@ fn extract_links_and_anchors(
 ) {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
+    let mut label_scan = LabelCloseScan::default();
     let mut i = 0;
 
     while i < len {
@@ -320,7 +350,10 @@ fn extract_links_and_anchors(
         // reported as `attachment` when it resolves to a vault file, never a
         // graph edge, and visible when it resolves to nothing.
         // L-16: skip when the `[` is backslash-escaped.
+        // C-6, R6: a label that does not close into `(` is no link; the scan
+        // for its `]` is shared between the openers in front of one `]`.
         if bytes[i] == b'['
+            && label_scan.closes_into_paren(bytes, i)
             && !is_escaped(bytes, i)
             && let Some((mut link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
@@ -332,6 +365,7 @@ fn extract_links_and_anchors(
         // `[label](#Heading)` — a same-file anchor, not a file reference.
         if let Some(anchors) = anchors.as_deref_mut()
             && bytes[i] == b'['
+            && label_scan.closes_into_paren(bytes, i)
             && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
             && let Some((anchor, end)) = try_parse_self_anchor_markdown_at(cleaned, original, i)
@@ -377,9 +411,14 @@ fn extract_links_and_anchors(
 fn try_parse_autolink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     debug_assert_eq!(text.as_bytes().get(start), Some(&b'<'));
     let rest = text.get(start + 1..)?;
-    let close = rest.find('>')?;
+    // An autolink holds no whitespace and no `<`, so the scan ends at either
+    // (R6: a line of `<` repeated is not rescanned to its end for every one).
+    let close = rest.find(|c: char| c == '>' || c == '<' || c.is_whitespace())?;
+    if !rest[close..].starts_with('>') {
+        return None;
+    }
     let inner = &rest[..close];
-    if inner.is_empty() || inner.contains(char::is_whitespace) || !is_external_target(inner) {
+    if inner.is_empty() || !is_external_target(inner) {
         return None;
     }
     Some((
@@ -522,6 +561,9 @@ fn find_label_close_bracket(s: &str) -> Option<usize> {
     None
 }
 
+/// Deepest parenthesis nesting a bare link destination may hold (CommonMark).
+const MAX_DESTINATION_PAREN_DEPTH: usize = 32;
+
 /// Result of parsing a markdown link destination starting right after `(`.
 struct ParsedDestination<'a> {
     /// The raw target text (angle brackets stripped if the destination used
@@ -578,10 +620,6 @@ fn find_close_paren_after_destination(s: &str) -> Option<usize> {
 /// truncate the span) but not stored, since this file does not otherwise
 /// track link titles. Returns `None` if no closing `)` can be found for the
 /// destination.
-///
-/// Known CommonMark deviation: an unescaped `<` inside the angle form
-/// (`<foo<bar.md>`) should invalidate the destination per spec, but is
-/// accepted here; hyalo is not a full CommonMark parser elsewhere either.
 fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
     let bytes = rest.as_bytes();
     if bytes.first() == Some(&b'<') {
@@ -594,6 +632,10 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
                     close_angle = Some(i);
                     break;
                 }
+                // CommonMark: an unescaped `<` ends the attempt. It also keeps
+                // a line of `[a](<` repeated from rescanning to its end for
+                // every opener (R6).
+                b'<' if !is_escaped(bytes, i) => return None,
                 _ => i += 1,
             }
         }
@@ -646,6 +688,10 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
                 continue;
             }
             match byte {
+                // C-6: CommonMark caps parenthesis nesting in a destination
+                // at 32, which also keeps a line of `[a](` repeated from
+                // rescanning to its end for every opener.
+                b'(' if depth >= MAX_DESTINATION_PAREN_DEPTH => return None,
                 b'(' => depth += 1,
                 b')' if depth == 0 => {
                     return Some(ParsedDestination {

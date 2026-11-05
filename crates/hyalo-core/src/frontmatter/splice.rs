@@ -174,7 +174,16 @@ pub(super) fn splice_frontmatter(
         return SpliceOutcome::Fallback(FallbackReason::Unparseable);
     };
 
-    let Some((header, segments, footer)) = segment(yaml) else {
+    // A-16: a block of only comments and blank lines has no key to splice
+    // against, but its comments are still the author's — keep them as the
+    // header and write the new keys below.
+    let Some((header, segments, footer)) = segment(yaml).or_else(|| {
+        (original_map.is_empty() && yaml.split('\n').all(is_trivia)).then_some((
+            yaml,
+            Vec::new(),
+            "",
+        ))
+    }) else {
         return SpliceOutcome::Fallback(FallbackReason::NotSpanMappable);
     };
 
@@ -455,7 +464,106 @@ fn render_changed_segment(
             ListSpliceResult::NotApplicable => {}
         }
     }
-    serialize_one(key, new_value, compact_list_indent).ok_or(FallbackReason::SerializeFailed)
+    if let (Value::Array(old_items), Value::Array(new_items)) = (&seg.value, new_value)
+        && old_items.iter().all(is_inline_scalar)
+        && new_items.iter().all(is_inline_scalar)
+        && let Some(text) = rebuild_flow_list(seg.body, old_items, new_items)
+    {
+        return Ok(text);
+    }
+    let mut text = serialize_one(key, new_value, compact_list_indent)
+        .ok_or(FallbackReason::SerializeFailed)?;
+    // A-17: `status: single # keep` is still a commented line after the value
+    // changes. Only the one-line scalar shape is modelled; anything longer
+    // re-serializes as before.
+    if is_inline_scalar(&seg.value)
+        && is_inline_scalar(new_value)
+        && seg.body.trim_end_matches('\n').lines().count() == 1
+        && text.trim_end_matches('\n').lines().count() == 1
+        && let Some(comment) = trailing_comment(seg.body.trim_end_matches('\n'))
+    {
+        text.truncate(text.trim_end_matches('\n').len());
+        text.push_str(comment);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The ` # comment` suffix of `text[from..]` (the value part of a line), with
+/// the whitespace in front of the `#` included, or `None` when the value
+/// carries no comment outside its quotes. A single-quoted scalar escapes with
+/// `''` and a double-quoted one with `\` (R9).
+fn comment_suffix(text: &str, from: usize) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = from;
+    while i < bytes.len() {
+        match (quote, bytes[i]) {
+            (Some(b'"'), b'\\') => i += 1,
+            (Some(b'\''), b'\'') if bytes.get(i + 1) == Some(&b'\'') => i += 1,
+            (Some(q), b) if b == q => quote = None,
+            (None, b'\'' | b'"') if text[from..i].trim().is_empty() => quote = Some(bytes[i]),
+            (None, b'#') if i > from && bytes[i - 1].is_ascii_whitespace() => {
+                return Some(&text[text[..i].trim_end().len()..]);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The ` # comment` suffix of a one-line `key: value`, or `None`.
+fn trailing_comment(line: &str) -> Option<&str> {
+    comment_suffix(line, key_token_len(line)? + 1)
+}
+
+/// The ` # comment` suffix of a block-sequence item's text (the part after
+/// `- `), or `None`.
+fn item_comment(text: &str) -> Option<&str> {
+    comment_suffix(text, 0)
+}
+
+/// Rewrite a single-line `key: [a, b]` flow list to `new_items`, reusing the
+/// original token text of every item that survives and the list's own
+/// separator style, so a rename that collapses duplicates keeps the list flow
+/// and keeps the quoting of untouched items (A-17).
+fn rebuild_flow_list(body: &str, old_items: &[Value], new_items: &[Value]) -> Option<String> {
+    let (line, eol) = split_trailing_eol(body);
+    if body.split_inclusive('\n').count() != 1 || !is_single_line_flow(body) {
+        return None;
+    }
+    let FlowListLayout {
+        open_pos,
+        close_pos,
+        items,
+    } = parse_flow_list(line)?;
+    if items.len() != old_items.len() {
+        return None;
+    }
+    let inner = &line[open_pos + 1..close_pos];
+    let sep = detect_flow_separator(inner, &items);
+    let old_tokens: Vec<&str> = items.iter().map(|&(s, e)| inner[s..e].trim()).collect();
+    let mut used = vec![false; old_items.len()];
+    let mut tokens: Vec<String> = Vec::with_capacity(new_items.len());
+    for item in new_items {
+        let reuse = old_items
+            .iter()
+            .enumerate()
+            .find(|(i, old)| !used[*i] && *old == item);
+        if let Some((i, _)) = reuse {
+            used[i] = true;
+            tokens.push(old_tokens[i].to_owned());
+        } else {
+            tokens.push(render_scalar_item(item)?);
+        }
+    }
+    let mut out = String::with_capacity(line.len() + 8);
+    out.push_str(&line[..=open_pos]);
+    out.push_str(&tokens.join(sep));
+    out.push_str(&line[close_pos..]);
+    out.push_str(eol);
+    Some(out)
 }
 
 /// `true` for scalar YAML values (string/number/bool/null) — the only shapes
@@ -684,6 +792,23 @@ fn split_trailing_eol(line: &str) -> (&str, &str) {
     line.strip_suffix('\n').map_or((line, ""), |s| (s, "\n"))
 }
 
+/// Indices of the `- item` lines among a block list's lines, when every other
+/// line is a `# comment` (R10: comments between items stay where they are).
+/// `None` when the count disagrees with the authoritative parse or any other
+/// kind of line appears.
+fn dash_line_indices(item_lines: &[&str], item_count: usize) -> Option<Vec<usize>> {
+    let mut dashes = Vec::with_capacity(item_count);
+    for (i, line) in item_lines.iter().enumerate() {
+        let stripped = line.trim_end_matches(['\n', '\r']);
+        if split_dash_indent(stripped).is_some() {
+            dashes.push(i);
+        } else if !stripped.trim_start().starts_with('#') {
+            return None;
+        }
+    }
+    (dashes.len() == item_count).then_some(dashes)
+}
+
 /// Append one item to a block-style sequence (`key:\n  - a\n  - b\n`).
 ///
 /// `item_count` is the number of items the authoritative parse found;
@@ -706,13 +831,11 @@ fn append_block_item(body: &str, item_count: usize, new_item_text: &str) -> Opti
     }
 
     let item_lines: Vec<&str> = lines.collect();
-    if item_lines.len() != item_count {
-        return None;
-    }
+    let dashes = dash_line_indices(&item_lines, item_count)?;
 
     let mut indent: Option<&str> = None;
-    for line in &item_lines {
-        let stripped = line.trim_end_matches(['\n', '\r']);
+    for &at in &dashes {
+        let stripped = item_lines[at].trim_end_matches(['\n', '\r']);
         let (ind, _) = split_dash_indent(stripped)?;
         match indent {
             Some(prev) if prev != ind => return None,
@@ -747,18 +870,13 @@ fn remove_block_item(body: &str, item_count: usize, removed_index: usize) -> Opt
     }
 
     let item_lines: Vec<&str> = lines.collect();
-    if item_lines.len() != item_count || removed_index >= item_lines.len() {
-        return None;
-    }
-    for line in &item_lines {
-        let stripped = line.trim_end_matches(['\n', '\r']);
-        split_dash_indent(stripped)?;
-    }
+    let dashes = dash_line_indices(&item_lines, item_count)?;
+    let dropped = *dashes.get(removed_index)?;
 
     let mut out = String::with_capacity(body.len());
     out.push_str(key_line);
     for (i, line) in item_lines.iter().enumerate() {
-        if i != removed_index {
+        if i != dropped {
             out.push_str(line);
         }
     }
@@ -783,24 +901,28 @@ fn replace_block_item(
         return None;
     }
     let item_lines: Vec<&str> = lines.collect();
-    if item_lines.len() != item_count || index >= item_lines.len() {
-        return None;
-    }
-    let mut indents = Vec::with_capacity(item_lines.len());
-    for line in &item_lines {
-        let stripped = line.trim_end_matches(['\n', '\r']);
-        indents.push(split_dash_indent(stripped)?);
+    let dashes = dash_line_indices(&item_lines, item_count)?;
+    let target = *dashes.get(index)?;
+    let mut indents = vec![("", ""); item_lines.len()];
+    for &at in &dashes {
+        let stripped = item_lines[at].trim_end_matches(['\n', '\r']);
+        indents[at] = split_dash_indent(stripped)?;
     }
 
     let mut out = String::with_capacity(body.len() + item_text.len());
     out.push_str(key_line);
     for (i, line) in item_lines.iter().enumerate() {
-        if i == index {
-            let (indent, _) = indents[i];
-            let eol = &line[line.trim_end_matches(['\n', '\r']).len()..];
+        if i == target {
+            let (indent, old_text) = indents[i];
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let eol = &line[stripped.len()..];
             out.push_str(indent);
             out.push_str("- ");
             out.push_str(item_text);
+            // A-17: the comment on the replaced item's line stays.
+            if let Some(comment) = item_comment(old_text) {
+                out.push_str(comment);
+            }
             out.push_str(eol);
         } else {
             out.push_str(line);
@@ -843,6 +965,10 @@ struct FlowListLayout {
 /// shape, or an item contains a nested `[`/`{` (outside this splicer's
 /// simple model).
 fn parse_flow_list(content: &str) -> Option<FlowListLayout> {
+    // R10: a trailing `# comment` is not part of the list; positions stay
+    // valid in `content`, which the callers re-emit whole.
+    let content = trailing_comment(content)
+        .map_or(content, |comment| &content[..content.len() - comment.len()]);
     let colon = content.find(':')?;
     let value_part = content[colon + 1..].trim_start();
     if !value_part.starts_with('[') || !value_part.ends_with(']') {
@@ -1400,10 +1526,44 @@ mod tests {
     }
 
     #[test]
-    fn comment_only_block_falls_back() {
+    fn comment_only_block_keeps_its_comment_and_gains_the_key() {
+        // A-16: the block's comments are the author's.
         let yaml = "# nothing but a comment\n";
         let p = props(&[("title", json!("x"))]);
-        assert_eq!(fallback(yaml, &p), FallbackReason::NotSpanMappable);
+        assert_eq!(spliced(yaml, &p), "# nothing but a comment\ntitle: x\n");
+    }
+
+    #[test]
+    fn a_doubled_single_quote_does_not_end_the_quoted_scalar() {
+        // R9.
+        assert_eq!(trailing_comment("k: 'it''s # x'"), None);
+        assert_eq!(trailing_comment("k: 'it''s' # c"), Some(" # c"));
+        assert_eq!(item_comment("'a''b # c' # real"), Some(" # real"));
+    }
+
+    #[test]
+    fn a_comment_between_block_items_stays_put() {
+        // R10.
+        let p = props(&[("tags", json!(["q", "b"]))]);
+        assert_eq!(
+            spliced("tags:\n  # first\n  - a\n  - b\n", &p),
+            "tags:\n  # first\n  - q\n  - b\n"
+        );
+    }
+
+    #[test]
+    fn a_changed_scalar_keeps_its_trailing_comment() {
+        // A-17.
+        let p = props(&[("status", json!("done"))]);
+        assert_eq!(
+            spliced("status: single # keep\n", &p),
+            "status: done # keep\n"
+        );
+        let p = props(&[("tags", json!(["two"]))]);
+        assert_eq!(
+            spliced("tags: [one, \"two\", ONE]\n", &p),
+            "tags: [\"two\"]\n"
+        );
     }
 
     #[test]
@@ -1675,7 +1835,7 @@ mod tests {
     }
 
     #[test]
-    fn append_to_flow_list_with_trailing_comment_falls_back_with_warning() {
+    fn append_to_flow_list_keeps_its_trailing_comment() {
         // M2/M3: `is_single_line_flow` recognizes this as flow-shaped (looser
         // check, by design), but `parse_flow_list` correctly refuses it (the
         // line doesn't end with `]`) — the gap between those two checks is
@@ -1684,11 +1844,14 @@ mod tests {
         let yaml = "tags: [a, b] # keep these\nstatus: draft\n";
         let mut p = parse_map(yaml).expect("fixture parses");
         p.insert("tags".into(), json!(["a", "b", "c"]));
-        assert_eq!(fallback(yaml, &p), FallbackReason::FlowListNotModellable);
+        assert_eq!(
+            spliced(yaml, &p),
+            "tags: [a, b, c] # keep these\nstatus: draft\n"
+        );
     }
 
     #[test]
-    fn remove_from_flow_list_with_trailing_comment_falls_back_with_warning() {
+    fn remove_from_flow_list_keeps_its_trailing_comment() {
         // M3: append and remove must be symmetric — both warn, neither
         // silently reformats+drops the comment.
         let yaml = "tags: [a, b, c] # keep these\nstatus: draft\n";
@@ -1697,33 +1860,40 @@ mod tests {
             panic!("expected array")
         };
         seq.remove(1);
-        assert_eq!(fallback(yaml, &p), FallbackReason::FlowListNotModellable);
+        assert_eq!(
+            spliced(yaml, &p),
+            "tags: [a, c] # keep these\nstatus: draft\n"
+        );
     }
 
     #[test]
-    fn append_to_block_list_with_interleaved_comment_falls_back_with_warning() {
-        // M6: comments between block-list items are out of scope for this
-        // splicer (no full-CST support) — but the honest response is an
-        // explicit fallback+warning, not a silent whole-key re-serialize
-        // that discards the comment with no explanation.
+    fn append_to_block_list_keeps_an_interleaved_comment() {
+        // M6, R10: a comment between block-list items stays where it is; the
+        // splicer edits the item lines and leaves every other line alone.
         let yaml = "aliases:\n  - old-name\n  # keep this note\n  - other\nstatus: draft\n";
         let mut p = parse_map(yaml).expect("fixture parses");
         let Some(Value::Array(seq)) = p.get_mut("aliases") else {
             panic!("expected array")
         };
         seq.push(json!("new-name"));
-        assert_eq!(fallback(yaml, &p), FallbackReason::BlockListNotModellable);
+        assert_eq!(
+            spliced(yaml, &p),
+            "aliases:\n  - old-name\n  # keep this note\n  - other\n  - new-name\nstatus: draft\n"
+        );
     }
 
     #[test]
-    fn remove_from_block_list_with_interleaved_comment_falls_back_with_warning() {
+    fn remove_from_block_list_keeps_an_interleaved_comment() {
         let yaml = "aliases:\n  - old-name\n  # keep this note\n  - other\nstatus: draft\n";
         let mut p = parse_map(yaml).expect("fixture parses");
         let Some(Value::Array(seq)) = p.get_mut("aliases") else {
             panic!("expected array")
         };
         seq.remove(0); // "old-name"
-        assert_eq!(fallback(yaml, &p), FallbackReason::BlockListNotModellable);
+        assert_eq!(
+            spliced(yaml, &p),
+            "aliases:\n  # keep this note\n  - other\nstatus: draft\n"
+        );
     }
 
     #[test]

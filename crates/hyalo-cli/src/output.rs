@@ -115,7 +115,13 @@ impl CommandOutcome {
         if report.failed() {
             let mut diagnostic = UserDiagnostic::new("mutation did not finish completely");
             diagnostic.category = Some("mutation_failure");
-            diagnostic.hint = Some("inspect committed effects before retrying; task toggle is not safe to retry blindly".into());
+            // L-15: only a run that committed something has effects to inspect.
+            diagnostic.hint = Some(if report.committed_paths().is_empty() {
+                "nothing was committed; fix the error and run the command again".into()
+            } else {
+                "inspect the committed effects before retrying; a blind retry may repeat them"
+                    .into()
+            });
             diagnostic.effects = Some(report);
             return Self::UserError(diagnostic);
         }

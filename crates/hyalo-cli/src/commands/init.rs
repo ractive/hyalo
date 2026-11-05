@@ -496,6 +496,14 @@ fn initialize_observed(
         }
         if root.exists() {
             preflight_installation_manifest(root, claude, pi, profile, codex)?;
+            // A-9: refuse a config that does not parse before anything is
+            // created, so the refusal leaves the tree as it found it.
+            if dir_explicit
+                && let Ok(text) = fs::read_to_string(root.join(".hyalo.toml"))
+                && let Err(error) = text.parse::<toml_edit::DocumentMut>()
+            {
+                return Err(unparsable_config(&root.join(".hyalo.toml"), &error));
+            }
         }
         let pi_manifest = pi
             .then(|| pi_manifest::prepare(root, &dir_value))
@@ -547,8 +555,7 @@ fn initialize_observed(
                 // hand-written comments / key order — are preserved. Editing via
                 // `toml_edit::DocumentMut` keeps decor intact, which matters for
                 // idempotency when a profile merge (also comment-preserving) runs
-                // next. If the file is malformed, fall back to overwriting with
-                // just `dir`.
+                // next.
                 let existing_raw = String::from_utf8(
                     toml_source
                         .as_ref()
@@ -556,24 +563,35 @@ fn initialize_observed(
                         .bytes()?,
                 )
                 .with_context(|| format!("failed to read {}", toml_path.display()))?;
-                if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
-                    doc["dir"] = toml_edit::value(dir_value.clone());
-                    doc.to_string()
-                } else {
-                    // Malformed existing file — overwrite with just dir and note it.
-                    report.push_detail(
-                        "warning",
-                        ".hyalo.toml",
-                        "was malformed; existing content replaced",
-                    );
-                    minimal_toml_dir(&dir_value)
-                }
+                // A-9 (DEC-390): a config that does not parse is the user's
+                // work in progress, not ours to replace; `init --profile` and
+                // every other command already refuse it.
+                let mut doc = existing_raw
+                    .parse::<toml_edit::DocumentMut>()
+                    .map_err(|error| unparsable_config(&toml_path, &error))?;
+                doc["dir"] = toml_edit::value(dir_value.clone());
+                doc.to_string()
             } else {
                 minimal_toml_dir(&dir_value)
             };
-            publish_captured_installation(root, &toml_path, toml_source, toml_content.as_bytes())
+            // A-14: byte-identical content is not a write.
+            let unchanged = toml_source
+                .as_ref()
+                .map(hyalo_core::rooted::CapturedInput::bytes)
+                .transpose()?
+                .is_some_and(|bytes| bytes == toml_content.as_bytes());
+            if !unchanged {
+                publish_captured_installation(
+                    root,
+                    &toml_path,
+                    toml_source,
+                    toml_content.as_bytes(),
+                )
                 .with_context(|| format!("failed to write {}", toml_path.display()))?;
-            if toml_existed {
+            }
+            if unchanged {
+                report.push_detail("unchanged", ".hyalo.toml", format!("dir = \"{dir_value}\""));
+            } else if toml_existed {
                 report.push_detail("updated", ".hyalo.toml", format!("dir = \"{dir_value}\""));
             } else {
                 report.push_detail("created", ".hyalo.toml", format!("dir = \"{dir_value}\""));
@@ -1165,6 +1183,15 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     deinitialize_observed(dir, cwd).map_err(|failure| failure.error)
 }
 
+/// The refusal for a `.hyalo.toml` that does not parse (A-9, DEC-390).
+fn unparsable_config(path: &Path, error: &toml_edit::TomlError) -> anyhow::Error {
+    hyalo_core::user_error_with(
+        format!("{} does not parse; init left it untouched", path.display()),
+        Some("fix the TOML error, or delete the file to start over".to_owned()),
+        Some(error.to_string()),
+    )
+}
+
 fn deinitialize_observed(
     dir: Option<&str>,
     cwd: &Path,
@@ -1330,9 +1357,28 @@ fn deinitialize_observed(
         let pi_dir = root.join(".pi");
         remove_dir_if_empty(&pi_dir, ".pi/", &mut report)?;
 
-        // Step 7: Remove .hyalo.toml.
+        // Step 7: Remove .hyalo.toml — only when it is the file `init` wrote.
+        // L-7 (DEC-390): a config that carries anything beyond `dir` (a schema,
+        // views, lint rules, a profile) is the user's work, and deleting it
+        // took all of that with it; one that does not parse is kept as well.
         let toml_path = root.join(".hyalo.toml");
-        remove_artifact(root, &toml_path, ".hyalo.toml", &mut report)?;
+        // R7: any read failure other than "not there" (a stray non-UTF-8 byte,
+        // a permission error) keeps the file: it cannot be shown to be ours.
+        let keep_reason = match fs::read_to_string(&toml_path) {
+            Ok(text) => text
+                .parse::<toml_edit::DocumentMut>()
+                .map_or(true, |doc| doc.iter().any(|(key, _)| key != "dir"))
+                .then_some("holds settings beyond `dir`; delete it yourself if you want it gone"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => Some(
+                "could not be read as UTF-8 text; kept, delete it yourself if you want it gone",
+            ),
+        };
+        if let Some(reason) = keep_reason {
+            report.push_detail("skipped", ".hyalo.toml", reason);
+        } else {
+            remove_artifact(root, &toml_path, ".hyalo.toml", &mut report)?;
+        }
 
         Ok(())
     })();
@@ -2663,28 +2709,30 @@ mod tests {
     }
 
     #[test]
-    fn run_init_overwrites_malformed_toml_non_table() {
-        // .hyalo.toml contains valid TOML that is not a table (bare string).
+    fn run_init_refuses_malformed_toml_and_leaves_it_untouched() {
+        // .hyalo.toml is not valid TOML (A-9, DEC-390).
         let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
+        let original = "# my config\ndir = \"x\"\n[schema.types.note]\nrequired = [\"title\"\n";
+        fs::write(tmp.path().join(".hyalo.toml"), original).unwrap();
 
+        let Err(error) = run_init_in(Some("docs"), false, false, None, tmp.path()) else {
+            panic!("init must refuse a config that does not parse")
+        };
+        assert!(format!("{error:#}").contains("does not parse"), "{error:#}");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn run_init_same_dir_twice_reports_unchanged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap();
         let out = run_init_in(Some("docs"), false, false, None, tmp.path())
             .unwrap()
             .to_text();
-        // Warning emitted.
-        assert!(
-            out.contains("warning  .hyalo.toml  (was malformed"),
-            "malformed warning present"
-        );
-        // File overwritten with a valid table.
-        let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
-        let parsed: toml::Table =
-            toml::from_str(&content).expect("overwritten content must be valid TOML");
-        assert_eq!(
-            parsed.get("dir").and_then(|v| v.as_str()),
-            Some("docs"),
-            "dir key written correctly"
-        );
+        assert!(out.contains("unchanged  .hyalo.toml"), "{out}");
     }
 
     // ---------------------------------------------------------------------------

@@ -73,6 +73,27 @@ pub(crate) fn create_new(
         }
     }
 
+    // L-14: a note is `<stem>.md`. An extensionless name, a bare `.md` or an
+    // upper-case `.MD` would be created and then never seen by any command.
+    let is_note_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.len() > 3 && Path::new(name).extension().is_some_and(|ext| ext == "md")
+        })
+        && !file_arg.ends_with(['/', '\\']);
+    if !is_note_name {
+        return Ok(CommandOutcome::UserError(user_diagnostic(
+            format,
+            "invalid file path: a note is named <stem>.md",
+            Some(file_arg),
+            Some(
+                "end the path in a file name with a non-empty stem and a lower-case .md extension",
+            ),
+            None,
+        )));
+    }
+
     let full_path: PathBuf = dir.join(file_arg);
 
     // ------------------------------------------------------------------
@@ -100,7 +121,8 @@ pub(crate) fn create_new(
     // Normalize the vault-relative path (forward slashes) for bind lookup so a
     // `[[schema.bind]]` covering this path lets us omit the redundant explicit
     // `type:` key (the bind already types the file).
-    let rel_for_bind = file_arg.replace('\\', "/");
+    let rel_for_bind =
+        hyalo_core::discovery::native_separator_to_forward_slash(file_arg).into_owned();
     let bound_here = schema.bound_type_for(&rel_for_bind) == Some(type_name);
     let content = match synthesise_content(type_name, &merged, bound_here) {
         Ok(content) => content,
@@ -157,8 +179,9 @@ pub(crate) fn create_new(
     // Normalize to forward slashes so the snapshot's rel_path invariant holds
     // when callers pass Windows-style backslashes via `--file`.
     let rel_path_owned;
-    let rel_path: &str = if file_arg.contains('\\') {
-        rel_path_owned = file_arg.replace('\\', "/");
+    let rel_path: &str = if cfg!(windows) && file_arg.contains('\\') {
+        rel_path_owned =
+            hyalo_core::discovery::native_separator_to_forward_slash(file_arg).into_owned();
         &rel_path_owned
     } else {
         file_arg

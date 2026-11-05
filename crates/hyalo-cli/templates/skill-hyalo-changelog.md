@@ -71,7 +71,7 @@ hyalo changelog release 1.2.0 --date 2026-07-17 --apply            # override th
   `[Unreleased]` above it, and writes the footer links from the `[Unreleased]` compare link
   (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`); only a
   non-compare `[Unreleased]` definition gets a `[X.Y.Z]: TBD` placeholder. It **refuses** to release a version that already exists
-  (idempotency guard). Both default to `--dry-run` and exit non-zero on drift, so they
+  (idempotency guard). Both default to `--dry-run` and exit 0 and report drift in `results.changed`, so they
   double as CI checks; pass `--apply` to write.
 
 After a release, run `hyalo lint --profile changelog` to confirm the result is clean (and

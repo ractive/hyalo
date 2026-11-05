@@ -9,8 +9,9 @@
 //! around it is preserved.
 //!
 //! Like `okf index`, it defaults to `--dry-run` and mutates only with `--apply`;
-//! in dry-run it exits non-zero when the on-disk TOC differs from the generated
-//! output, so it doubles as a CI drift check.
+//! in dry-run it exits 0 (DEC-307) and reports `results.changed` when the
+//! on-disk TOC differs from the generated output, so a CI drift check reads
+//! the payload.
 
 use anyhow::{Context, Result};
 use std::fmt::Write as _;
@@ -45,7 +46,7 @@ struct AdrEntry {
 ///
 /// `adr_dir` optionally overrides the ADR directory (vault-relative); defaults
 /// to `docs/decisions`. `apply` writes the change; otherwise it is a dry run
-/// that returns exit code 1 when the TOC would change (the CI drift signal).
+/// that exits 0 and reports `changed` when the TOC would differ.
 pub fn run_toc(
     dir: &Path,
     adr_dir: Option<&str>,
@@ -78,7 +79,10 @@ fn run_toc_with_journal(
     format: Format,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<(CommandOutcome, Option<i32>)> {
-    let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
+    let adr_rel_normalized = hyalo_core::discovery::native_separator_to_forward_slash(
+        adr_dir.unwrap_or(DEFAULT_ADR_DIR),
+    )
+    .into_owned();
     let adr_rel = adr_rel_normalized.trim_end_matches('/');
     let adr_full = dir.join(adr_rel);
     let toc_rel = format!("{adr_rel}/README.md");
@@ -190,7 +194,8 @@ fn run_toc_with_journal(
         }),
     );
 
-    let exit_override = if !apply && changed { Some(1) } else { None };
+    // A-10 (DEC-390): a dry run answered, so it exits 0; drift is `changed`.
+    let exit_override = None;
 
     let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
     let outcome = match effects {
@@ -527,8 +532,8 @@ mod tests {
         let adr = tmp.path().join("docs/decisions");
         std::fs::create_dir_all(&adr).unwrap();
         std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
-        // No README yet → dry-run must signal drift (exit 1).
-        let (_out, exit) = run_toc(
+        // No README yet → the dry run reports drift without an exit code.
+        let (out, exit) = run_toc(
             tmp.path(),
             None,
             false,
@@ -538,7 +543,8 @@ mod tests {
             Format::Json,
         )
         .unwrap();
-        assert_eq!(exit, Some(1));
+        assert_eq!(exit, None);
+        assert!(out.unwrap_output().contains("\"changed\":true"));
     }
 
     #[test]
@@ -558,6 +564,8 @@ mod tests {
         assert_eq!(exit, None);
     }
 
+    // A backslash is a separator only on Windows (DEC-363).
+    #[cfg(windows)]
     #[test]
     fn backslash_adr_dir_produces_forward_slash_toc_path() {
         // A Windows-style `adr_dir` override (backslash separators, as a user

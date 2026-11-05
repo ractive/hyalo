@@ -147,3 +147,4 @@ mod iteration320_dogfood_leftovers;
 mod iteration321_content_safe_autofix;
 mod iteration322_link_writers_agree;
 mod iteration322_move_matrix;
+mod iteration323_index_parity_robustness;

@@ -47,7 +47,7 @@ no explicit `type: adr` frontmatter; the binding supplies it.
   required sections, supersede references, and duplicate ADR numbers.
 - **Table of contents**: `hyalo madr toc --apply` regenerates a `docs/decisions/README.md`
   index of all ADRs (number, title, status, date) inside a managed region. `--dry-run`
-  (the default) exits non-zero on drift — use it in CI.
+  (the default) exits 0 and reports drift in `results.changed` — gate CI on that.
 
 ## MADR advisory lint rules
 

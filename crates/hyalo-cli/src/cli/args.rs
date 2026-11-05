@@ -1993,7 +1993,9 @@ Repeatable (AND).\n\
     },
     /// Remove hyalo configuration and tool integration artifacts
     #[command(
-        long_about = "Remove .hyalo.toml and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
+        long_about = "Remove .hyalo.toml (when it holds only `dir`) and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
+            A .hyalo.toml with a schema, views, lint rules or a profile is yours, not init's:\n\
+            deinit keeps it and says so. Delete it yourself to remove it.\n\n\
             Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\
             Removes managed Codex skills and the managed AGENTS.md block, preserving user content.\n\
             Installed plugins and global Codex settings are not changed.\n\
@@ -2054,7 +2056,7 @@ Repeatable (AND).\n\
             snapshot (\"racily clean\": a same-size rewrite in the same second keeps\n\
             its mtime) is always re-scanned. --force rebuilds from scratch and never\n\
             loads the old snapshot first — it is discarded by construction, not read\n\
-            and thrown away. Older or mismatched snapshots are always rebuilt. A rerun\n\
+            and thrown away. Older, newer or mismatched snapshots are always rebuilt. A rerun\n\
             that changed nothing at all (every entry reused, nothing removed,\n\
             attachments unchanged) leaves the snapshot file itself untouched rather\n\
             than rewriting byte-for-byte identical content (`results.written: false`).\n\n\
@@ -2746,8 +2748,8 @@ Repeatable (AND).\n\
             - `madr toc` regenerates the ADR table of contents / status dashboard\n\
               (`<adr-dir>/README.md`) from each ADR's number, title, status and date,\n\
               inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region\n\
-              (prose outside is preserved). Defaults to --dry-run and exits non-zero on\n\
-              drift, so it doubles as a CI check.\n\n\
+              (prose outside is preserved). Defaults to --dry-run and exits 0 either way;\n\
+              drift is `results.changed`, so a CI check reads the payload.\n\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile madr` to check\n\
             ADR conformance (status pattern, required sections, supersede references).\n\n\
             EXAMPLES:\n\
@@ -2773,8 +2775,8 @@ Repeatable (AND).\n\
               an empty `[Unreleased]` above it, and writes the footer compare links\n\
               (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`).\n\
               It refuses to release a version that already exists (idempotency guard).\n\n\
-            Both default to --dry-run and exit non-zero on drift (a CI signal); pass\n\
-            --apply to write.\n\n\
+            Both default to --dry-run and exit 0 (DEC-307); `results.changed` reports the\n\
+            drift. Pass --apply to write.\n\n\
             The target file is `<vault>/CHANGELOG.md` unless `[changelog] path` names one\n\
             (resolved against the config directory — that is how a repo-root CHANGELOG.md\n\
             is used with a docs-subdir vault). Either way the file must still resolve\n\
@@ -2917,10 +2919,9 @@ pub(crate) enum OkfAction {
             -q/--quiet; the run continues and every other index is still generated). A\n\
             nonexistent scope directory is rejected (exit 1), not vacuously passed.\n\n\
             Running with --apply twice is a no-op (idempotent). In --dry-run (the default)\n\
-            the command exits non-zero when any `index.md` would change — use this in CI.\n\
-            EXIT CODES (dry-run): 0 = clean (no index.md would change), 1 = drift (at least\n\
-            one index.md is stale — the CI failure signal), 2 = error (e.g. an unreadable\n\
-            file or an invalid scope). --apply exits 0 on success, 2 on error.\n\n\
+            the command exits 0 and reports `results.changed` — gate CI on that.\n\
+            EXIT CODES: 0 = answered (a dry run, clean or drifted), 1 = user error (e.g. an\n\
+            invalid scope), 2 = internal error. --apply exits 0 on success.\n\n\
             SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
             EXAMPLES:\n\
             hyalo okf index --dry-run\n\
@@ -3005,7 +3006,7 @@ pub(crate) enum MadrAction {
             runs. An existing marker-less `README.md` is *adopted* (its hand-written body\n\
             is preserved and the TOC region appended); pass --replace to overwrite it\n\
             instead. Running with --apply twice is a no-op (idempotent). In --dry-run (the\n\
-            default) the command exits non-zero when the TOC would change — use this in CI.\n\n\
+            default) the command exits 0 and reports `results.changed` — gate CI on that.\n\n\
             SIDE EFFECTS: writes `<adr-dir>/README.md` only with --apply.\n\n\
             DIR must stay inside the vault once symlinks are resolved: a `../` traversal\n\
             or a symlinked ADR directory pointing out is refused (exit 1) in dry-run and\n\
@@ -3050,8 +3051,8 @@ pub(crate) enum ChangelogAction {
             link gets a `[X.Y.Z]: TBD` placeholder instead. The date defaults to\n\
             today; override with --date YYYY-MM-DD.\n\n\
             Refuses to release a version that already appears in the file (idempotency\n\
-            guard). Defaults to --dry-run and exits non-zero when the file would change;\n\
-            pass --apply to write.\n\n\
+            guard). Defaults to --dry-run and exits 0; `results.changed` says whether the file\n\
+            would change. Pass --apply to write.\n\n\
             SIDE EFFECTS: writes CHANGELOG.md only with --apply.\n\n\
             EXAMPLES:\n\
             hyalo changelog release 1.2.0 --dry-run\n\

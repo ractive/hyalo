@@ -1271,7 +1271,7 @@ fn normalize_vault_rel(dir: &Path, raw: &str) -> std::result::Result<String, Str
     if raw.contains('\0') {
         return Err(format!("invalid path (contains null byte): {raw}"));
     }
-    let mut normalized = raw.replace('\\', "/");
+    let mut normalized = hyalo_core::discovery::native_separator_to_forward_slash(raw).into_owned();
     // Strip the configured dir prefix if the user passed a CWD-relative path.
     if let Some(dir_name) = dir.file_name().and_then(|n| n.to_str())
         && let Some(stripped) = normalized.strip_prefix(&format!("{dir_name}/"))

@@ -185,8 +185,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `init --profile`, `create-index --output` into a missing directory, `find a b`,
   `deinit --dir <nonexistent>`, a broken `.hyalo.toml` under a gate command — all rendered
   through the standard error envelope, so `--format json` stays parseable; **2** clap usage
-  errors and internal errors. `okf index` without `--apply` exits 0 and reports drift as
-  `results.changed`.
+  errors and internal errors. `okf index`, `changelog release`/`add` and `madr toc` without `--apply` exit 0 and
+  report drift as `results.changed`.
 - **`find`'s `results` is always the array of files**, whichever way the file list was supplied
   (`--file`, `--glob`, `--files-from`, or a full scan), so `.results[0]` always works. The
   `files_missing` / `files_skipped_non_md` / `files_skipped_outside_vault` counters are top-level

@@ -300,16 +300,18 @@ pub(super) fn execute_jq_filter(
                 };
                 // Account for the newline separator that will be prepended
                 // between fragments when out is non-empty.
+                // L-6: the separator follows the first value, not the first
+                // non-empty output, so leading empty strings keep their lines.
                 total_len = total_len
                     .saturating_add(s.len())
-                    .saturating_add(usize::from(!out.is_empty()));
+                    .saturating_add(usize::from(value_count > 1));
                 if total_len > JQ_OUTPUT_CAP {
                     return Err(format!(
                         "jq filter output exceeds {} MiB limit",
                         JQ_OUTPUT_CAP / (1024 * 1024)
                     ));
                 }
-                if !out.is_empty() {
+                if value_count > 1 {
                     out.push('\n');
                 }
                 out.push_str(&s);

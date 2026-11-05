@@ -17,9 +17,15 @@ use crate::links::{LinkKind, LinkSpan, Resolution, WrittenForm};
 /// This is called on the **raw** target text extracted from the source file,
 /// NOT on the normalized form stored in `link.target`.
 pub fn detect_wikilink_form(raw_target: &str) -> WrittenForm {
+    // R13: `[[ ../t ]]` is still written relative; the reader trims it too.
+    let raw_target = raw_target.trim_start();
     // `./` prefix: explicit current-directory form (takes highest priority).
     if raw_target.starts_with("./") {
         return WrittenForm::DotRelative;
+    }
+    // `../` prefix: relative to the linking note's folder, walking up.
+    if raw_target.starts_with("../") {
+        return WrittenForm::ParentRelative;
     }
     // Path separator → path-relative form (takes priority over .md suffix).
     // `[[sub/note.md]]` is written as PathRelative, not MdSuffixed, because

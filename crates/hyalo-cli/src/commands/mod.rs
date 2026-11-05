@@ -520,6 +520,7 @@ pub enum ScannedIndexOutcome {
 }
 
 /// Resolved index — either a borrowed snapshot or an owned scanned build.
+#[allow(clippy::large_enum_variant)] // one value per run, never stored in bulk
 pub(crate) enum ResolvedIndex<'a> {
     Snapshot(&'a SnapshotIndex),
     Scanned(ScannedIndexBuild),
@@ -1021,8 +1022,8 @@ pub(crate) fn reject_write_with_unloadable_schema(
         ),
         None,
         Some(
-            "Fix the [schema] section in .hyalo.toml (`hyalo lint` reports it as \
-             schema/malformed), or rerun without --validate to write unvalidated.",
+            "Fix the [schema] or [lint.rules] section in .hyalo.toml (`hyalo config` reports \
+             it), or rerun without --validate to write unvalidated.",
         ),
         None,
     );

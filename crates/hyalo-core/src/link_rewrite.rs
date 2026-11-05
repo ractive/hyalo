@@ -269,6 +269,7 @@ pub fn plan_mv(
         let (replacements, skipped) = plan_inbound_rewrites(
             &content,
             &source_rel_str,
+            &source_rel_str,
             old_rel,
             old_stem,
             new_rel,
@@ -563,7 +564,19 @@ fn replacement_link_spans(text: &str) -> Vec<crate::links::LinkSpan> {
 /// `.md` suffix — it is stripped here). Returns `None` when the rebuild would
 /// be a no-op (the new bracket text is identical to the old), so callers can
 /// skip emitting an empty replacement.
+#[cfg(test)]
 pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str) -> Option<String> {
+    rewrite_frontmatter_wikilink_text_from(occ_target, new_ref, None)
+}
+
+/// [`rewrite_frontmatter_wikilink_text`] for a link written in `source_rel`: a
+/// target authored relative to that note's folder (`./x`, `../x`) stays
+/// relative (DEC-391).
+pub(crate) fn rewrite_frontmatter_wikilink_text_from(
+    occ_target: &str,
+    new_ref: &str,
+    source_rel: Option<&str>,
+) -> Option<String> {
     let parts = TargetParts::split_with_alias(occ_target);
     let path_part = parts.path;
     let tail = &occ_target[path_part.len()..];
@@ -571,8 +584,15 @@ pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str)
     let new_stem = new_ref.strip_suffix(".md").unwrap_or(new_ref);
     let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
 
-    // Preserve the user's written form: path-form → path-form, bare → bare.
-    let new_target = if path_part.contains('/') || path_part.contains('\\') {
+    // Preserve the user's written form: path-form → path-form, bare → bare,
+    // relative → relative from the note that holds the link.
+    let relative;
+    let new_target = if let Some(source) = source_rel
+        && is_relative_wikilink(path_part)
+    {
+        relative = crate::link_write::relative_wikilink_path(source, new_stem);
+        relative.as_str()
+    } else if path_part.contains('/') || path_part.contains('\\') {
         new_stem
     } else {
         new_basename_stem
@@ -1143,6 +1163,7 @@ pub fn validate_rewrite_plans(plans: &[RewritePlan]) -> Result<()> {
 fn plan_inbound_rewrites(
     content: &str,
     source_rel: &str,
+    emit_rel: &str,
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
@@ -1184,6 +1205,7 @@ fn plan_inbound_rewrites(
                     &visible_line,
                     scanner.line_num(),
                     source_rel,
+                    emit_rel,
                     old_rel,
                     old_stem,
                     new_rel,
@@ -1352,7 +1374,14 @@ fn plan_inbound_rewrites(
                 &span,
                 line,
                 new_rel,
-                source_rel,
+                // Only a wikilink's relative form is rebased onto the
+                // linker's new folder (DEC-391); a markdown link keeps the
+                // spelling `mv` has always planned for it.
+                if span.kind == LinkKind::Wikilink {
+                    emit_rel
+                } else {
+                    source_rel
+                },
                 PreserveForm::Preserve,
                 site_prefix,
                 style,
@@ -1481,6 +1510,7 @@ fn plan_outbound_rewrites(
                     &visible_line,
                     scanner.line_num(),
                     old_rel,
+                    new_rel,
                     old_rel,
                     old_stem,
                     new_rel,
@@ -1868,9 +1898,13 @@ pub fn plan_batch_mv(
             // Batch mode has no JSON slot for line-spanning frontmatter links;
             // they are warned about on stderr below, like ambiguous ones.
             let mut skipped_frontmatter = Vec::new();
+            // A linker that moves in the same batch is written from where it
+            // will sit, so a relative link keeps its shape (DEC-391).
+            let emit_rel = rename_map.get(source_rel.as_str()).unwrap_or(source_rel);
             let (repls, skipped) = plan_inbound_rewrites(
                 &content,
                 source_rel,
+                emit_rel,
                 old_rel,
                 old_stem,
                 new_rel,
@@ -2321,6 +2355,7 @@ fn plan_frontmatter_wikilink_rewrites(
     line: &str,
     line_num: usize,
     source_rel: &str,
+    emit_rel: &str,
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
@@ -2427,7 +2462,9 @@ fn plan_frontmatter_wikilink_rewrites(
         // body, instead of becoming a bare `[[index]]`.
         let destination = frontmatter_directory_spelling(target_path, source_rel, old_rel, new_rel)
             .unwrap_or_else(|| new_rel.to_owned());
-        if let Some(new_text) = rewrite_frontmatter_wikilink_text(target, &destination) {
+        if let Some(new_text) =
+            rewrite_frontmatter_wikilink_text_from(target, &destination, Some(emit_rel))
+        {
             replacements.push(Replacement {
                 line: line_num,
                 byte_offset: occ.full_start,
@@ -2535,6 +2572,7 @@ fn plan_outbound_rewrites_batch(
                     &visible_line,
                     scanner.line_num(),
                     old_rel,
+                    new_rel,
                     old_rel,
                     old_stem,
                     new_rel,
