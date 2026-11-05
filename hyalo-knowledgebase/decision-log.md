@@ -8666,6 +8666,23 @@ clap usage error (help on stderr, exit 2).
   a command (`hyalo --dir x`, `hyalo --no-hints`) stays a usage error with
   exit 2.
 
+## DEC-373: a Unicode table update does not bump `TOKENIZER_VERSION` (2026-11-05)
+
+**Context.** unicode-normalization 0.1.26 moves its tables from Unicode 17 to
+18, so `is_combining_mark` accepts marks it rejected before and `tokenize`
+keeps them inside a word: `alpha` + U+05C8 + `beta` is two tokens on 0.1.25 and
+one on 0.1.26. The doc comment on `TOKENIZER_VERSION` asks for a bump whenever
+the output changes in a way that makes persisted tokens stale, and an existing
+snapshot does keep the old split, because `create-index` reuses an unchanged
+entry.
+
+**Decision.** No bump. Only code points that were unassigned in Unicode 17 are
+affected, so a note can only be touched if it already holds a character that
+had no meaning when it was indexed, while a bump re-tokenizes every persisted
+entry of every vault. Such a note reads correctly on a disk scan and, under
+`--index`, once it changes or after `create-index --force`. The same reasoning
+covers later Unicode table updates; a change to how an already assigned code
+point tokenizes still needs the bump.
 ## DEC-375: serde-saphyr 2.1 — four changes in how frontmatter reads, one undone (2026-11-05) — amends DEC-350
 
 **Context.** Dependabot's PR #392 moved the YAML parser from serde-saphyr 1.3
