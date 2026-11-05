@@ -466,7 +466,7 @@ fn every_spelling_of_an_ambiguous_stem_gets_one_answer_from_every_command() {
         &tmp,
         "src.md",
         "[[note]]\n[[note?]]\n[[my%20note]]\n[[./note]]\n[[note#H]]\n[[note|alias]]\n\
-         [[a/note]]\n[[sub/note]]\n",
+         [[a/note]]\n[[sub/note]]\n[[note.md]]\n",
     );
     write(
         &tmp,
@@ -481,6 +481,7 @@ fn every_spelling_of_an_ambiguous_stem_gets_one_answer_from_every_command() {
         ("src.md", 4, "./note", "b/note.md", NOTE_TWINS),
         ("src.md", 5, "note", "a/note.md", NOTE_TWINS),
         ("src.md", 6, "note", "b/note.md", NOTE_TWINS),
+        ("src.md", 9, "note", "a/note.md", NOTE_TWINS),
         ("fm.md", 3, "note", "a/note.md", NOTE_TWINS),
         ("fm.md", 4, "note?", "b/note.md", NOTE_TWINS),
         ("fm.md", 5, "./note", "a/note.md", NOTE_TWINS),
@@ -546,9 +547,39 @@ fn mv_keeps_the_moved_files_own_ambiguous_query_link_as_written() {
         "---\nrelated:\n  - \"[[note?]]\"\n---\n# A\n",
     );
     write(&tmp, "b/note.md", "# B\n");
-    let moved = run(&tmp, &["mv", "a/note.md", "--to", "c/note.md", "--dry-run"]);
+    run(&tmp, &["mv", "a/note.md", "--to", "c/note.md"]);
+    let moved = std::fs::read_to_string(tmp.path().join("c/note.md")).unwrap();
     assert!(
-        !moved.to_string().contains("[[note]]"),
+        moved.contains("[[note?]]"),
         "the link must keep its `?`: {moved}"
+    );
+}
+
+/// `--allow-ambiguous` rewrites only a link whose authored text is itself the
+/// shared stem: `[[note]]` follows the move, `[[note?]]` (inbound or in the
+/// moved file's own body) keeps its `?` and is left alone.
+#[test]
+fn allow_ambiguous_rewrites_only_the_literal_stem() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "dir = \".\"\n");
+    write(&tmp, "a/note.md", "# A\n\n[[note?]]\n");
+    write(&tmp, "b/note.md", "# B\n");
+    write(&tmp, "src.md", "[[note]]\n[[note?]]\n");
+    let moved = run(
+        &tmp,
+        &[
+            "mv",
+            "a/note.md",
+            "--to",
+            "a/renamed.md",
+            "--allow-ambiguous",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(moved["results"]["total_links_updated"], json!(1), "{moved}");
+    let text = moved.to_string();
+    assert!(
+        !text.contains("[[note?]]\""),
+        "no `?` link is rewritten: {moved}"
     );
 }

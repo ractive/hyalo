@@ -495,6 +495,22 @@ impl CaseInsensitiveIndex {
         self.stem_ambiguity(&stem)
     }
 
+    /// The bare stem [`Self::target_ambiguity`] matched for `target`, as the
+    /// graph keys an ambiguous link by it (`[[my%20note]]` → `my note`), so
+    /// `mv` finds every spelling through the moved file's basename stem.
+    #[must_use]
+    pub fn ambiguous_stem_key(&self, target: &str) -> Option<String> {
+        let literal = bare_stem_with(target, false)?;
+        if self.ambiguity(&literal).is_some() {
+            return Some(literal.into_owned());
+        }
+        if !literal.contains('?') {
+            return None;
+        }
+        let stripped = bare_stem(target)?;
+        self.ambiguity(&stripped).map(|_| stripped.into_owned())
+    }
+
     fn target_ambiguity_with(
         &self,
         target: &str,

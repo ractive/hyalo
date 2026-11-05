@@ -44,7 +44,7 @@ DEC number: **DEC-374** (DEC-372 is the 0.25.1 Windows C-runtime decision, DEC-3
 - [x] e2e test pinning `find`, HYALO006, `mv` `skipped_ambiguous` and `links fix` against one vault; `--index` and disk scans report identical `candidates`; an ambiguous link still counts as broken in `summary.links.broken`, `find --broken-links` and HYALO006 (DEC-351)
 - [x] No snapshot format bump: candidates are computed at resolve time from the case index both scans already build
 - [x] Timing of `find --fields links --limit 0` on MDN and GitHub Docs, origin/main against this branch
-- [ ] PR #399 review round: one normalisation (`?` literal-first, `./` segments) shared by `find`, HYALO006, `links fix`, `mv` and `backlinks`; table-driven parity test over `[[note]]`, `[[note?]]`, `[[What?]]`, `[[my%20note]]`, `[[./note]]`, `[[note#H]]`, `[[note|alias]]` and a frontmatter link; Pi bundles built without the worktree `node_modules` symlink
+- [x] PR #399 review round: one normalisation (`?` literal-first, `./` segments) shared by `find`, HYALO006, `links fix`, `mv` and `backlinks`; table-driven parity test over `[[note]]`, `[[note?]]`, `[[What?]]`, `[[my%20note]]`, `[[./note]]`, `[[note#H]]`, `[[note|alias]]` and a frontmatter link; Pi bundles built without the worktree `node_modules` symlink
 - [x] Docs in sync: `find --help`, `skill-hyalo.md`, `rule-knowledgebase.md`, the link-record paragraph in `.claude/CLAUDE.md`, CHANGELOG `[Unreleased]`, DEC-374, backlog item completed
 
 ## Acceptance criteria

@@ -8709,7 +8709,8 @@ the verdict from `find` alone would have made it a fifth (backlog item
   guard and the catalog behind `backlinks` normalise through the same
   function. Under `--allow-ambiguous`, and for the moved file's own
   frontmatter, `mv` rewrites only a link whose authored text is itself the
-  shared stem, so a `[[note?]]` keeps its `?`. The private copies in
+  shared stem, so a `[[note?]]` keeps its `?`. The link graph keys an ambiguous
+  wikilink by that bare stem, so `mv` reaches every spelling of it. The private copies in
   `link_fix`, `link_rewrite` (four), `mdlint`'s HYALO006 and `discovery` are
   gone; `catalog::resolve`'s bare-stem branch and `LinkResolver::resolve_stem`
   call the same function.
