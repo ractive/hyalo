@@ -412,7 +412,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directory that coincides with the index file's mtime, re-stamped after the publishing
   rename, is excused — DEC-368) — leaves the snapshot file
   untouched and reports `written: false` (iter-313, amended in review). Current-format
-  (v8) snapshots only — an older one, or one built under a different `[search] code_blocks`
+  (v9) snapshots only — an older one, or one built under a different `[search] code_blocks`
   than the config (read from the header, never forcing BM25's lazy decode), is refused with
   a `-q`-proof warning naming both values (DEC-360); `summary --index` reports
   `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused
@@ -435,6 +435,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directive warns (`-q`-proof) instead of suppressing nothing. `--max-per-rule 0` means
   unlimited. MD010's `code_blocks` option is deliberately not exposed (DEC-316) — silence a
   tab-laden page with `<!-- markdownlint-disable no-hard-tabs -->`.
+- **Autofix and `links auto` leave content alone** (iter-321): prose rules, `lint --fix` and
+  `links auto` share one model of what is not prose — raw HTML blocks, HTML tags and attribute
+  values, the text of `<a>`/`<code>`/`<pre>`, `$$`/`$` math, `{{ }}`/`{% %}` macro calls,
+  `^block-id`s, code spans (which never cross a list item). MD034 flags prose URLs only, MD010
+  reports a tab in code but never rewrites it, MD022/MD031 do not fix inside a block quote, two
+  fixes meeting at one offset are a reported conflict, `--fix-rule` rejects an unknown id, and
+  `links auto`/`links fix` write `[[x\|alias]]` inside a table row.
 - **A schema typo is a config error** (iter-276): an unknown key under `[schema]`,
   `[schema.types.<t>]`, or the wrong nesting `[schema.<t>]`, is refused with the same
   "unknown field `x`, expected one of …" diagnostic `[scan]` gives. `hyalo config` reports

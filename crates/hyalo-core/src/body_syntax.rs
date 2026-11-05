@@ -6,6 +6,8 @@
 
 use std::ops::Range;
 
+use crate::protected::{LineInfo, ProtectedBuilder, ProtectedRegions};
+
 /// An HTML comment that is wholly contained on one physical line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtmlCommentSpan {
@@ -40,6 +42,13 @@ pub struct BodySyntax {
     line_starts: Vec<usize>,
     html_comments: Vec<HtmlCommentSpan>,
     visible: String,
+    /// Per line: sits inside a block quote.
+    quoted: Vec<bool>,
+    /// Per line: how many list items enclose it.
+    list_depth: Vec<u8>,
+    /// Non-prose regions beyond code lines and comments; only computed by
+    /// [`BodySyntax::with_protected`] (see [`crate::protected`]).
+    protected: Option<ProtectedRegions>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -68,8 +77,25 @@ struct LineSpan<'a> {
 }
 
 impl BodySyntax {
+    /// Classify `body`: code, comments and the masked [`Self::visible_body`].
+    /// Cheap enough for every scan; use [`Self::with_protected`] when the
+    /// caller will rewrite or flag prose.
     #[must_use]
     pub fn new(body: &str) -> Self {
+        Self::build(body, false)
+    }
+
+    /// [`Self::new`] plus the [`ProtectedRegions`] of the body: raw HTML,
+    /// inline tags, math, macros, block ids, code spans and link
+    /// destinations. The one model lint prose rules, `lint --fix` and
+    /// `links auto` share (DEC-381).
+    #[must_use]
+    pub fn with_protected(body: &str) -> Self {
+        Self::build(body, true)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn build(body: &str, protect: bool) -> Self {
         let lines = physical_lines(body);
         let n = lines.len();
         let line_starts = lines.iter().map(|line| line.start).collect();
@@ -85,8 +111,12 @@ impl BodySyntax {
             line_starts,
             html_comments: Vec::new(),
             visible: body.to_owned(),
+            quoted: vec![false; n],
+            list_depth: vec![0; n],
+            protected: None,
         };
         let mut visible = body.as_bytes().to_vec();
+        let mut prot = protect.then(ProtectedBuilder::new);
 
         let mut open_fence: Option<(CodeFence, usize, usize)> = None;
         let mut previous_blank = true;
@@ -94,6 +124,7 @@ impl BodySyntax {
         let mut list_content_columns = Vec::new();
         let mut inline = InlineState::default();
         let mut in_percent_block = false;
+        let mut comment_closer_missing = false;
 
         for (i, physical) in lines.iter().enumerate() {
             let raw_line = physical.raw;
@@ -101,6 +132,8 @@ impl BodySyntax {
             let prefix = raw_line.len() - line.len();
             let absolute = physical.start + prefix;
             let rest = &body[physical.physical_end..];
+            syntax.quoted[i] = prefix > 0;
+            syntax.list_depth[i] = u8::try_from(list_content_columns.len()).unwrap_or(u8::MAX);
 
             if let Some((fence, _, allowance)) = open_fence {
                 if is_fence_close_within(line, fence, allowance) {
@@ -117,17 +150,60 @@ impl BodySyntax {
 
             if in_percent_block {
                 syntax.percent_comment[i] = true;
+                if let Some(p) = prot.as_mut() {
+                    p.push_block(physical.start..physical.physical_end);
+                }
                 visible[physical.start..physical.start + raw_line.len()].fill(b' ');
-                if crate::scanner::is_comment_fence(line) {
+                if crate::scanner::closes_comment_block(line) {
                     in_percent_block = false;
                 }
                 continue;
             }
 
+            // Raw HTML blocks and `$$` blocks are tracked as an overlay: the
+            // tracker never changes how this line is classified below, so
+            // `new` and `with_protected` agree on code, lists and fences.
+            let blank = line.trim().is_empty();
+            let mut consumed = false;
+            if let Some(p) = prot.as_mut() {
+                let container_column = list_content_columns.last().copied().unwrap_or(0);
+                let indent = leading_indent(line).0;
+                let marker = list_marker_content_column(
+                    line,
+                    line.len() - line.trim_start_matches(' ').len(),
+                )
+                .filter(|column| *column <= line.len());
+                let content = marker.map_or(line, |column| &line[column..]);
+                consumed = p.feed_line(&LineInfo {
+                    text: line,
+                    content,
+                    content_indent: if marker.is_some() {
+                        0
+                    } else {
+                        indent.saturating_sub(container_column)
+                    },
+                    indent,
+                    blank,
+                    quoted: prefix > 0,
+                    previous_blank,
+                    can_start: !in_percent_block
+                        && inline.code_run.is_none()
+                        && !inline.html_comment,
+                    container_col: marker.unwrap_or(if indent < container_column {
+                        0
+                    } else {
+                        container_column
+                    }),
+                    start: physical.start,
+                    end: physical.physical_end,
+                    rest,
+                });
+            }
+
             // Cross-line inline constructs own the line until their real
             // closer. Markdown-looking text inside them is never a block
             // delimiter.
-            if inline.code_run.is_some() && crate::scanner::is_block_boundary(line) {
+            if inline.code_run.is_some() && crate::scanner::ends_inline_construct(line) {
                 inline.code_run = None;
             }
             let inline_was_open = inline.code_run.is_some() || inline.html_comment;
@@ -140,11 +216,15 @@ impl BodySyntax {
                     &mut inline,
                     &mut visible,
                     &mut syntax.html_comments,
+                    &mut prot,
                 );
                 syntax.in_html_comment[i] = result.had_html
                     && visible[absolute..absolute + line.len()]
                         .iter()
                         .all(u8::is_ascii_whitespace);
+                if !consumed && let Some(p) = prot.as_mut() {
+                    p.scan_inline_line(&visible[absolute..absolute + line.len()], absolute);
+                }
                 previous_blank = line.trim().is_empty();
                 continue;
             }
@@ -152,8 +232,11 @@ impl BodySyntax {
                 let fence_allowance = list_content_columns.last().map_or(3, |column| column + 3);
                 if let Some(fence) = fence_open_within(line, fence_allowance) {
                     open_fence = Some((fence, i, fence_allowance));
+                    if let Some(p) = prot.as_mut() {
+                        p.end_block();
+                    }
                     syntax.fence_delimiter[i] = true;
-                    let indent = line.len() - line.trim_start_matches(' ').len();
+                    let indent = leading_indent(line).1;
                     syntax.fence_open[i] = Some(FenceOpen {
                         ch: char::from(fence.ch),
                         len: fence.len,
@@ -164,15 +247,25 @@ impl BodySyntax {
                     previous_blank = false;
                     continue;
                 }
-                if crate::scanner::is_comment_fence(line) {
+                if crate::scanner::opens_comment_block(line)
+                    && !comment_closer_missing
+                    && !crate::scanner::comment_closer_ahead(rest)
+                {
+                    // No closer anywhere after this line: no later opener
+                    // can succeed either, so do not search again.
+                    comment_closer_missing = true;
+                }
+                if crate::scanner::opens_comment_block(line) && !comment_closer_missing {
                     syntax.percent_comment[i] = true;
+                    if let Some(p) = prot.as_mut() {
+                        p.push_block(physical.start..physical.physical_end);
+                    }
                     visible[physical.start..physical.start + raw_line.len()].fill(b' ');
                     in_percent_block = true;
                     continue;
                 }
             }
 
-            let blank = line.trim().is_empty();
             // Decide indented-code status against the container that existed
             // before this line. Otherwise an indented code example beginning
             // with `- ` would incorrectly create its own list container.
@@ -201,8 +294,16 @@ impl BodySyntax {
                 syntax.indented_code[i] = true;
             }
 
+            if let Some(p) = prot.as_mut()
+                && !syntax.in_code[i]
+                && crate::scanner::ends_inline_construct(line)
+            {
+                p.end_block();
+            }
+
             if !blank && !syntax.in_code[i] {
                 update_list_containers(line, &mut list_content_columns);
+                syntax.list_depth[i] = u8::try_from(list_content_columns.len()).unwrap_or(u8::MAX);
             }
 
             if syntax.in_code[i] {
@@ -216,11 +317,15 @@ impl BodySyntax {
                     &mut inline,
                     &mut visible,
                     &mut syntax.html_comments,
+                    &mut prot,
                 );
                 syntax.in_html_comment[i] = result.had_html
                     && visible[absolute..absolute + line.len()]
                         .iter()
                         .all(u8::is_ascii_whitespace);
+                if !consumed && let Some(p) = prot.as_mut() {
+                    p.scan_inline_line(&visible[absolute..absolute + line.len()], absolute);
+                }
             }
             previous_blank = blank;
         }
@@ -229,6 +334,7 @@ impl BodySyntax {
             syntax.unterminated_fence_open[opener] = true;
         }
         syntax.visible = String::from_utf8(visible).expect("masking preserves UTF-8");
+        syntax.protected = prot.map(ProtectedBuilder::finish);
         syntax
     }
 
@@ -288,23 +394,58 @@ impl BodySyntax {
         if range.start > range.end || range.start > self.visible.len() {
             return false;
         }
-        self.line_starts.iter().enumerate().any(|(index, start)| {
+        // First line whose start is at or before `range.start`; walk only
+        // the lines the range reaches, so a body with thousands of fixes
+        // stays linear overall.
+        let first = self
+            .line_starts
+            .partition_point(|start| *start <= range.start)
+            .saturating_sub(1);
+        for index in first..self.line_starts.len() {
+            let start = self.line_starts[index];
             let end = self
                 .line_starts
                 .get(index + 1)
                 .copied()
                 .unwrap_or(self.visible.len());
             let intersects = if range.is_empty() {
-                *start <= range.start && range.start < end
+                start <= range.start && range.start < end
             } else {
-                *start < range.end && end > range.start
+                start < range.end && end > range.start
             };
-            intersects
+            if intersects
                 && (self.in_code.get(index).copied().unwrap_or(false)
                     || self.in_html_comment.get(index).copied().unwrap_or(false))
-        })
+            {
+                return true;
+            }
+            if start >= range.end {
+                break;
+            }
+        }
+        false
     }
-    pub(crate) fn line_is_fence_delimiter(&self, line: usize) -> bool {
+    /// The protected regions, when built with [`Self::with_protected`].
+    #[must_use]
+    pub fn protected(&self) -> Option<&ProtectedRegions> {
+        self.protected.as_ref()
+    }
+    /// Whether the 1-based line sits inside a block quote.
+    #[must_use]
+    pub fn line_in_block_quote(&self, line: usize) -> bool {
+        Self::at(line, &self.quoted)
+    }
+    /// Whether the 1-based line sits inside a list item.
+    #[must_use]
+    pub fn line_in_list_item(&self, line: usize) -> bool {
+        line.checked_sub(1)
+            .and_then(|index| self.list_depth.get(index))
+            .is_some_and(|depth| *depth > 0)
+    }
+    /// Whether the 1-based line is the opening or closing delimiter of a
+    /// fenced code block.
+    #[must_use]
+    pub fn line_is_fence_delimiter(&self, line: usize) -> bool {
         Self::at(line, &self.fence_delimiter)
     }
     pub(crate) fn fence_open(&self, line: usize) -> Option<(char, usize, &str)> {
@@ -333,6 +474,7 @@ struct InlineResult {
     had_html: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mask_inline_line(
     line: &str,
     rest: &str,
@@ -341,8 +483,16 @@ fn mask_inline_line(
     state: &mut InlineState,
     visible: &mut [u8],
     html_comments: &mut Vec<HtmlCommentSpan>,
+    prot: &mut Option<ProtectedBuilder>,
 ) -> InlineResult {
-    if state.code_run.is_some() && crate::scanner::is_block_boundary(line) {
+    // Every span blanked below is literal text too: record it for the
+    // protected-region model (DEC-381).
+    let mut mark = |from: usize, to: usize| {
+        if let Some(p) = prot.as_mut() {
+            p.push_inline(absolute + from..absolute + to);
+        }
+    };
+    if state.code_run.is_some() && crate::scanner::ends_inline_construct(line) {
         state.code_run = None;
     }
     let source = line.as_bytes();
@@ -359,10 +509,12 @@ fn mask_inline_line(
             if let Some(relative) = line[i..].find("-->") {
                 let end = i + relative + 3;
                 visible[absolute + i..absolute + end].fill(b' ');
+                mark(i, end);
                 state.html_comment = false;
                 i = end;
             } else {
                 visible[absolute + i..absolute + source.len()].fill(b' ');
+                mark(i, source.len());
                 break;
             }
             continue;
@@ -370,10 +522,12 @@ fn mask_inline_line(
         if let Some(open_len) = state.code_run {
             if let Some((_, end)) = find_exact_code_run(source, i, open_len) {
                 visible[absolute + i..absolute + end].fill(b' ');
+                mark(i, end);
                 state.code_run = None;
                 i = end;
             } else {
                 visible[absolute + i..absolute + source.len()].fill(b' ');
+                mark(i, source.len());
                 break;
             }
             continue;
@@ -389,9 +543,11 @@ fn mask_inline_line(
                     content: absolute + content_start..absolute + content_end,
                 });
                 visible[absolute + i..absolute + end].fill(b' ');
+                mark(i, end);
                 i = end;
             } else {
                 visible[absolute + i..absolute + source.len()].fill(b' ');
+                mark(i, source.len());
                 state.html_comment = true;
                 break;
             }
@@ -401,6 +557,7 @@ fn mask_inline_line(
             if let Some(relative) = line[i + 2..].find("%%") {
                 let end = i + 2 + relative + 2;
                 visible[absolute + i..absolute + end].fill(b' ');
+                mark(i, end);
                 i = end;
             } else {
                 i += 2;
@@ -415,9 +572,11 @@ fn mask_inline_line(
             let run = i - start;
             if let Some((_, end)) = find_exact_code_run(source, i, run) {
                 visible[absolute + start..absolute + end].fill(b' ');
+                mark(start, end);
                 i = end;
             } else if crate::scanner::code_run_exists(crate::scanner::block_lookahead(rest), run) {
                 visible[absolute + start..absolute + source.len()].fill(b' ');
+                mark(start, source.len());
                 state.code_run = Some(run);
                 break;
             }
@@ -539,9 +698,26 @@ fn ordered_list_marker_content_column(line: &str) -> Option<usize> {
     list_marker_content_column(line, indent)
 }
 
+/// Leading whitespace of `line` as `(columns, bytes)`, a tab advancing to the
+/// next multiple of four columns (CommonMark §2.2). Fence indentation counts
+/// columns, so a fence written `\t```json` inside a list item is a fence.
+fn leading_indent(line: &str) -> (usize, usize) {
+    let mut columns = 0usize;
+    let mut bytes = 0usize;
+    for byte in line.bytes() {
+        match byte {
+            b' ' => columns += 1,
+            b'\t' => columns += 4 - (columns % 4),
+            _ => break,
+        }
+        bytes += 1;
+    }
+    (columns, bytes)
+}
+
 fn fence_open_within(line: &str, max_indent: usize) -> Option<CodeFence> {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > max_indent {
+    let (columns, indent) = leading_indent(line);
+    if columns > max_indent {
         return None;
     }
     let rest = &line[indent..];
@@ -557,8 +733,8 @@ fn fence_open_within(line: &str, max_indent: usize) -> Option<CodeFence> {
 }
 
 fn is_fence_close_within(line: &str, open: CodeFence, max_indent: usize) -> bool {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > max_indent {
+    let (columns, indent) = leading_indent(line);
+    if columns > max_indent {
         return false;
     }
     let rest = &line[indent..];
@@ -712,5 +888,92 @@ mod tests {
         assert!(ordered.line_is_fence_delimiter(2));
         assert!(ordered.line_is_code(3));
         assert!(ordered.line_is_fence_delimiter(4));
+    }
+
+    #[test]
+    fn plain_new_computes_no_protected_regions() {
+        assert!(
+            BodySyntax::new(
+                "<div>
+x
+</div>
+"
+            )
+            .protected()
+            .is_none()
+        );
+        assert!(
+            BodySyntax::with_protected(
+                "<div>
+x
+</div>
+"
+            )
+            .protected()
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn protected_scan_leaves_the_visible_view_untouched() {
+        let body = "<div>
+[[link]] `code`
+</div>
+\nText $x$ {{ m }} [[b]]\n";
+        let plain = BodySyntax::new(body);
+        let protected = BodySyntax::with_protected(body);
+        assert_eq!(plain.visible_body(), protected.visible_body());
+        assert!(protected.visible_body().contains("[[link]]"));
+        assert!(protected.visible_body().contains("[[b]]"));
+    }
+
+    #[test]
+    fn container_flags_follow_block_quotes_and_list_items() {
+        let body = "> quote\n> # h\n\n1. item\n   # inside\n\n# top\n";
+        let syntax = BodySyntax::new(body);
+        assert!(syntax.line_in_block_quote(1) && syntax.line_in_block_quote(2));
+        assert!(syntax.line_in_list_item(4) && syntax.line_in_list_item(5));
+        assert!(!syntax.line_in_block_quote(7) && !syntax.line_in_list_item(7));
+    }
+
+    #[test]
+    fn a_code_span_does_not_cross_list_items() {
+        let body = "- see `@person\n- Alpha Note `x`\n";
+        let syntax = BodySyntax::new(body);
+        assert!(syntax.visible_line(2).unwrap().contains("Alpha Note"));
+        assert!(syntax.visible_line(1).unwrap().contains('`'));
+    }
+
+    /// C-2: stray backticks on every line of one block must not be quadratic.
+    #[test]
+    fn stray_backticks_in_a_huge_block_stay_linear() {
+        let body = "word ` stray tick\n".repeat(60_000);
+        let start = std::time::Instant::now();
+        let _ = BodySyntax::with_protected(&body);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn range_intersects_protected_checks_only_the_lines_it_reaches() {
+        let body = "a\n\n```\ncode\n```\n\nz\n";
+        let syntax = BodySyntax::new(body);
+        let code = body.find("code").unwrap();
+        assert!(syntax.range_intersects_protected(code..code + 4));
+        assert!(!syntax.range_intersects_protected(0..1));
+        assert!(!syntax.range_intersects_protected(body.len() - 2..body.len()));
+    }
+
+    #[test]
+    fn a_tab_indented_fence_in_a_list_item_is_a_fence() {
+        let body = "3. step\n\t```json\n\t{ \"a\": 1 }\n\t```\n4. next\n";
+        let syntax = BodySyntax::new(body);
+        assert!(syntax.line_is_fence_delimiter(2));
+        assert!(syntax.line_is_code(3));
+        assert!(syntax.line_is_fence_delimiter(4));
+        assert!(!syntax.line_is_code(5));
     }
 }

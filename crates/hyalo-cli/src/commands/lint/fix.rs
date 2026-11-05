@@ -52,7 +52,9 @@ pub(super) fn apply_body_fixes(
         std::collections::HashMap::new();
 
     for &(orig_idx, start, end) in &candidates {
-        let conflict_with = winners.iter().find(|(_, ws, we)| start < *we && end > *ws);
+        let conflict_with = winners
+            .iter()
+            .find(|(_, ws, we)| edits_conflict((start, end), (*ws, *we)));
         if let Some(&(blocking_idx, _, _)) = conflict_with {
             let blocking_rule = fixes[blocking_idx].rule_id.clone();
             outcome_map.insert(orig_idx, FixOutcome::Conflict { blocking_rule });
@@ -74,7 +76,10 @@ pub(super) fn apply_body_fixes(
     }
 
     // Mutate the buffer in descending start order (see doc comment above).
-    winners.sort_by_key(|&(_, start, _)| std::cmp::Reverse(start));
+    // Ties cannot involve a replacement any more (`edits_conflict` rejects an
+    // insertion at a replacement's start); sorting the end descending as well
+    // keeps the order total regardless.
+    winners.sort_by_key(|&(_, start, end)| std::cmp::Reverse((start, end)));
     let mut result = body.to_owned();
     for (orig_idx, start, end) in winners {
         let replacement = fixes[orig_idx]
@@ -110,6 +115,23 @@ pub(super) fn apply_body_fixes(
         .collect();
 
     (result, outcomes)
+}
+
+/// Whether two edits of half-open body ranges cannot both be applied.
+///
+/// Ranges that overlap conflict, and so does a zero-width insertion at the
+/// start of a non-empty replacement: the plain overlap test calls them
+/// disjoint, yet whichever is applied second lands inside text the first one
+/// moved. Applied insert-first, the replacement then covered the inserted
+/// bytes and left the tail of the original range behind as a stray line
+/// (L-1, iteration 321). An insertion at a replacement's *end* is fine — it
+/// sits after the replaced bytes in either order.
+fn edits_conflict(a: (usize, usize), b: (usize, usize)) -> bool {
+    let overlap = a.0 < b.1 && a.1 > b.0;
+    let insert_at_start = |insert: (usize, usize), other: (usize, usize)| {
+        insert.0 == insert.1 && other.1 > other.0 && insert.0 == other.0
+    };
+    overlap || insert_at_start(a, b) || insert_at_start(b, a)
 }
 
 /// Find the byte offset where the document body starts (after the closing `---` line).
@@ -157,4 +179,73 @@ pub(super) fn has_completed_in_type(
         return values.iter().any(|v| v == "completed");
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyalo_mdlint::{DiagFix, DiagSeverity, Diagnostic};
+
+    fn diag(rule: &str, start: usize, end: usize, replacement: &str) -> Diagnostic {
+        Diagnostic {
+            rule_id: rule.to_owned(),
+            rule_name: rule.to_owned(),
+            message: String::new(),
+            line: 1,
+            column: 1,
+            severity: DiagSeverity::Warn,
+            fix: Some(DiagFix {
+                description: String::new(),
+                start,
+                end,
+                replacement: replacement.to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_insertion_at_a_replacements_start_conflicts_with_it() {
+        assert!(edits_conflict((7, 7), (7, 20)));
+        assert!(edits_conflict((7, 20), (7, 7)));
+        assert!(
+            edits_conflict((5, 9), (8, 12)),
+            "plain overlap still conflicts"
+        );
+    }
+
+    #[test]
+    fn disjoint_and_end_adjacent_edits_do_not_conflict() {
+        assert!(
+            !edits_conflict((7, 20), (20, 20)),
+            "insert at the end is safe"
+        );
+        assert!(
+            !edits_conflict((7, 7), (7, 7)),
+            "two insertions can coexist"
+        );
+        assert!(!edits_conflict((0, 3), (3, 6)));
+    }
+
+    /// L-1: MD022 inserts a newline at 7 while MD023 replaces `[7, 20)`. The
+    /// old overlap test let both win and left a stray `d` behind.
+    #[test]
+    fn insert_and_replace_at_one_offset_report_a_conflict_not_corruption() {
+        let body = "# Wide\n ## Indented\ntext\n";
+        let insert = diag("MD022", 7, 7, "\n");
+        let replace = diag("MD023", 7, 20, "## Indented\n");
+        let (fixed, outcomes) = apply_body_fixes(body, &[&insert, &replace]);
+        let applied = outcomes
+            .iter()
+            .filter(|o| matches!(o, FixOutcome::Applied))
+            .count();
+        let conflicts = outcomes
+            .iter()
+            .filter(|o| matches!(o, FixOutcome::Conflict { .. }))
+            .count();
+        assert_eq!((applied, conflicts), (1, 1), "{outcomes:?}");
+        assert!(
+            fixed == "# Wide\n\n ## Indented\ntext\n" || fixed == "# Wide\n## Indented\ntext\n",
+            "exactly one of the two edits applied: {fixed:?}"
+        );
+    }
 }

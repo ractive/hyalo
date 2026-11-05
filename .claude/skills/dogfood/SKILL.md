@@ -23,7 +23,7 @@ try edge cases that occur to you naturally.
    PRs behind `target/release/hyalo`, and a DEC-284 check against it nearly got filed as a bug.
    ```bash
    cargo build --release
-   cargo install --path crates/hyalo-cli --target-dir target --force
+   cargo install --path crates/hyalo-cli --target-dir target --force --locked
    test "$(hyalo --version | awk '{print $3}' | tr -d '(' | sed 's/+dirty$//')" = "$(git rev-parse --short=12 HEAD)" \
      && echo "hyalo on PATH is HEAD" || { echo "STALE hyalo on PATH: $(which hyalo)"; exit 1; }
    ```

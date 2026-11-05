@@ -411,7 +411,7 @@ fn no_autofixable_rule_rewrites_a_protected_region() {
 /// byte-identical after `--fix`; the same trigger outside it still fires.
 #[test]
 fn markdownlint_disable_protects_a_region_by_alias() {
-    let protected = "---\ntitle: t\n---\n\n# T\n\n<!-- markdownlint-disable no-hard-tabs -->\n\n```html\n\ttabbed sample\n```\n\n<!-- markdownlint-enable no-hard-tabs -->\n\n\tunprotected tab\n";
+    let protected = "---\ntitle: t\n---\n\n# T\n\n<!-- markdownlint-disable no-hard-tabs -->\n\n```html\n\ttabbed sample\n```\n\n<!-- markdownlint-enable no-hard-tabs -->\n\nunprotected\ttab\n";
     let tmp = vault(&[("mdn.md", protected)]);
 
     let v = json(&tmp, &["lint", "--file", "mdn.md", "--rule", "MD010"]);
@@ -432,7 +432,7 @@ fn markdownlint_disable_protects_a_region_by_alias() {
         "the protected sample keeps its tab:\n{after}"
     );
     assert!(
-        !after.contains("\tunprotected tab"),
+        !after.contains("unprotected\ttab"),
         "the tab outside the region is still fixed:\n{after}"
     );
 }

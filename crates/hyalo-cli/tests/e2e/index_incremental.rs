@@ -545,3 +545,46 @@ fn v7_snapshot_is_refused_and_rebuilt_not_reused() {
     assert_eq!(json["results"]["rebuilt"], true, "{json}");
     assert_eq!(json["results"]["reused"], 0, "{json}");
 }
+
+/// DEC-381 (PR #402 review R5): a code span no longer crosses list items, so
+/// the links a body yields changed. A v8 snapshot would have an incremental
+/// `create-index` reuse the unchanged entry with the old links.
+#[test]
+fn v8_snapshot_is_refused_and_rebuilt_not_reused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "- see `@person\n- real [[target]] link `x`\n",
+    );
+    write_md(tmp.path(), "target.md", "# t\n");
+    backdate(&tmp.path().join("a.md"));
+    backdate(&tmp.path().join("target.md"));
+    let (_, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+
+    let index_path = tmp.path().join(".hyalo-index");
+    let mut snapshot = load_snapshot(&index_path);
+    snapshot["header"]["format_version"] = serde_json::json!(8);
+    save_snapshot(&index_path, &snapshot);
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["backlinks", "target.md", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "{json}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index format is older than this binary") && stderr.contains("v8"),
+        "{stderr}"
+    );
+
+    let (json, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["results"]["rebuilt"], true, "{json}");
+    assert_eq!(json["results"]["reused"], 0, "{json}");
+}

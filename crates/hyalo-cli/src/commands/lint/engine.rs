@@ -24,6 +24,15 @@ use std::collections::HashSet;
 /// actually changed. `--detailed` prints the full list.
 const MAX_CONFLICT_LINES: usize = 20;
 
+/// Files between two `lint --fix` progress lines (and the smallest run that
+/// reports any), matching `ProgressReporter` in `commands/apply.rs`.
+const PROGRESS_STEP: usize = 200;
+
+fn emit_progress(message: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr().lock(), "{message}");
+}
+
 /// Run the extended lint (frontmatter + body) and return the new output shape.
 pub fn lint_files_extended(
     files: &[(std::path::PathBuf, String)],
@@ -123,9 +132,18 @@ pub(super) fn lint_files_extended_observed(
         hyalo_core::rooted::Durability::PerFile
     });
 
+    // B-13 (iteration 321): `lint --fix` is one of the bulk write phases that
+    // reports progress on stderr past a few hundred files, like `set`/`mv`
+    // do through `ProgressReporter`. Workers run in parallel, so the counter
+    // is atomic and a line is printed each time it crosses a multiple of
+    // `PROGRESS_STEP`; `-q` silences it.
+    let report_progress = matches!(opts.fix, FixMode::Apply)
+        && files.len() >= PROGRESS_STEP
+        && !hyalo_core::warn::quiet_progress();
+    let processed = std::sync::atomic::AtomicUsize::new(0);
     // Process files in parallel. Each worker lints one file.
     let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
-        lint_one_file_extended(
+        let result = lint_one_file_extended(
             full_path,
             rel_path,
             schema,
@@ -145,12 +163,27 @@ pub(super) fn lint_files_extended_observed(
             case_insensitive,
             link_ctx,
             &write_session,
-        )
+        );
+        if report_progress {
+            let done = processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if done.is_multiple_of(PROGRESS_STEP) {
+                emit_progress(&format!("lint --fix: {done}/{} files", files.len()));
+            }
+        }
+        result
     };
     #[cfg(not(miri))]
     let per_file: Vec<Result<PerFileLintResult>> = files.par_iter().map(lint_file).collect();
     #[cfg(miri)]
     let per_file: Vec<Result<PerFileLintResult>> = files.iter().map(lint_file).collect();
+
+    if report_progress {
+        emit_progress(&format!(
+            "lint --fix: {}/{} files, done",
+            processed.load(std::sync::atomic::Ordering::Relaxed),
+            files.len()
+        ));
+    }
 
     // Merge results serially.
     let mut all_results: Vec<PerFileLintResult> = Vec::with_capacity(files.len());
