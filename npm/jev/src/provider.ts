@@ -73,7 +73,7 @@ export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?
         const transport = boundedFetch(options.fetch ?? fetch, () => { attempts++; });
         try {
           const client = new TypeSafeClient({
-            // zstd is the SDK default on Node 22.15+ only; keep one plain JSON wire format.
+            // zstd is the SDK default wherever zlib has it (Bun, Node 22.15+); keep one plain JSON wire format.
             apiKey: key, baseURL: "https://api.typesafe.ai", defaultModel: MODEL, logLevel: "off", timeout: deadline, compression: false,
             retry: { maxRetries: 1, httpStatuses: new Set([429, 529]), apiConnectionError: false, apiTimeoutError: false, respectRetryAfter: true, maxRetryAfterMs: LIMITS.deadline + 1, backoffInitialMs: 250, backoffMaxMs: 250, backoffJitter: 0 },
             fetch: async (input, init) => { try { return await transport(input, init); } catch (error) { if (error instanceof Invalid) transportInvalid = true; throw error; } },

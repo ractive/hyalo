@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { manifest, evidenceHash, MODEL, policy } from "../src/protocol.ts";
+import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { manifest, evidenceHash, MODEL, payload, policy } from "../src/protocol.ts";
 import { ask, boundedFetch } from "../src/provider.ts";
 import { fixture, p, response } from "./fixtures.ts";
 test("explicit opt-in before dispatch; fixed endpoint and model override environment", async () => {
@@ -20,7 +21,7 @@ test("explicit opt-in before dispatch; fixed endpoint and model override environ
   } finally { names.forEach((n, i) => { if (old[i] === undefined) delete process.env[n]; else process.env[n] = old[i]; }); }
 });
 test("request bodies stay plain JSON at every size", async () => {
-  // Above the SDK's 1 KiB compression threshold, which is its default on Node 22.15+.
+  // Above the SDK's 1 KiB compression threshold; zstd is its default on Bun and Node 22.15+.
   const m = fixture("Measurements show a 20 percent improvement. ".repeat(100)); let body: unknown, headers = new Headers();
   const result = await ask(m, { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => {
     body = init?.body; headers = new Headers(init?.headers);
@@ -99,4 +100,15 @@ test("failed tag requests retain independent local filing suggestions", async ()
     expect(result.results[0]?.decisions.find(d => d.field === "tag")?.status).toBe("defer");
     expect(result.results[0]?.decisions.filter(d => d.field === "folder")).toEqual("type" in current ? [{ field: "folder", status: "suggestion", value: "docs", reason: "local type-to-folder convention" }] : []);
   }
+});
+test("the SDK itself refuses what the image-reference guard defers", async () => {
+  // The guard copies a private SDK pattern; this fails if a bump moves that format.
+  let calls = 0;
+  const client = new TypeSafeClient({ apiKey: "test-key", baseURL: "https://api.typesafe.ai", defaultModel: MODEL, logLevel: "off", compression: false, fetch: async () => { calls++; return Response.json({}); } });
+  const request = payload(fixture().documents[0]!, p).request;
+  // `systemOne` returns a lazy thenable, which `.rejects` cannot read without awaiting it.
+  await expect((async () => await client.systemOne({ ...request, state: `See <image:${"0123456789abcdef".repeat(2)}>.` }))()).rejects.toThrow("image");
+  expect(calls).toBe(0);
+  await client.systemOne({ ...request, state: "See <image:not-a-reference>." }).catch(() => undefined);
+  expect(calls).toBeGreaterThan(0);
 });

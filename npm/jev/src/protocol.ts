@@ -144,6 +144,7 @@ export function payload(doc: Document, p: Policy): { request: ProviderRequest; b
   });
   const request = { model: MODEL, state: doc.content, questions }, json = JSON.stringify(request);
   insist(Object.keys(questions).length <= LIMITS.questions && Buffer.byteLength(json) <= LIMITS.request, "request exceeds limits");
-  insist(!IMAGE_REFERENCE.test(json), "text resembles an SDK image reference");
+  // A note with no questions is never sent, so the SDK cannot refuse it.
+  insist(!Object.keys(questions).length || !IMAGE_REFERENCE.test(json), "text resembles an SDK image reference");
   return { request, bindings };
 }

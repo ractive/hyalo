@@ -17,6 +17,8 @@ test("text the SDK would refuse as an unattached image reference defers before t
   const reference = `<image:${"0123456789abcdef".repeat(2)}>`, doc = fixture().documents[0]!;
   expect(() => payload({ ...doc, content: `See ${reference}.` }, p)).toThrow("image reference");
   expect(() => payload({ ...doc, content: "See <image:not-a-reference>." }, p)).not.toThrow();
+  // With no question the note is never sent, so a local suggestion is not lost to the guard.
+  expect(() => payload({ ...doc, missingType: false, content: `See ${reference}.` }, policy({ version: 1, types: p.types }))).not.toThrow();
 });
 test("rejects malformed answers; unknown and uncertain choices defer", () => {
   const { request, bindings } = payload(fixture().documents[0]!, p), valid = response(request);
