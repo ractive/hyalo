@@ -128,6 +128,50 @@ and this project adheres to
 - Moving a note re-aims its own `./x` and `../x` wikilinks (single and batch, body and frontmatter); before, they broke or silently pointed at another note. A frontmatter link spelling a moved directory index keeps naming the directory (DEC-384).
 - A link that names two notes (`[[./note]]`, a shared partial path `[[x/note]]`) is no longer a backlink of either; `mv` lists it in `skipped_ambiguous` instead of leaving it to resolve to the twin. `--allow-ambiguous` rewrites body and frontmatter alike, `?query` kept (DEC-384).
 - A `?` in a note name is part of the name for every reader and for `mv`; wikilinks write `?`, `%` and `:` literally instead of `%3F`. `links fix` keeps a body wikilink's `?query` and reports the whole bracket text as `emitted_target`; a partial path folds case only when `[links] case_insensitive` does (DEC-387, DEC-385).
+- `--index` answers like a disk scan or is refused (DEC-389). `backlinks FILE`,
+  `find --file F --fields backlinks|links` and the orphan, dead-end and
+  broken-link filters repair the whole drift in memory, not only the named
+  file, so a deleted or added referrer no longer shows up stale. The snapshot
+  records the `[links] frontmatter` allow-list it was built with, and a run
+  under another one refuses it instead of serving frontmatter edges a disk scan
+  does not have. A note that was unparsable when the index was built and then
+  fixed in place is picked up, and the staleness probe looks inside a hidden
+  directory that `[scan] include` admits. A snapshot written by a newer binary
+  is refused like an older one, and `create-index` no longer reuses its
+  entries. The snapshot format is now 10: rebuild with `hyalo create-index`.
+- Frontmatter comments survive writes: removing the last key keeps the block's
+  own comments, `set` on a comment-only block keeps them, a trailing `# note`
+  stays on a changed scalar or a renamed tag, and `tags rename` keeps a flow
+  list flow with the untouched items' quoting.
+- `init` refuses a `.hyalo.toml` that does not parse (exit 1, nothing created)
+  instead of replacing it with `dir = ...`, and reports a byte-identical config
+  as `unchanged`. `deinit` keeps a `.hyalo.toml` that holds more than `dir`.
+  A failure that wrote nothing no longer lists "Effects", its hint no longer
+  mentions `task toggle`, and `init --profile` on a broken config names the
+  TOML error.
+- `changelog release`, `changelog add` and `madr toc` exit 0 on a dry run and
+  report the drift in `results.changed`, like `okf index` (DEC-307). Before,
+  they exited 1.
+- `changelog release` rejects an impossible `--date` and a version below the
+  newest release; `changelog add` rejects a continuation line that would parse
+  as a heading or a link definition; a fenced example is not mistaken for the
+  footer or a version heading.
+- `append` onto a mapping exits 1, not 2.
+- `[lint.rules.X] severity` must be `error` or `warn`; `eror` made the config
+  unusable instead of reading as `warn` and letting a CI gate pass.
+- `new --file` requires `<stem>.md`; `\` is a path separator only on Windows
+  in `new`, `okf`, `changelog`, `madr`, `--files-from` and `dir`.
+- `--jq` keeps leading empty-string outputs (`"", "", "a"` prints three lines).
+- A wikilink written relative (`[[../t]]`, `[[./sib]]`) stays relative when its
+  note or its target moves, in body and frontmatter, single and batch `mv`
+  (DEC-391). Before, it became a bare or vault-path link.
+- A non-UTF-8 argument no longer aborts with a panic; a file hyalo creates
+  follows the umask instead of `0600`; a note with a BOM and no frontmatter
+  keeps the BOM first and its line endings when `set` adds the first block, and
+  `# Title` after a BOM is its H1; `- [x]ample` is prose, not a checkbox; a
+  line of `[a](` repeated 40 000 times takes 0.06 s instead of 11.7 s; a
+  `language: de-CH` note is stemmed as German; a Windows-reserved name
+  (`CON.md`, `a:b.md`) is refused on Windows (DEC-392).
 
 ### Security
 

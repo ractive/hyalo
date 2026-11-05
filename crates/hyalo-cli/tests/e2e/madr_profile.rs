@@ -238,9 +238,10 @@ fn toc_generates_and_is_idempotent() {
         &md_adr("Record decisions", "accepted", Some("2026-07-17")),
     );
 
-    // Dry-run first: drift → non-zero exit.
-    let (_json, out) = run(tmp.path(), &["madr", "toc"]);
-    assert_eq!(out.status.code(), Some(1), "dry-run signals drift");
+    // Dry-run first: a dry run answered, so it exits 0 and reports the drift.
+    let (json, out) = run(tmp.path(), &["madr", "toc"]);
+    assert_eq!(out.status.code(), Some(0), "dry-run exits 0 (DEC-390)");
+    assert_eq!(json["results"]["changed"], true, "{json}");
 
     // Apply: creates the README with a table row.
     let (json, out) = run(tmp.path(), &["madr", "toc", "--apply"]);

@@ -103,7 +103,12 @@ pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
             patterns: kept,
         })
     };
-    let _ = SCAN_EXCLUDE.set(compiled);
+    let patterns_installed = compiled.as_ref().map(|exclude| exclude.patterns.clone());
+    if let Err(ignored) = SCAN_EXCLUDE.set(compiled)
+        && ignored.as_ref().map(|exclude| &exclude.patterns) != patterns_installed.as_ref()
+    {
+        warn_ignored_global("[scan] exclude");
+    }
     errors
 }
 
@@ -198,6 +203,14 @@ pub fn reset_gitignore_dropped_count() {
     GITIGNORE_DROPPED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether `[scan] include` opens the hidden vault-relative directory `rel`
+/// (forward-slash, no trailing slash) to the walk. `.git` never is. The
+/// staleness probe asks this so it looks where discovery does (C-16).
+#[must_use]
+pub fn scan_include_allows_dir(rel: &str) -> bool {
+    matches!(SCAN_INCLUDE.get(), Some(Some(include)) if include.allows_dir(rel))
+}
+
 /// Compiled `[scan] include` configuration.
 #[derive(Clone)]
 struct ScanInclude {
@@ -208,6 +221,8 @@ struct ScanInclude {
     /// hidden directory: the walker enters a dir when it lies on the path to,
     /// or beneath, one of these prefixes.
     dir_prefixes: Vec<String>,
+    /// The configured globs, to tell a repeated install from a conflicting one.
+    patterns: Vec<String>,
 }
 
 impl ScanInclude {
@@ -285,7 +300,19 @@ static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 /// keeps the setting off the signature of every resolver, index builder and
 /// graph pass that would otherwise have to forward it.
 pub fn set_link_aliases(enabled: bool) {
-    let _ = LINK_ALIASES.set(enabled);
+    if LINK_ALIASES.set(enabled).is_err() && link_aliases_enabled() != enabled {
+        warn_ignored_global("[links] aliases");
+    }
+}
+
+/// C-11: the process-wide settings are first-call-wins, so a second call that
+/// carries a different value (an embedder or a multi-vault process) would
+/// otherwise be dropped without a word.
+fn warn_ignored_global(setting: &str) {
+    crate::warn::warn(format!(
+        "{setting} was already installed for this process with a different value; \
+         the new value is ignored"
+    ));
 }
 
 /// Whether frontmatter `aliases:` resolve links in this process. Defaults to
@@ -326,12 +353,18 @@ pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
                 Err(e) => errors.push((pat.clone(), e.to_string())),
             }
         }
-        builder
-            .build()
-            .ok()
-            .map(|set| ScanInclude { set, dir_prefixes })
+        builder.build().ok().map(|set| ScanInclude {
+            set,
+            dir_prefixes,
+            patterns: patterns.to_vec(),
+        })
     };
-    let _ = SCAN_INCLUDE.set(compiled);
+    let patterns_installed = compiled.as_ref().map(|include| include.patterns.clone());
+    if let Err(ignored) = SCAN_INCLUDE.set(compiled)
+        && ignored.as_ref().map(|include| &include.patterns) != patterns_installed.as_ref()
+    {
+        warn_ignored_global("[scan] include");
+    }
     errors
 }
 
@@ -3681,6 +3714,7 @@ mod tests {
         }
         ScanInclude {
             set: builder.build().unwrap(),
+            patterns: patterns.iter().map(|p| (*p).to_owned()).collect(),
             dir_prefixes,
         }
     }

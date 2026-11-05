@@ -174,7 +174,16 @@ pub(super) fn splice_frontmatter(
         return SpliceOutcome::Fallback(FallbackReason::Unparseable);
     };
 
-    let Some((header, segments, footer)) = segment(yaml) else {
+    // A-16: a block of only comments and blank lines has no key to splice
+    // against, but its comments are still the author's — keep them as the
+    // header and write the new keys below.
+    let Some((header, segments, footer)) = segment(yaml).or_else(|| {
+        (original_map.is_empty() && yaml.split('\n').all(is_trivia)).then_some((
+            yaml,
+            Vec::new(),
+            "",
+        ))
+    }) else {
         return SpliceOutcome::Fallback(FallbackReason::NotSpanMappable);
     };
 
@@ -455,7 +464,117 @@ fn render_changed_segment(
             ListSpliceResult::NotApplicable => {}
         }
     }
-    serialize_one(key, new_value, compact_list_indent).ok_or(FallbackReason::SerializeFailed)
+    if let (Value::Array(old_items), Value::Array(new_items)) = (&seg.value, new_value)
+        && old_items.iter().all(is_inline_scalar)
+        && new_items.iter().all(is_inline_scalar)
+        && let Some(text) = rebuild_flow_list(seg.body, old_items, new_items)
+    {
+        return Ok(text);
+    }
+    let mut text = serialize_one(key, new_value, compact_list_indent)
+        .ok_or(FallbackReason::SerializeFailed)?;
+    // A-17: `status: single # keep` is still a commented line after the value
+    // changes. Only the one-line scalar shape is modelled; anything longer
+    // re-serializes as before.
+    if is_inline_scalar(&seg.value)
+        && is_inline_scalar(new_value)
+        && seg.body.trim_end_matches('\n').lines().count() == 1
+        && text.trim_end_matches('\n').lines().count() == 1
+        && let Some(comment) = trailing_comment(seg.body.trim_end_matches('\n'))
+    {
+        text.truncate(text.trim_end_matches('\n').len());
+        text.push_str(comment);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The ` # comment` suffix of a one-line `key: value` (leading whitespace
+/// included), or `None` when the line carries no comment outside its quotes.
+fn trailing_comment(line: &str) -> Option<&str> {
+    let value_start = key_token_len(line)? + 1;
+    let bytes = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = value_start;
+    while i < bytes.len() {
+        match (quote, bytes[i]) {
+            (Some(b'"'), b'\\') => i += 1,
+            (Some(q), b) if b == q => quote = None,
+            (None, b'\'' | b'"') if line[value_start..i].trim().is_empty() => {
+                quote = Some(bytes[i]);
+            }
+            (None, b'#') if i > value_start && bytes[i - 1].is_ascii_whitespace() => {
+                let start = line[..i].trim_end().len();
+                return Some(&line[start..]);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The ` # comment` suffix of a block-sequence item's text (the part after
+/// `- `), or `None` when it has none outside its quotes.
+fn item_comment(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    let mut quote: Option<char> = None;
+    let mut prev = ' ';
+    for (i, c) in text.char_indices() {
+        match (quote, c) {
+            (Some('"'), '\\') => {}
+            (Some(q), c) if c == q && prev != '\\' => quote = None,
+            (None, '\'' | '"') if i == text.len() - trimmed.len() => quote = Some(c),
+            (None, '#') if prev.is_whitespace() && i > 0 => {
+                return Some(&text[text[..i].trim_end().len()..]);
+            }
+            _ => {}
+        }
+        prev = c;
+    }
+    None
+}
+
+/// Rewrite a single-line `key: [a, b]` flow list to `new_items`, reusing the
+/// original token text of every item that survives and the list's own
+/// separator style, so a rename that collapses duplicates keeps the list flow
+/// and keeps the quoting of untouched items (A-17).
+fn rebuild_flow_list(body: &str, old_items: &[Value], new_items: &[Value]) -> Option<String> {
+    let (line, eol) = split_trailing_eol(body);
+    if body.split_inclusive('\n').count() != 1 || !is_single_line_flow(body) {
+        return None;
+    }
+    let FlowListLayout {
+        open_pos,
+        close_pos,
+        items,
+    } = parse_flow_list(line)?;
+    if items.len() != old_items.len() {
+        return None;
+    }
+    let inner = &line[open_pos + 1..close_pos];
+    let sep = detect_flow_separator(inner, &items);
+    let old_tokens: Vec<&str> = items.iter().map(|&(s, e)| inner[s..e].trim()).collect();
+    let mut used = vec![false; old_items.len()];
+    let mut tokens: Vec<String> = Vec::with_capacity(new_items.len());
+    for item in new_items {
+        let reuse = old_items
+            .iter()
+            .enumerate()
+            .find(|(i, old)| !used[*i] && *old == item);
+        if let Some((i, _)) = reuse {
+            used[i] = true;
+            tokens.push(old_tokens[i].to_owned());
+        } else {
+            tokens.push(render_scalar_item(item)?);
+        }
+    }
+    let mut out = String::with_capacity(line.len() + 8);
+    out.push_str(&line[..=open_pos]);
+    out.push_str(&tokens.join(sep));
+    out.push_str(&line[close_pos..]);
+    out.push_str(eol);
+    Some(out)
 }
 
 /// `true` for scalar YAML values (string/number/bool/null) — the only shapes
@@ -796,11 +915,16 @@ fn replace_block_item(
     out.push_str(key_line);
     for (i, line) in item_lines.iter().enumerate() {
         if i == index {
-            let (indent, _) = indents[i];
-            let eol = &line[line.trim_end_matches(['\n', '\r']).len()..];
+            let (indent, old_text) = indents[i];
+            let stripped = line.trim_end_matches(['\n', '\r']);
+            let eol = &line[stripped.len()..];
             out.push_str(indent);
             out.push_str("- ");
             out.push_str(item_text);
+            // A-17: the comment on the replaced item's line stays.
+            if let Some(comment) = item_comment(old_text) {
+                out.push_str(comment);
+            }
             out.push_str(eol);
         } else {
             out.push_str(line);
@@ -1400,10 +1524,26 @@ mod tests {
     }
 
     #[test]
-    fn comment_only_block_falls_back() {
+    fn comment_only_block_keeps_its_comment_and_gains_the_key() {
+        // A-16: the block's comments are the author's.
         let yaml = "# nothing but a comment\n";
         let p = props(&[("title", json!("x"))]);
-        assert_eq!(fallback(yaml, &p), FallbackReason::NotSpanMappable);
+        assert_eq!(spliced(yaml, &p), "# nothing but a comment\ntitle: x\n");
+    }
+
+    #[test]
+    fn a_changed_scalar_keeps_its_trailing_comment() {
+        // A-17.
+        let p = props(&[("status", json!("done"))]);
+        assert_eq!(
+            spliced("status: single # keep\n", &p),
+            "status: done # keep\n"
+        );
+        let p = props(&[("tags", json!(["two"]))]);
+        assert_eq!(
+            spliced("tags: [one, \"two\", ONE]\n", &p),
+            "tags: [\"two\"]\n"
+        );
     }
 
     #[test]

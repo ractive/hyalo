@@ -1468,6 +1468,24 @@ fn render_frontmatter_impl(
     file.read_to_end(&mut body_bytes)
         .with_context(|| format!("failed to read body of {}", path.display()))?;
 
+    // C-5: a file with no frontmatter yet gets its first block in front of the
+    // body. Its BOM belongs at byte zero, ahead of the new block, and the new
+    // block follows the body's own line endings.
+    let mut span = span;
+    if span.body_offset == 0 {
+        if body_bytes.starts_with(BOM.as_bytes()) {
+            body_bytes.drain(..BOM.len());
+            span.has_bom = true;
+        }
+        if body_bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .is_some_and(|nl| nl > 0 && body_bytes[nl - 1] == b'\r')
+        {
+            span.line_ending = LineEnding::CrLf;
+        }
+    }
+
     // --- Step 3: serialize new frontmatter ---
     let mut out: Vec<u8> = Vec::new();
     // Preserve a leading BOM the original file had. When `body_offset == 0`
@@ -1481,7 +1499,16 @@ fn render_frontmatter_impl(
     // frontmatter at all (an empty property map).
     let mut fallback_warning = None;
     let yaml_out: Option<String> = match op {
-        WriteOp::Props(props) if props.is_empty() => None,
+        // A-8: removing the last key leaves the block's own comments behind;
+        // delete the frontmatter only when nothing but blank lines is left.
+        WriteOp::Props(props) if props.is_empty() => original_yaml.as_deref().and_then(|orig| {
+            match splice_frontmatter(orig, props, compact_list_indent) {
+                SpliceOutcome::Spliced(yaml) if yaml.lines().any(|l| !l.trim().is_empty()) => {
+                    Some(yaml)
+                }
+                _ => None,
+            }
+        }),
         WriteOp::Props(props) => {
             // Minimal-diff write (iter-214): re-emit every key whose value did
             // not change byte-for-byte and serialize only what actually

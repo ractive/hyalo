@@ -53,7 +53,7 @@ pub(crate) fn resolve_changelog_file(
     let Some(raw) = config_path else {
         return Ok(dir.join(CHANGELOG_FILE));
     };
-    let raw_norm = raw.replace('\\', "/");
+    let raw_norm = hyalo_core::discovery::native_separator_to_forward_slash(raw).into_owned();
     anyhow::ensure!(
         !Path::new(&raw_norm).is_absolute() && !raw_norm.starts_with('/'),
         "[changelog] path must be relative to the config directory, not absolute: {raw}"
@@ -120,7 +120,10 @@ pub(crate) fn resolve_changelog_target(
         // Where the config would have written, lexically — the second path of
         // the two-path form. `..` is normalized away so the message names a
         // real location rather than `…/kb/../../etc/passwd`.
-        let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
+        let resolved = lexically_normalize(
+            &config_dir
+                .join(hyalo_core::discovery::native_separator_to_forward_slash(raw).as_ref()),
+        );
         ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::user_diagnostic(
             format,
             &hyalo_core::outside_vault_message("[changelog] path", Some(&resolved)),
@@ -249,20 +252,87 @@ impl Changelog {
     /// Index of the `## [<label>]` heading line (case-insensitive on label),
     /// or `None`.
     fn version_heading_index(&self, label: &str) -> Option<usize> {
-        self.lines
-            .iter()
-            .position(|l| heading_label(l).is_some_and(|found| found.eq_ignore_ascii_case(label)))
+        let fenced = fence_mask(&self.lines);
+        self.lines.iter().enumerate().position(|(i, l)| {
+            !fenced[i] && heading_label(l).is_some_and(|found| found.eq_ignore_ascii_case(label))
+        })
     }
 
     /// Index of the first version heading line (any `## [...]`), or `None`.
     fn first_version_heading_index(&self) -> Option<usize> {
-        self.lines.iter().position(|l| heading_label(l).is_some())
+        let fenced = fence_mask(&self.lines);
+        self.lines
+            .iter()
+            .enumerate()
+            .position(|(i, l)| !fenced[i] && heading_label(l).is_some())
+    }
+
+    /// The highest `MAJOR.MINOR.PATCH` among the released version headings.
+    fn latest_released_version(&self) -> Option<(u64, u64, u64)> {
+        let fenced = fence_mask(&self.lines);
+        self.lines
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !fenced[*i])
+            .filter_map(|(_, l)| heading_label(l))
+            .filter(|label| is_semver(label))
+            .filter_map(parse_semver)
+            .max()
     }
 
     /// Whether a version with `label` already appears as a heading.
     fn has_version(&self, label: &str) -> bool {
         self.version_heading_index(label).is_some()
     }
+}
+
+/// Which lines sit inside a fenced code block (the fence lines included): a
+/// heading or a link definition quoted in an example is not part of the
+/// changelog's own grammar (A-20).
+fn fence_mask(lines: &[String]) -> Vec<bool> {
+    let mut open: Option<(char, usize)> = None;
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            let marker = trimmed
+                .chars()
+                .next()
+                .filter(|c| (*c == '`' || *c == '~') && indent < 4);
+            let run = marker.map_or(0, |m| trimmed.chars().take_while(|c| *c == m).count());
+            match (open, marker) {
+                (Some((fence, len)), Some(m))
+                    if m == fence && run >= len && trimmed[run..].trim().is_empty() =>
+                {
+                    open = None;
+                    true
+                }
+                (Some(_), _) => true,
+                (None, Some(m)) if run >= 3 && !(m == '`' && trimmed[run..].contains('`')) => {
+                    open = Some((m, run));
+                    true
+                }
+                _ => false,
+            }
+        })
+        .collect()
+}
+
+/// A line that opens a block of its own in Markdown: an ATX heading, a link
+/// reference definition, a thematic break or a fence.
+fn is_block_construct(line: &str) -> bool {
+    line.starts_with('#')
+        || link_def_label(line).is_some()
+        || line.starts_with("```")
+        || line.starts_with("~~~")
+        || (line.len() >= 3 && line.chars().all(|c| c == '-' || c == '=' || c == '*'))
+}
+
+/// `"1.2.3"` as a comparable triple.
+fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
+    let mut it = s.split('.').map(|p| p.parse::<u64>().ok());
+    Some((it.next()??, it.next()??, it.next()??))
 }
 
 /// If `line` is a `## [label] …` heading, return the bracketed label.
@@ -299,12 +369,32 @@ fn is_semver(s: &str) -> bool {
 /// `YYYY-MM-DD` shape check.
 fn is_iso_date(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() == 10
+    let shaped = b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
         && b[..4].iter().all(u8::is_ascii_digit)
         && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..].iter().all(u8::is_ascii_digit)
+        && b[8..].iter().all(u8::is_ascii_digit);
+    if !shaped {
+        return false;
+    }
+    // L-16: a changelog date is a real calendar day, not just ten characters.
+    let (Ok(year), Ok(month), Ok(day)) = (
+        s[..4].parse::<u32>(),
+        s[5..7].parse::<u32>(),
+        s[8..].parse::<u32>(),
+    ) else {
+        return false;
+    };
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&day)
 }
 
 /// A short display name for the changelog file used in messages and JSON
@@ -320,8 +410,8 @@ fn changelog_display(path: &Path) -> String {
 /// `hyalo changelog release <X.Y.Z> [--date YYYY-MM-DD] [--apply]`.
 ///
 /// Rotates `## [Unreleased]` content into a new dated version section. Returns
-/// the outcome and an optional exit-code override (1 when a dry run would
-/// change the file, matching the `okf index` / `madr toc` CI convention).
+/// the outcome and an optional exit-code override (always `None` since
+/// DEC-390: a dry run answered, and `changed` carries the drift).
 pub fn run_release(
     changelog_file: &Path,
     boundary_root: &Path,
@@ -422,6 +512,26 @@ fn run_release_with_journal(
         ));
     }
 
+    // L-16: the changelog lists versions newest first, so a release that does
+    // not sort above the newest one would break `lint --profile changelog`.
+    if let (Some(latest), Some(new)) = (cl.latest_released_version(), parse_semver(version))
+        && new < latest
+    {
+        return Ok((
+            CommandOutcome::UserError(user_diagnostic(
+                format,
+                &format!(
+                    "version `[{version}]` is older than the newest release `[{}.{}.{}]` in {display}",
+                    latest.0, latest.1, latest.2
+                ),
+                Some(version),
+                Some("releases are listed newest first; pick a version above the latest"),
+                None,
+            )),
+            None,
+        ));
+    }
+
     let Some(unreleased_idx) = cl.version_heading_index("Unreleased") else {
         return Ok((
             CommandOutcome::UserError(user_diagnostic(
@@ -475,7 +585,8 @@ fn run_release_with_journal(
             )),
         }),
     );
-    let exit_override = if !apply && changed { Some(1) } else { None };
+    // A-10 (DEC-390): a dry run answered, so it exits 0; drift is `changed`.
+    let exit_override = None;
     let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
     let outcome = match effects {
         Some(effects) => outcome.with_apply_report(effects),
@@ -551,11 +662,10 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
     // Find the footer link-ref block: contiguous trailing definition lines.
     // Prefer to insert right after the `[Unreleased]` definition so ordering
     // (newest first) is preserved.
-    if let Some(idx) = cl
-        .lines
-        .iter()
-        .position(|l| link_def_label(l).is_some_and(|lbl| lbl.eq_ignore_ascii_case("Unreleased")))
-    {
+    let fenced = fence_mask(&cl.lines);
+    if let Some(idx) = cl.lines.iter().enumerate().position(|(i, l)| {
+        !fenced[i] && link_def_label(l).is_some_and(|lbl| lbl.eq_ignore_ascii_case("Unreleased"))
+    }) {
         if let Some((unreleased, released)) = release_footer_links(&cl.lines[idx], version) {
             cl.lines[idx] = unreleased;
             def = released;
@@ -565,7 +675,11 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
     }
 
     // No Unreleased def: append after the last link-ref definition, else EOF.
-    let last_def = cl.lines.iter().rposition(|l| link_def_label(l).is_some());
+    let last_def = cl
+        .lines
+        .iter()
+        .enumerate()
+        .rposition(|(i, l)| !fenced[i] && link_def_label(l).is_some());
     if let Some(idx) = last_def {
         cl.lines.insert(idx + 1, def);
     } else {
@@ -685,6 +799,26 @@ fn run_add_with_journal(
         insert_at
     };
 
+    // L-16: a continuation line is hanging-indented under its bullet, but a
+    // heading or a link definition needs only up to three spaces of indent
+    // to be one — a message must not smuggle either into the changelog.
+    if let Some(line) = message
+        .lines()
+        .skip(1)
+        .find(|line| is_block_construct(line.trim_start()))
+    {
+        return Ok((
+            CommandOutcome::UserError(user_diagnostic(
+                format,
+                "entry message contains a line that would parse as a heading or link definition",
+                Some(line.trim()),
+                Some("keep each continuation line to plain text"),
+                None,
+            )),
+            None,
+        ));
+    }
+
     let entry_lines = render_entry(message.trim(), wrap);
     insert_entry(&mut cl, unreleased_idx, canonical, &entry_lines);
 
@@ -725,7 +859,8 @@ fn run_add_with_journal(
             )),
         }),
     );
-    let exit_override = if !apply && changed { Some(1) } else { None };
+    // A-10 (DEC-390): a dry run answered, so it exits 0; drift is `changed`.
+    let exit_override = None;
     let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
     let outcome = match effects {
         Some(effects) => outcome.with_apply_report(effects),

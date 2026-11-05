@@ -21,6 +21,10 @@ pub fn detect_wikilink_form(raw_target: &str) -> WrittenForm {
     if raw_target.starts_with("./") {
         return WrittenForm::DotRelative;
     }
+    // `../` prefix: relative to the linking note's folder, walking up.
+    if raw_target.starts_with("../") {
+        return WrittenForm::ParentRelative;
+    }
     // Path separator → path-relative form (takes priority over .md suffix).
     // `[[sub/note.md]]` is written as PathRelative, not MdSuffixed, because
     // the user's intent is a directory-qualified reference.

@@ -156,8 +156,8 @@ rather than filters that quietly match nothing. Say what you meant instead: `K` 
 `K=null` for a YAML null, `!K` for absence, `K~=/a=b/` for a value containing a literal `=`.
 
 **Exit codes (DEC-307):** **0** the command answered — a dry run and a zero-result query have
-both answered, and drift or findings are reported in the payload (`okf index` →
-`results.changed`), not in the exit code, unless a `--strict`-style flag asked for a gate;
+both answered, and drift or findings are reported in the payload (`okf index`,
+`changelog release`/`add`, `madr toc` → `results.changed`), not in the exit code, unless a `--strict`-style flag asked for a gate;
 **1** every hyalo-own user error, always rendered as the standard error envelope so
 `--format json` parses; **2** clap usage errors and internal errors. The distinction that
 matters to a script is 1 ("I typed it wrong") versus 2 ("hyalo broke").

@@ -520,6 +520,7 @@ pub enum ScannedIndexOutcome {
 }
 
 /// Resolved index — either a borrowed snapshot or an owned scanned build.
+#[allow(clippy::large_enum_variant)] // one value per run, never stored in bulk
 pub(crate) enum ResolvedIndex<'a> {
     Snapshot(&'a SnapshotIndex),
     Scanned(ScannedIndexBuild),

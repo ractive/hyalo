@@ -741,7 +741,7 @@ fn validate_project_local_dir(
         reason,
     };
 
-    let raw_norm = raw_dir.replace('\\', "/");
+    let raw_norm = hyalo_core::discovery::native_separator_to_forward_slash(raw_dir).into_owned();
     if Path::new(&raw_norm).is_absolute() || raw_norm.starts_with('/') {
         return Err(err(DirBoundaryReason::Absolute));
     }
@@ -798,7 +798,7 @@ fn validate_project_local_dir(
 /// exactly like writing `"kb"` directly, matching how every existing `dir`
 /// value (which never contained `..`) already behaved.
 fn lexically_normalize_relative(raw: &str) -> PathBuf {
-    let raw_norm = raw.replace('\\', "/");
+    let raw_norm = hyalo_core::discovery::native_separator_to_forward_slash(raw).into_owned();
     let mut out = PathBuf::new();
     for comp in Path::new(&raw_norm).components() {
         match comp {
@@ -1105,6 +1105,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         return ResolvedDefaults::dir_out_of_bounds_for(dir, boundary_err.diagnostic());
     }
 
+    // L-5: a `severity` that is not `error` or `warn` used to be read as warn
+    // without a word, so a CI gate the author believed was an error never
+    // failed. `lint-rules set` validates; a hand-edited file gets the same.
+    if let Some(diagnostic) = invalid_lint_severity(cfg.lint.as_ref()) {
+        return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
+    }
+
     // Deprecation: warn when the kebab-case `required-sections` key is used.
     // The canonical key is `required_sections`; the alias is kept for one
     // release. Checked against the already-parsed `[schema]` value (which the
@@ -1367,6 +1374,22 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
 /// Rule IDs are not validated against the catalog here — any string is
 /// accepted as a key, so forward-compat with newer rule IDs is preserved.
 /// Only unexpected value types (neither bool nor table) emit a warning.
+/// The diagnostic for the first `[lint.rules.X] severity` that is not `error`
+/// or `warn`, or `None` when every one is valid.
+fn invalid_lint_severity(lint: Option<&LintConfig>) -> Option<String> {
+    let rules = lint?.rules.as_ref()?.as_table()?;
+    rules.iter().find_map(|(rule_id, value)| {
+        let severity = value.as_table()?.get("severity")?;
+        match severity.as_str() {
+            Some(s) if s.eq_ignore_ascii_case("error") || s.eq_ignore_ascii_case("warn") => None,
+            _ => Some(format!(
+                "malformed .hyalo.toml: [lint.rules.{rule_id}] severity must be \"error\" or \
+                 \"warn\", found {severity}\n  fix: `hyalo lint-rules set {rule_id} --severity error`"
+            )),
+        }
+    })
+}
+
 fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
     let Some(lc) = raw else {
         return hyalo_mdlint::LintConfig::default();

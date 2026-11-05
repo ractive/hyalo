@@ -673,6 +673,16 @@ fn dispatch_body_line(
         return;
     }
     let cleaned = syntax.visible_line(syntax_line_number).unwrap_or(line);
+    // C-5: line 1 of a note without frontmatter may open with a BOM, which is
+    // not part of a `# Title` heading.
+    let (line, cleaned) = if line_num == 1 {
+        (
+            line.strip_prefix('\u{feff}').unwrap_or(line),
+            cleaned.strip_prefix('\u{feff}').unwrap_or(cleaned),
+        )
+    } else {
+        (line, cleaned)
+    };
     for (i, visitor) in visitors.iter_mut().enumerate() {
         if active[i] && visitor.on_body_line(line, cleaned, line_num) == ScanAction::Stop {
             active[i] = false;

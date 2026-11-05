@@ -224,7 +224,8 @@ fn resolve_with_membership(
     // This ensures backward compatibility: an absolute --dir still strips the vault
     // basename, while a relative multi-segment --dir strips the full prefix.
     let dir_prefix: Option<String> = {
-        let normalized = configured_dir.replace('\\', "/");
+        let normalized =
+            hyalo_core::discovery::native_separator_to_forward_slash(configured_dir).into_owned();
         let trimmed = normalized.trim_end_matches('/');
         if trimmed == "." || trimmed.is_empty() || Path::new(trimmed).is_absolute() {
             // Fall back to single-segment (vault directory's last component).

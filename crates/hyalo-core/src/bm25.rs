@@ -56,6 +56,12 @@ macro_rules! define_stem_languages {
         /// Returns an error for unrecognised language names.
         pub fn parse_language(s: &str) -> anyhow::Result<StemLanguage> {
             let lower = s.to_lowercase();
+            // C-17: a BCP-47 tag such as `de-CH` or `pt_BR` names its stemmer by
+            // the primary subtag.
+            let lower = lower
+                .split_once(['-', '_'])
+                .map_or(lower.as_str(), |(primary, _)| primary)
+                .to_owned();
             // Try canonical (full) names first.
             match lower.as_str() {
                 $( $canonical => return Ok(StemLanguage::$variant), )+
@@ -133,6 +139,15 @@ pub fn resolve_language(
     cli_lang: Option<&str>,
     config_lang: Option<&str>,
 ) -> StemLanguage {
+    // C-17: a note's own `language:` that names no stemmer falls back to the
+    // next source silently; say so once per value.
+    if let Some(unknown) = frontmatter_lang
+        && parse_language(unknown).is_err()
+    {
+        crate::warn::advisory(format!(
+            "unknown `language: {unknown}` in a note; stemming it with the configured default"
+        ));
+    }
     for lang_str in [frontmatter_lang, cli_lang, config_lang]
         .into_iter()
         .flatten()

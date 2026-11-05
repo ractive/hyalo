@@ -282,7 +282,11 @@ fn iteration296_initial_bom_managed_regions_preview_apply_and_repeat() {
             let old = format!("{begin}{eol}OLD TABLE{eol}{suffix}");
             write_md(tmp.path(), path, &old);
             let preview = run(tmp.path(), &command);
-            assert_eq!(preview.status.code(), Some(i32::from(command[0] == "madr")));
+            assert_eq!(
+                preview.status.code(),
+                Some(0),
+                "a dry run exits 0 (DEC-390)"
+            );
             assert_eq!(fs::read_to_string(tmp.path().join(path)).unwrap(), old);
             ok(tmp.path(), &[command[0], command[1], "--apply"]);
             let first = fs::read_to_string(tmp.path().join(path)).unwrap();
@@ -315,8 +319,8 @@ fn iteration296_madr_only_changes_the_real_region_and_refuses_malformed_pairs() 
         let preview = run(tmp.path(), &["madr", "toc"]);
         assert_eq!(
             preview.status.code(),
-            Some(1),
-            "MADR preview drift keeps its existing exit contract"
+            Some(0),
+            "MADR preview drift exits 0 and reports `changed` (DEC-390)"
         );
         assert_eq!(fs::read_to_string(tmp.path().join(path)).unwrap(), old);
         ok(tmp.path(), &["madr", "toc", "--apply"]);

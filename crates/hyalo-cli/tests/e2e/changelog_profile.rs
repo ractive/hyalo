@@ -240,12 +240,12 @@ fn release_rotation_round_trip() {
         "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature A.\n\n## [1.0.0] - 2020-01-01\n\n### Added\n\n- Initial.\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n[1.0.0]: https://x/tag/v1.0.0\n",
     );
 
-    // Dry-run first: drift → non-zero exit.
+    // Dry-run first: a dry run answered, so it exits 0 (DEC-390).
     let (_, dry) = run(
         tmp.path(),
         &["changelog", "release", "1.1.0", "--date", "2026-07-17"],
     );
-    assert_eq!(dry.status.code(), Some(1), "dry-run signals drift");
+    assert_eq!(dry.status.code(), Some(0), "dry-run exits 0");
 
     // Apply the rotation.
     let (json, out) = run(

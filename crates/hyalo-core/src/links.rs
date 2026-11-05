@@ -19,6 +19,10 @@ pub enum WrittenForm {
     PathRelative,
     /// `[[./note]]` — explicit current-directory prefix.
     DotRelative,
+    /// `[[../note]]` — relative to the linking note's folder, walking up
+    /// (DEC-384). Moving the note or its target rewrites it to the relative
+    /// path from where the note now sits (DEC-391).
+    ParentRelative,
     /// `[[note.md]]` — bare stem with `.md` suffix.
     MdSuffixed,
     /// `[text](/site/note.md)` — site-absolute path (markdown link only).
@@ -264,6 +268,7 @@ fn extract_links_and_anchors(
 ) {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
+    let last_close_bracket = bytes.iter().rposition(|&b| b == b']');
     let mut i = 0;
 
     while i < len {
@@ -320,7 +325,9 @@ fn extract_links_and_anchors(
         // reported as `attachment` when it resolves to a vault file, never a
         // graph edge, and visible when it resolves to nothing.
         // L-16: skip when the `[` is backslash-escaped.
+        // C-6: with no `]` left on the line, no label can close.
         if bytes[i] == b'['
+            && last_close_bracket.is_some_and(|last| last > i)
             && !is_escaped(bytes, i)
             && let Some((mut link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
@@ -332,6 +339,7 @@ fn extract_links_and_anchors(
         // `[label](#Heading)` — a same-file anchor, not a file reference.
         if let Some(anchors) = anchors.as_deref_mut()
             && bytes[i] == b'['
+            && last_close_bracket.is_some_and(|last| last > i)
             && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
             && let Some((anchor, end)) = try_parse_self_anchor_markdown_at(cleaned, original, i)
@@ -522,6 +530,9 @@ fn find_label_close_bracket(s: &str) -> Option<usize> {
     None
 }
 
+/// Deepest parenthesis nesting a bare link destination may hold (CommonMark).
+const MAX_DESTINATION_PAREN_DEPTH: usize = 32;
+
 /// Result of parsing a markdown link destination starting right after `(`.
 struct ParsedDestination<'a> {
     /// The raw target text (angle brackets stripped if the destination used
@@ -646,6 +657,10 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
                 continue;
             }
             match byte {
+                // C-6: CommonMark caps parenthesis nesting in a destination
+                // at 32, which also keeps a line of `[a](` repeated from
+                // rescanning to its end for every opener.
+                b'(' if depth >= MAX_DESTINATION_PAREN_DEPTH => return None,
                 b'(' => depth += 1,
                 b')' if depth == 0 => {
                     return Some(ParsedDestination {

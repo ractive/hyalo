@@ -97,7 +97,7 @@ fn mv_rewrites_query_and_dot_slash_spellings() {
     let moved = json(&run(tmp.path(), &["mv", "note.md", "--to", "moved.md"]));
     assert_eq!(moved["results"]["total_links_updated"], 5);
     let after = read(tmp.path(), "s.md");
-    assert!(after.contains("r: \"[[moved]]\""), "{after}");
+    assert!(after.contains("r: \"[[./moved]]\""), "{after}");
     assert!(after.contains("q: \"[[moved?x=1#H|a]]\""), "{after}");
     assert!(after.contains("[[moved?]] [[moved?x=1]]"), "{after}");
     // The link to `my note` is another note's: untouched.
@@ -156,7 +156,7 @@ fn relative_parent_wikilinks_are_in_vault_links() {
     assert_eq!(moved["results"]["total_links_updated"], 2);
     assert_eq!(
         read(tmp.path(), "sub/src.md"),
-        "[[t9]] [[../other/o]] ![[t9.md]]\n"
+        "[[../t9]] [[../other/o]] ![[../t9.md]]\n"
     );
     assert_eq!(broken_total(tmp.path()), 0);
 }

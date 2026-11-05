@@ -22,6 +22,24 @@ use hyalo_core::index::SnapshotIndex;
 /// accepts an ephemeral `--profile` overlay today; the scan-include installer
 /// consults this so a `--profile skills` run reaches `.claude/skills/` even on
 /// a vault not yet initialized with the profile.
+/// Whether two frontmatter-link allow-lists scan the same properties (`None`
+/// is every value; order does not matter).
+pub(crate) fn same_link_props(a: Option<&[String]>, b: Option<&[String]>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            fn sorted(props: &[String]) -> Vec<&str> {
+                let mut props = props.iter().map(String::as_str).collect::<Vec<_>>();
+                props.sort_unstable();
+                props.dedup();
+                props
+            }
+            sorted(a) == sorted(b)
+        }
+        _ => false,
+    }
+}
+
 fn active_profile_name(command: &Commands) -> Option<&str> {
     match command {
         Commands::Lint {
@@ -109,6 +127,15 @@ fn emit_init_failure(
         Format::Text
     });
     let mut diagnostic = crate::output::UserDiagnostic::new(failure.error.to_string());
+    // A-15: the context says what failed, the rest of the chain says why.
+    let cause = failure
+        .error
+        .chain()
+        .skip(1)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ");
+    diagnostic.cause = (!cause.is_empty()).then_some(cause);
     diagnostic.category = Some("mutation_failure");
     diagnostic.effects = Some(failure.report.effects());
     let code =
@@ -724,7 +751,7 @@ fn attach_subcommand_pointer(cmd: clap::Command, pointer: &str) -> clap::Command
 #[allow(clippy::too_many_lines)]
 fn run_inner() -> Result<(), AppError> {
     // Pre-scan for --quiet / -q so config-loading warnings are also suppressed.
-    let early_quiet = std::env::args().any(|a| a == "--quiet" || a == "-q");
+    let early_quiet = std::env::args_os().any(|a| a == "--quiet" || a == "-q");
     crate::warn::init(early_quiet);
 
     // Load per-project config from .hyalo.toml in CWD before parsing args.
@@ -788,7 +815,22 @@ fn run_inner() -> Result<(), AppError> {
     // We can't use mut_subcommand to hide them from `init --help` because
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
-    let raw_args: Vec<String> = std::env::args().collect();
+    // C-3: `std::env::args()` panics on a non-UTF-8 argument. Read it lossily
+    // and say so; the usual "no such file" answer follows from clap or the
+    // command, with exit 1 rather than an abort.
+    let raw_args: Vec<String> = std::env::args_os()
+        .map(|arg| match arg.into_string() {
+            Ok(arg) => arg,
+            Err(arg) => {
+                let lossy = arg.to_string_lossy().into_owned();
+                crate::warn::warn_always(format!(
+                    "argument {lossy:?} is not valid UTF-8; reading it lossily (a note named \
+                     with non-UTF-8 bytes cannot be addressed)"
+                ));
+                lossy
+            }
+        })
+        .collect();
     // iter-256 HELP-5: `hyalo help <cmd>` becomes `hyalo <cmd> -h` here, so
     // the short-help reshaping below applies to it unchanged.
     let mut raw_args = crate::cli::help::rewrite_help_to_short_page(raw_args, &cmd);
@@ -2209,8 +2251,14 @@ fn run_inner() -> Result<(), AppError> {
                         format_version: idx.format_version(),
                         code_blocks: None,
                     });
+                    let relation =
+                        if idx.format_version() > hyalo_core::index::SNAPSHOT_FORMAT_VERSION {
+                            "newer"
+                        } else {
+                            "older"
+                        };
                     crate::warn::warn_always(format!(
-                        "index format is older than this binary (index v{}, binary v{}); \
+                        "index format is {relation} than this binary (index v{}, binary v{}); \
                          falling back to disk scan — re-run create-index",
                         idx.format_version(),
                         hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
@@ -2236,10 +2284,29 @@ fn run_inner() -> Result<(), AppError> {
                     let index_skip_code_blocks = idx.skip_code_blocks();
                     let config_skip_code_blocks =
                         hyalo_core::bm25::search_settings().skip_code_blocks;
-                    if index_skip_code_blocks == config_skip_code_blocks {
+                    if index_skip_code_blocks == config_skip_code_blocks
+                        && same_link_props(
+                            hyalo_core::index::VaultIndex::frontmatter_link_props(&idx),
+                            config.frontmatter_link_props.as_deref(),
+                        )
+                    {
                         // Content refresh belongs to the prepared invocation,
                         // after cardinality validation and rooted target checks.
                         Some(idx)
+                    } else if index_skip_code_blocks == config_skip_code_blocks {
+                        // A-6: the entries' frontmatter links were scanned
+                        // under another `[links] frontmatter` setting, so the
+                        // graph edges would differ from a disk scan's.
+                        refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
+                            format_version: idx.format_version(),
+                            code_blocks: None,
+                        });
+                        crate::warn::warn_always(
+                            "index was built with another `[links] frontmatter` setting \
+                             than this run's config; falling back to disk scan — re-run \
+                             create-index",
+                        );
+                        None
                     } else {
                         let label = |skip: bool| if skip { "skip" } else { "index" };
                         refused_index_info = Some(crate::dispatch::RefusedIndexInfo {

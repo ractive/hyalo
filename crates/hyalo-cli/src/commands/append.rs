@@ -116,7 +116,10 @@ fn append_value_in_memory(
                 Value::Object(_) => "mapping",
                 _ => "unknown",
             };
-            anyhow::bail!("property '{name}' is a {kind} value — cannot append to it");
+            // A-11 (DEC-307): the invocation was understood but wrong — exit 1.
+            Err(hyalo_core::user_error(format!(
+                "property '{name}' is a {kind} value — cannot append to it"
+            )))
         }
     }
 }

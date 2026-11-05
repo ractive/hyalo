@@ -41,6 +41,17 @@ impl RelativeName {
                 path.display()
             );
         }
+        // C-10 / L-19: Windows resolves `CON.md` to a device, `a:b.md` to an
+        // alternate data stream and `a.md.` to `a.md`; no such name can be a
+        // note there. Elsewhere they are ordinary file names.
+        if cfg!(windows)
+            && let Some(bad) = path.components().find_map(|c| match c {
+                Component::Normal(name) => name.to_str().filter(|n| !is_portable_windows_name(n)),
+                _ => None,
+            })
+        {
+            bail!("not a valid file name on Windows: {bad}");
+        }
         let clean: PathBuf = path
             .components()
             .filter(|c| !matches!(c, Component::CurDir))
@@ -55,6 +66,25 @@ impl RelativeName {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+}
+
+/// Whether `name` (one path component) is a name Windows will not rewrite or
+/// redirect: no device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+/// `LPT1`-`LPT9`, with or without an extension), no `:` (alternate data
+/// stream) and no trailing dot or space.
+#[must_use]
+pub fn is_portable_windows_name(name: &str) -> bool {
+    if name.contains(':') || name.ends_with(['.', ' ']) {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let upper = stem.to_ascii_uppercase();
+    let device = matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0');
+    !device
 }
 
 #[derive(Debug, Clone)]
@@ -428,7 +458,7 @@ impl NewEntry {
         session.fault(FaultPoint::Prepare)?;
         let path = self.root.check(&self.name, false)?;
         let parent = path.parent().context("target has no parent")?;
-        let mut temp = NamedTempFile::new_in(parent)?;
+        let mut temp = crate::fs_util::temp_for_new_file(parent)?;
         temp.write_all(bytes)?;
         temp.as_file().sync_all()?;
         session.fault(FaultPoint::Persist)?;

@@ -493,6 +493,23 @@ pub(crate) struct EffectiveQuery {
     sections: Vec<hyalo_core::heading::SectionFilter>,
 }
 impl EffectiveQuery {
+    /// Whether the answer reads other notes' links: backlinks, the orphan and
+    /// dead-end filters and every link field resolve against the whole vault,
+    /// so a snapshot entry for the named file being current does not make the
+    /// graph current (A-5).
+    fn reads_link_graph(&self) -> bool {
+        use hyalo_core::filter::SortField;
+        let filters = &self.filters;
+        let fields = hyalo_core::filter::Fields::parse(&filters.fields)
+            .is_ok_and(|fields| fields.backlinks || fields.links);
+        let sort = filters
+            .sort
+            .as_deref()
+            .and_then(|sort| hyalo_core::filter::parse_sort(sort).ok())
+            .is_some_and(|sort| matches!(sort, SortField::BacklinksCount | SortField::LinksCount));
+        fields || sort || filters.orphan || filters.dead_end || filters.broken_links
+    }
+
     pub(crate) fn from_find(
         args: FindArgs,
         config_language: Option<&str>,
@@ -756,6 +773,11 @@ impl PreparedInvocation {
         let Some(index) = ctx.snapshot_index.as_mut() else {
             return Ok(());
         };
+        let reads_graph = match &self.command {
+            PreparedCommand::Backlinks { .. } => true,
+            PreparedCommand::Find(query) => query.reads_link_graph(),
+            _ => false,
+        };
         let (selection, repairs, insert) = match &self.command {
             PreparedCommand::Read { target, .. }
             | PreparedCommand::Backlinks { target, .. }
@@ -784,7 +806,7 @@ impl PreparedInvocation {
         };
         let root = hyalo_core::rooted::VaultRoot::new(ctx.dir)?;
         let refreshed = selection::refresh_named_selection(&root, &selection, index, insert)?;
-        if !refreshed.all_current(&selection) && !repairs {
+        if (!refreshed.all_current(&selection) || reads_graph) && !repairs {
             if read_fallback {
                 // DEC-339: a read repairs drifted entries in memory for this
                 // run — re-scanning only those files and patching the BM25

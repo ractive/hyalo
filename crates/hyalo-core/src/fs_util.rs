@@ -270,6 +270,27 @@ pub fn atomic_write_within(vault_root: &Path, path: &Path, data: &[u8]) -> Resul
     write_impl(Some(vault_root), path, data)
 }
 
+/// A temp file for a destination that does not exist yet (C-4).
+///
+/// `NamedTempFile` creates with mode `0600`, so every file hyalo created —
+/// `.hyalo-index`, `.hyalo.toml`, a note from `new` — came out unreadable to
+/// the group and to other processes whatever the umask said. Asking for `0666`
+/// at creation lets the kernel apply the umask, exactly as `File::create`
+/// would. Other platforms keep the default.
+pub(crate) fn temp_for_new_file(parent: &Path) -> std::io::Result<NamedTempFile> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o666))
+            .tempfile_in(parent)
+    }
+    #[cfg(not(unix))]
+    {
+        NamedTempFile::new_in(parent)
+    }
+}
+
 fn write_impl(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Result<()> {
     let parent = write_no_dir_sync(vault_root, path, data)?;
     sync_parent_dir(&parent);
@@ -300,8 +321,12 @@ fn write_no_dir_sync(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Res
     // them on the new file — otherwise `NamedTempFile`'s default `0600` wins.
     let existing_perms = std::fs::metadata(dest).ok().map(|m| m.permissions());
 
-    let mut tmp = NamedTempFile::new_in(parent)
-        .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
+    let mut tmp = if existing_perms.is_some() {
+        NamedTempFile::new_in(parent)
+    } else {
+        temp_for_new_file(parent)
+    }
+    .with_context(|| format!("failed to create temp file in {}", parent.display()))?;
 
     tmp.write_all(data)
         .with_context(|| format!("failed to write temp file for {}", dest.display()))?;
@@ -324,10 +349,11 @@ fn write_no_dir_sync(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Res
     tmp.persist(dest)
         .with_context(|| format!("failed to persist temp file to {}", dest.display()))?;
 
-    // On some platforms `persist` can reset the mode; re-apply for safety.
+    // On some platforms `persist` can reset the mode; re-apply for safety. The
+    // new content is already published, so a failure here must not report the
+    // write as failed (C-8): the temp file carried the mode before the rename.
     if let Some(perms) = existing_perms {
-        std::fs::set_permissions(dest, perms)
-            .with_context(|| format!("failed to restore permissions on {}", dest.display()))?;
+        drop(std::fs::set_permissions(dest, perms));
     }
 
     Ok(parent.to_path_buf())
@@ -395,15 +421,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn atomic_write_new_file_uses_platform_default() {
+    fn atomic_write_new_file_follows_the_umask_like_file_create() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
+        let reference = tmp.path().join("reference.txt");
+        std::fs::File::create(&reference).unwrap();
         let target = tmp.path().join("brand-new.txt");
         atomic_write(&target, b"data").unwrap();
-        // For a brand-new file we don't enforce a specific mode — just make sure the
-        // file was created. Platform umask governs the exact bits.
-        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
-        assert!(mode != 0, "mode should be non-zero: {mode:o}");
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&target), mode(&reference), "C-4: umask, not 0600");
     }
 
     /// Durability is not observable from a unit test — a real power-loss

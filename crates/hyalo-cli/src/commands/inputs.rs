@@ -220,7 +220,8 @@ fn resolve_files_from(
 
     // Emit hint when all inputs were missing.
     let vault_dir_display = {
-        let normalized = configured_dir.replace('\\', "/");
+        let normalized =
+            hyalo_core::discovery::native_separator_to_forward_slash(configured_dir).into_owned();
         let trimmed = normalized.trim_end_matches('/');
         if trimmed.is_empty() {
             ".".to_owned()

@@ -475,3 +475,31 @@ fn directory_sync_capability_matches_platform_and_publication_still_finishes() {
     assert!(effect.finalization_error().is_none());
     session.finish().unwrap();
 }
+
+#[test]
+fn windows_reserved_and_stream_names_are_not_portable() {
+    for bad in [
+        "CON.md",
+        "nul.md",
+        "Aux",
+        "com1.md",
+        "LPT9.txt",
+        "a:b.md",
+        "a.md.",
+        "a.md ",
+        "con.tar.md",
+    ] {
+        assert!(!is_portable_windows_name(bad), "{bad}");
+    }
+    for good in [
+        "note.md",
+        "console.md",
+        "com0.md",
+        "com10.md",
+        "lpt.md",
+        "a b.md",
+        "con-x.md",
+    ] {
+        assert!(is_portable_windows_name(good), "{good}");
+    }
+}

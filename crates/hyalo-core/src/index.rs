@@ -149,6 +149,12 @@ pub trait VaultIndex {
     fn snapshot_format_version(&self) -> Option<u32> {
         None
     }
+
+    /// The frontmatter-link allow-list this index's entries were scanned
+    /// under; `None` means every frontmatter value (DEC-389).
+    fn frontmatter_link_props(&self) -> Option<&[String]> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +201,8 @@ pub struct ScannedIndex {
     /// Fast path → index lookup built at construction time.
     path_index: HashMap<String, usize>,
     graph: LinkGraph,
+    /// The allow-list the entries were scanned under (DEC-389).
+    frontmatter_link_props: Option<Vec<String>>,
 }
 
 /// Warning produced during index build (e.g. malformed YAML frontmatter).
@@ -408,6 +416,7 @@ impl ScannedIndex {
                 entries,
                 path_index,
                 graph,
+                frontmatter_link_props: fm_link_props,
             },
             warnings,
         })
@@ -425,6 +434,10 @@ impl VaultIndex for ScannedIndex {
 
     fn link_graph(&self) -> &LinkGraph {
         &self.graph
+    }
+
+    fn frontmatter_link_props(&self) -> Option<&[String]> {
+        self.frontmatter_link_props.as_deref()
     }
 }
 
@@ -482,7 +495,13 @@ impl VaultIndex for ScannedIndex {
 /// |   | boundary   | after 128 lines, so the links extracted from a body
 /// |   |            | change; an entry reused by an incremental `create-index`
 /// |   |            | would keep the old links, so a v8 snapshot must be rebuilt |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 9;
+/// | 10 | iter-323  | `SnapshotHeader.frontmatter_link_props` (DEC-389) — the
+/// |    |           | frontmatter-link allow-list the entries were scanned
+/// |    |           | with. `--index` graph edges ignored `[links] frontmatter =
+/// |    |           | false`; a reused entry carries links of the old setting, and
+/// |    |           | the same iteration changes the tasks, titles and language
+/// |    |           | an entry holds, so a v9 snapshot must be rebuilt |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -571,6 +590,13 @@ struct SnapshotHeader {
     /// above this format version always writes it.
     #[serde(default)]
     skip_code_blocks: bool,
+    /// The frontmatter properties the entries' links were scanned under
+    /// (`[links] frontmatter` / `frontmatter_properties`); `None` means every
+    /// frontmatter value (DEC-389). A run whose config resolves to another
+    /// list refuses the snapshot, and `create-index` re-scans instead of
+    /// reusing its entries.
+    #[serde(default)]
+    frontmatter_link_props: Option<Vec<String>>,
     /// Whole-second mtime of the snapshot file this header was loaded from,
     /// recorded at load time and never serialized (DEC-368, iter-317). `0`
     /// for a snapshot that was not loaded from a file. See [`tree_moved`].
@@ -2167,12 +2193,13 @@ impl SnapshotIndex {
     /// Whether this snapshot was written by a binary whose format this one can
     /// still answer from.
     ///
-    /// A *newer* snapshot is accepted: forward fields decode as unknown keys
-    /// and are skipped, and refusing one would break a mixed-version team for
-    /// no gain. An *older* one is refused (BUG-12) — the fields it lacks are
-    /// exactly the ones that make its answers differ from disk.
+    /// Only an exact match is current (A-18, DEC-389). An *older* snapshot
+    /// is refused (BUG-12) — the fields it lacks are exactly the ones that
+    /// make its answers differ from disk. A *newer* one decodes, but its
+    /// entries were built under rules this binary does not know, so reading
+    /// or reusing them would answer differently from a fresh build.
     pub fn format_is_current(&self) -> bool {
-        self.header.format_version >= SNAPSHOT_FORMAT_VERSION
+        self.header.format_version == SNAPSHOT_FORMAT_VERSION
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -2303,6 +2330,7 @@ fn write_snapshot_with_session(
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
         gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
         skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
+        frontmatter_link_props: index.frontmatter_link_props().map(<[String]>::to_vec),
         file_mtime: 0,
         file_dir: None,
     };
@@ -2450,6 +2478,10 @@ impl VaultIndex for SnapshotIndex {
 
     fn snapshot_format_version(&self) -> Option<u32> {
         Some(self.header.format_version)
+    }
+
+    fn frontmatter_link_props(&self) -> Option<&[String]> {
+        self.header.frontmatter_link_props.as_deref()
     }
 }
 
@@ -2665,6 +2697,14 @@ fn dir_mtimes_split(dir: &Path, exempt: Option<&Path>) -> (Option<u64>, Option<u
             .is_some_and(|name| name.starts_with('.'))
     }
 
+    fn hidden_dir_included(root: &Path, path: &Path) -> bool {
+        path.strip_prefix(root).is_ok_and(|rel| {
+            crate::discovery::scan_include_allows_dir(
+                &crate::discovery::native_separator_to_forward_slash(&rel.to_string_lossy()),
+            )
+        })
+    }
+
     let mut newest = None;
     let mut exempt_mtime = None;
     let mut record = |path: &Path, m: Option<u64>| {
@@ -2684,7 +2724,9 @@ fn dir_mtimes_split(dir: &Path, exempt: Option<&Path>) -> (Option<u64>, Option<u
             continue;
         };
         for entry in read_dir.flatten() {
-            if is_hidden(&entry) {
+            // C-16: a hidden directory that `[scan] include` admits is part
+            // of the vault, so a note added there must move the probe too.
+            if is_hidden(&entry) && !hidden_dir_included(dir, &entry.path()) {
                 continue;
             }
             // `file_type()` comes from the directory entry on every platform
@@ -2864,6 +2906,28 @@ pub fn snapshot_drift(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
         })
         .map(|e| e.rel_path.clone())
         .collect();
+    // A-12: a file recorded as unparsable at build time has no entry to
+    // compare, so its own mtime against the build time is the only evidence
+    // that it was fixed (or broken differently) in place. A re-scan that
+    // still cannot read it drops it again, as a disk scan does.
+    let built = index
+        .header
+        .created_at
+        .saturating_add(STALENESS_TOLERANCE_SECS);
+    out.extend(
+        index
+            .header
+            .skipped
+            .iter()
+            .filter(|rel| {
+                std::fs::metadata(dir.join(rel))
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .is_some_and(|disk| disk.as_secs() > built)
+            })
+            .cloned(),
+    );
     if tree_moved(index, dir) {
         let skipped: std::collections::HashSet<&str> =
             index.header.skipped.iter().map(String::as_str).collect();
@@ -4380,6 +4444,7 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                frontmatter_link_props: None,
                 file_mtime: 0,
                 file_dir: None,
             },
@@ -4749,6 +4814,7 @@ Content.
                 scan_exclude: Vec::new(),
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
+                frontmatter_link_props: None,
                 file_mtime: 0,
                 file_dir: None,
             },

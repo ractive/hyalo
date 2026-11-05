@@ -282,6 +282,19 @@ fn every_link_form_survives_every_move_with_and_without_a_twin() {
                     checks += 1;
                     let expected = map_path(was, &moves);
                     if now.as_deref() == Some(expected.as_str()) {
+                        // Iteration 323 (DEC-391): a wikilink authored relative
+                        // to its note's folder stays relative from the new
+                        // location, and a path or bare one never turns
+                        // relative. Markdown targets are relative by nature.
+                        let relative = |t: &str| t.starts_with("./") || t.starts_with("../");
+                        let markdown = Path::new(target).extension().is_some_and(|ext| ext == "md");
+                        if !markdown && relative(target) != relative(now_target) {
+                            failures.push(format!(
+                                "{} twin={twin}: {file} link #{i} was written `{target}` and is \
+                                 now `{now_target}`: the form changed",
+                                case.label
+                            ));
+                        }
                         continue;
                     }
                     // Not the same note: it must have been listed.

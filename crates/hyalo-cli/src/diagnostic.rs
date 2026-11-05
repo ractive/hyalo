@@ -71,7 +71,10 @@ impl UserDiagnostic {
                 text.push_str("  # ");
                 text.push_str(&hint.description);
             }
-            if let Some(effects) = &self.effects {
+            // L-15: a failure that wrote nothing has no effects to list.
+            if let Some(effects) = &self.effects
+                && !effects.committed_paths().is_empty()
+            {
                 text.push_str("\nEffects: ");
                 text.push_str(&effects.committed_paths().join(", "));
                 text.push_str(" (committed; inspect before retrying)");
