@@ -464,13 +464,34 @@ pub fn strip_html_comments<'a>(line: &'a str, in_comment: &mut bool) -> Cow<'a, 
     }
 }
 
-/// Check if a line is an Obsidian comment fence (`%%` on its own line).
+/// Whether `line` can open an Obsidian `%%` comment block: its trimmed text
+/// starts with `%%` and has no second `%%` (a lone `%%`, or `%% note text`
+/// whose closer is on a later line). `%%inline%%` is an inline comment, not a
+/// block.
 ///
-/// Returns `true` when the trimmed line is exactly `%%`. Lines containing
-/// `%%` with other content (e.g. inline comments like `%%text%%`) are NOT
-/// comment fences.
-pub(crate) fn is_comment_fence(line: &str) -> bool {
-    line.trim() == "%%"
+/// Opening additionally needs a closer ahead ([`comment_closer_ahead`]): an
+/// unclosed `%% note` stays prose instead of swallowing the file.
+pub(crate) fn opens_comment_block(line: &str) -> bool {
+    line.trim()
+        .strip_prefix("%%")
+        .is_some_and(|after| !after.contains("%%"))
+}
+
+/// Whether `line` closes an open `%%` comment block: its trimmed text ends
+/// with `%%` (a lone `%%`, or `last words %%`).
+pub(crate) fn closes_comment_block(line: &str) -> bool {
+    line.trim().ends_with("%%")
+}
+
+/// Whether a closer for a `%%` block opened just before `rest` exists
+/// anywhere in `rest`. A comment owns the fences inside it (they are ignored
+/// until it closes), so a closer may sit between them; an opener that finds
+/// none is prose, not a comment that swallows the file.
+///
+/// One caller-held flag keeps this linear: once a search fails nothing later
+/// can succeed, so no opener searches again.
+pub(crate) fn comment_closer_ahead(rest: &str) -> bool {
+    rest.split('\n').any(|line| line.trim().ends_with("%%"))
 }
 
 /// Strip inline Obsidian comments (`%%text%%`) from a line, replacing them

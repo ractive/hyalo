@@ -402,3 +402,45 @@ fn a_reversed_link_glued_to_a_word_is_still_fixed() {
     lint_fix(&tmp, "a.md");
     assert!(read(&tmp, "a.md").contains("[see docs](https://example.com/guide)"));
 }
+
+// ---------------------------------------------------------------------------
+// `%%` comment blocks: `%% text` opens, a line ending in `%%` closes
+// ---------------------------------------------------------------------------
+
+const TEXT_COMMENTS: &str = "# T\n\n%% template note start\nhidden [[hidden-one]] https://h.example/1\n%%\n\nReal prose with a bare URL https://a.example/x and [[real-link]] here.\n\n%% second comment\nmore hidden [[hidden-two]]\n%%\n\nLast prose https://b.example/y\n";
+
+#[test]
+fn text_opened_comments_hide_only_their_own_lines() {
+    let tmp = vault(&[("a.md", TEXT_COMMENTS), ("real-link.md", "# r\n")]);
+    let out = run(
+        tmp.path(),
+        &[
+            "find", "--file", "a.md", "--fields", "links", "--format", "json",
+        ],
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let targets: Vec<&str> = json["results"][0]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|l| l["target"].as_str())
+        .collect();
+    assert_eq!(targets, ["real-link"], "{json}");
+
+    lint_fix(&tmp, "a.md");
+    let fixed = read(&tmp, "a.md");
+    assert!(fixed.contains("<https://a.example/x>"), "{fixed}");
+    assert!(fixed.contains("<https://b.example/y>"), "{fixed}");
+    assert!(
+        fixed.contains("hidden [[hidden-one]] https://h.example/1\n"),
+        "{fixed}"
+    );
+}
+
+#[test]
+fn an_unclosed_text_opener_stays_prose() {
+    let body = "# T\n\n%% a note with no closer\n\nProse https://p.example/x here.\n";
+    let tmp = vault(&[("a.md", body)]);
+    lint_fix(&tmp, "a.md");
+    assert!(read(&tmp, "a.md").contains("<https://p.example/x>"));
+}

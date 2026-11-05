@@ -13,11 +13,10 @@ pub use strip::{
 };
 pub use visitor::FileVisitor;
 
-pub(crate) use fence::{detect_opening_fence, is_closing_fence};
 pub(crate) use frontmatter::FrontmatterCollector;
 pub(crate) use strip::{
-    block_lookahead, code_run_exists, ends_inline_construct, is_atx_heading, is_block_boundary,
-    is_comment_fence,
+    block_lookahead, closes_comment_block, code_run_exists, comment_closer_ahead,
+    ends_inline_construct, is_atx_heading, is_block_boundary, opens_comment_block,
 };
 
 #[cfg(test)]
@@ -409,16 +408,6 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
     // --- Phase 2: Body ---
     let mut body = BodyState::default();
 
-    // `rest_after(idx)` is all document text after the line at `line_starts[idx]`
-    // — the multi-line code-span lookahead needs it (L-3).
-    let rest_after = |idx: usize| -> &str {
-        if idx + 1 < line_count {
-            &text[line_starts[idx + 1]..]
-        } else {
-            ""
-        }
-    };
-
     let body_syntax = crate::body_syntax::BodySyntax::new(&text[frame.body_offset()..]);
     if fm_lines > 0 {
         line_num = fm_lines;
@@ -426,12 +415,11 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
         // First line was not frontmatter — process it as a body line.
         dispatch_body_line(
             first_line,
-            rest_after(0),
             line_num,
             visitors,
             &mut active,
             &mut body,
-            Some((&body_syntax, 1)),
+            (&body_syntax, 1),
         );
         if !active.iter().any(|&a| a) {
             return Ok(is_valid_utf8);
@@ -439,7 +427,6 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
     }
 
     while line_idx < line_count {
-        let cur_idx = line_idx;
         let line = get_line(line_idx);
         line_idx += 1;
         line_num += 1;
@@ -457,12 +444,11 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
 
         dispatch_body_line(
             line,
-            rest_after(cur_idx),
             line_num,
             visitors,
             &mut active,
             &mut body,
-            Some((&body_syntax, line_num.saturating_sub(fm_lines))),
+            (&body_syntax, line_num.saturating_sub(fm_lines)),
         );
         if !active.iter().any(|&a| a) {
             break;
@@ -473,192 +459,22 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
 }
 
 /// Scan from any buffered reader with multiple visitors.
+///
+/// Test helper: reads the whole input and runs the one production scanner
+/// ([`scan_slice_multi`]), so the tests exercise the same block classification
+/// (`BodySyntax`) as `find`, `lint` and the index.
 #[cfg(test)]
 pub(crate) fn scan_reader_multi<R: BufRead>(
     mut reader: R,
     visitors: &mut [&mut dyn FileVisitor],
 ) -> Result<()> {
-    let num = visitors.len();
-    if num == 0 {
-        return Ok(());
-    }
-
-    let mut active: Vec<bool> = vec![true; num];
-    let mut buf = String::new();
-    let mut line_num: usize = 0;
-
-    // --- Phase 1: Frontmatter ---
-    buf.clear();
-    let n = reader.read_line(&mut buf).context("failed to read line")?;
-    if n == 0 {
-        // Empty file — deliver empty frontmatter.
-        // Clone for all but the last visitor; take ownership for the last.
-        let mut empty: IndexMap<String, Value> = IndexMap::new();
-        let last = visitors.len() - 1;
-        for (i, v) in visitors.iter_mut().enumerate() {
-            let props = if i == last {
-                std::mem::take(&mut empty)
-            } else {
-                empty.clone()
-            };
-            if v.on_frontmatter(props) == ScanAction::Stop {
-                active[i] = false;
-            }
-        }
-        return Ok(());
-    }
-    line_num += 1;
-
-    let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
-
-    // Try to parse frontmatter
-    let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
-    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(
-        &first_trimmed,
-    ) {
-        use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
-
-        // Read past frontmatter lines, optionally collecting YAML content
-        let mut yaml = if any_needs_fm {
-            Some(String::new())
-        } else {
-            None
-        };
-        let mut fm_line_count: usize = 1; // the opening `---`
-        let mut found_close = false;
-        loop {
-            buf.clear();
-            let n = reader.read_line(&mut buf).context("failed to read line")?;
-            if n == 0 {
-                break;
-            }
-            fm_line_count += 1;
-            let trimmed = buf.trim_end_matches(['\n', '\r']);
-            if crate::frontmatter::is_closing_delimiter(trimmed) {
-                found_close = true;
-                break;
-            }
-            // Content line count is fm_line_count - 1 (excludes the opening `---`).
-            // Apply the line-count limit unconditionally so that files with huge
-            // frontmatter are rejected even when no visitor needs the YAML content.
-            if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
-                return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                    format!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-                    ),
-                )));
-            }
-            if let Some(ref mut y) = yaml {
-                // +1 accounts for the trailing '\n' appended below.
-                if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
-                    return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                        format!(
-                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-                        ),
-                    )));
-                }
-                y.push_str(trimmed);
-                y.push('\n');
-            }
-        }
-        if !found_close {
-            return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                "unclosed frontmatter (no closing `---` found)".to_string(),
-            )));
-        }
-        let props: IndexMap<String, Value> = match yaml {
-            Some(ref y) if !y.trim().is_empty() => {
-                crate::frontmatter::parse_yaml_map(y).map_err(|e| {
-                    anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
-                        "failed to parse YAML frontmatter: {}",
-                        crate::frontmatter::friendly_parse_error(
-                            &e,
-                            crate::frontmatter::MAX_FRONTMATTER_BYTES,
-                            y
-                        )
-                    )))
-                })?
-            }
-            _ => IndexMap::new(),
-        };
-        (props, fm_line_count, yaml)
-    } else {
-        (IndexMap::new(), 0usize, None)
-    };
-
-    deliver_frontmatter_text(fm_text.as_deref(), visitors);
-
-    // Deliver frontmatter to all visitors.
-    // Clone for all but the last visitor; take ownership for the last.
-    let last = visitors.len() - 1;
-    for (i, v) in visitors.iter_mut().enumerate() {
-        let props = if i == last {
-            std::mem::take(&mut fm_props)
-        } else {
-            fm_props.clone()
-        };
-        if v.on_frontmatter(props) == ScanAction::Stop || !v.needs_body() {
-            active[i] = false;
-        }
-    }
-
-    // If all visitors are done, skip the body
-    if !active.iter().any(|&a| a) {
-        return Ok(());
-    }
-
-    // --- Phase 2: Body ---
-    let mut body = BodyState::default();
-
-    if fm_lines > 0 {
-        line_num = fm_lines;
-    }
-
-    // If the first line was not frontmatter, process it as a body line.
-    // The streaming reader has no cheap whole-document lookahead, so it passes
-    // `""` for `rest`: an unclosed opener stays literal (single-line
-    // semantics). This path is test-only; production uses `scan_slice_multi`.
-    if fm_lines == 0 {
-        dispatch_body_line(
-            &first_trimmed,
-            "",
-            line_num,
-            visitors,
-            &mut active,
-            &mut body,
-            None,
-        );
-        if !active.iter().any(|&a| a) {
-            return Ok(());
-        }
-    }
-
-    loop {
-        buf.clear();
-        let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)
-            .context("failed to read line")?;
-        if n == 0 {
-            break;
-        }
-        line_num += 1;
-        if outcome.is_skipped() {
-            // Line exceeded the per-line byte limit or contained invalid
-            // UTF-8 — skip it entirely to prevent OOM on files with no
-            // newlines (e.g. minified HTML/JSON accidentally placed in the
-            // vault) and to avoid propagating malformed encoding. The line
-            // counter still advances so that downstream line numbers remain
-            // correct.
-            continue;
-        }
-        let line = buf.trim_end_matches(['\n', '\r']);
-
-        dispatch_body_line(line, "", line_num, visitors, &mut active, &mut body, None);
-        if !active.iter().any(|&a| a) {
-            break;
-        }
-    }
-
-    Ok(())
+    let mut data = Vec::new();
+    reader
+        .read_to_end(&mut data)
+        .context("failed to read input")?;
+    // A reader scan rejects invalid UTF-8; the slice scan reads it lossily.
+    let text = String::from_utf8(data).context("failed to read line")?;
+    scan_slice_multi(text.as_bytes(), visitors)
 }
 
 /// Per-line byte ceiling for body scanning.
@@ -797,26 +613,20 @@ fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
 struct BodyState {
     /// Open fenced code block: `(fence_char, run_length)`.
     fence: Option<(char, usize)>,
-    /// Inside an Obsidian `%%` comment block.
-    in_comment: bool,
-    /// Length of an inline code-span backtick run left open on a prior line.
-    open_code_run: Option<usize>,
-    /// Inside a multi-line HTML `<!-- … -->` comment.
-    in_html_comment: bool,
 }
 
 /// Dispatch a single body line to active visitors, handling code fence state.
 ///
-/// `rest` is the remaining document text after `line`, used only for the
-/// multi-line code-span lookahead (L-3); pass `""` when unavailable.
+/// `syntax_line` carries the body classification (`BodySyntax`) and the
+/// 1-based body line number: fences, `%%` comment blocks, code and the masked
+/// view all come from it, so `find`, `lint` and `links auto` share one rule.
 fn dispatch_body_line(
     line: &str,
-    rest: &str,
     line_num: usize,
     visitors: &mut [&mut dyn FileVisitor],
     active: &mut [bool],
     state: &mut BodyState,
-    syntax_line: Option<(&crate::body_syntax::BodySyntax, usize)>,
+    syntax_line: (&crate::body_syntax::BodySyntax, usize),
 ) {
     // BUG-4 (iter-243): every body-region line — including fence delimiters
     // and `%%` comment fences — is announced raw first, so a raw-body
@@ -827,114 +637,44 @@ fn dispatch_body_line(
         }
     }
 
-    if let Some((syntax, syntax_line_number)) = syntax_line {
-        if syntax.line_is_percent_comment(syntax_line_number) {
-            return;
-        }
-        if syntax.line_is_fence_delimiter(syntax_line_number) {
-            if syntax.line_is_fence_close(syntax_line_number) {
-                debug_assert!(state.fence.is_some());
-                state.fence = None;
-                for (i, visitor) in visitors.iter_mut().enumerate() {
-                    if active[i] && visitor.on_code_fence_close(line_num) == ScanAction::Stop {
-                        active[i] = false;
-                    }
-                }
-            } else if let Some((fence_char, fence_count, language)) =
-                syntax.fence_open(syntax_line_number)
-            {
-                state.fence = Some((fence_char, fence_count));
-                for (i, visitor) in visitors.iter_mut().enumerate() {
-                    if active[i]
-                        && visitor.on_code_fence_open(line, language, line_num) == ScanAction::Stop
-                    {
-                        active[i] = false;
-                    }
-                }
-            }
-            return;
-        }
-        if syntax.line_is_code(syntax_line_number) {
+    let (syntax, syntax_line_number) = syntax_line;
+    if syntax.line_is_percent_comment(syntax_line_number) {
+        return;
+    }
+    if syntax.line_is_fence_delimiter(syntax_line_number) {
+        if syntax.line_is_fence_close(syntax_line_number) {
+            debug_assert!(state.fence.is_some());
+            state.fence = None;
             for (i, visitor) in visitors.iter_mut().enumerate() {
-                if active[i] && visitor.on_code_block_line(line, line_num) == ScanAction::Stop {
+                if active[i] && visitor.on_code_fence_close(line_num) == ScanAction::Stop {
                     active[i] = false;
                 }
             }
-            return;
+        } else if let Some((fence_char, fence_count, language)) =
+            syntax.fence_open(syntax_line_number)
+        {
+            state.fence = Some((fence_char, fence_count));
+            for (i, visitor) in visitors.iter_mut().enumerate() {
+                if active[i]
+                    && visitor.on_code_fence_open(line, language, line_num) == ScanAction::Stop
+                {
+                    active[i] = false;
+                }
+            }
         }
-        let cleaned = syntax.visible_line(syntax_line_number).unwrap_or(line);
+        return;
+    }
+    if syntax.line_is_code(syntax_line_number) {
         for (i, visitor) in visitors.iter_mut().enumerate() {
-            if active[i] && visitor.on_body_line(line, cleaned, line_num) == ScanAction::Stop {
+            if active[i] && visitor.on_code_block_line(line, line_num) == ScanAction::Stop {
                 active[i] = false;
             }
         }
         return;
     }
-
-    // Code fences take highest priority — %% inside a code block is literal.
-    if let Some((fence_char, fence_count)) = state.fence {
-        if is_closing_fence(line, fence_char, fence_count) {
-            state.fence = None;
-            for (i, v) in visitors.iter_mut().enumerate() {
-                if active[i] && v.on_code_fence_close(line_num) == ScanAction::Stop {
-                    active[i] = false;
-                }
-            }
-        } else {
-            // Deliver code block content lines to interested visitors
-            for (i, v) in visitors.iter_mut().enumerate() {
-                if active[i] && v.on_code_block_line(line, line_num) == ScanAction::Stop {
-                    active[i] = false;
-                }
-            }
-        }
-        return;
-    }
-
-    // Comment blocks — code fences inside comments are ignored.
-    if state.in_comment {
-        if is_comment_fence(line) {
-            state.in_comment = false;
-        }
-        return;
-    }
-
-    // A fenced code block or `%%` comment fence only opens when NO inline code
-    // span or HTML comment is currently open across lines — otherwise a ``` or
-    // %% sitting inside a multi-line span/comment would be misread as a
-    // structural delimiter (L-3/L-15).
-    let suppressed = state.open_code_run.is_some() || state.in_html_comment;
-
-    if !suppressed {
-        if let Some((fc, count)) = detect_opening_fence(line) {
-            let lang = extract_fence_language(line, fc, count);
-            state.fence = Some((fc, count));
-            for (i, v) in visitors.iter_mut().enumerate() {
-                if active[i] && v.on_code_fence_open(line, &lang, line_num) == ScanAction::Stop {
-                    active[i] = false;
-                }
-            }
-            return;
-        }
-
-        if is_comment_fence(line) {
-            state.in_comment = true;
-            return;
-        }
-    }
-
-    // Normal body line — strip inline code spans first (carrying any open
-    // cross-line run), then inline `%%…%%` comments, then HTML comments.
-    // Inline code must be removed before comment stripping so that `%%` inside
-    // a backtick span is not mistakenly treated as a comment delimiter.
-    //
-    // `line` (raw) is passed alongside `cleaned` so visitors that parse heading
-    // text can use the original content (preserving code spans in headings).
-    let cleaned = strip_inline_code_stateful(line, &mut state.open_code_run, rest);
-    let cleaned = strip_inline_comments(&cleaned);
-    let cleaned = strip_html_comments(&cleaned, &mut state.in_html_comment);
-    for (i, v) in visitors.iter_mut().enumerate() {
-        if active[i] && v.on_body_line(line, &cleaned, line_num) == ScanAction::Stop {
+    let cleaned = syntax.visible_line(syntax_line_number).unwrap_or(line);
+    for (i, visitor) in visitors.iter_mut().enumerate() {
+        if active[i] && visitor.on_body_line(line, cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
         }
     }
@@ -1873,21 +1613,64 @@ code only
         assert_eq!(body.lines[0].0, "normal");
     }
 
-    // --- is_comment_fence unit tests ---
+    // --- `%%` comment block rule unit tests ---
 
     #[test]
-    fn is_comment_fence_basic() {
-        assert!(is_comment_fence("%%"));
-        assert!(is_comment_fence("  %%  "));
-        assert!(is_comment_fence("\t%%"));
+    fn comment_block_openers_and_closers() {
+        for opener in ["%%", "  %%  ", "\t%%", "%% template note start", "%% a"] {
+            assert!(opens_comment_block(opener), "{opener:?}");
+        }
+        for not_opener in [
+            "%%inline%%",
+            "text %% more",
+            "content%%",
+            "%% a %% b",
+            "plain",
+        ] {
+            assert!(!opens_comment_block(not_opener), "{not_opener:?}");
+        }
+        for closer in ["%%", "last words %%", "  x %%  "] {
+            assert!(closes_comment_block(closer), "{closer:?}");
+        }
+        assert!(!closes_comment_block("%% still open"));
     }
 
     #[test]
-    fn is_comment_fence_rejects_inline() {
-        assert!(!is_comment_fence("%%inline%%"));
-        assert!(!is_comment_fence("text %% more"));
-        assert!(!is_comment_fence("%%content"));
-        assert!(!is_comment_fence("content%%"));
+    fn a_closer_ahead_may_sit_between_the_fences_the_comment_owns() {
+        assert!(comment_closer_ahead("hidden\n%%\nprose"));
+        assert!(comment_closer_ahead("hidden\n```\n%%\n```\n"));
+        assert!(!comment_closer_ahead("no closer at all\n```\ncode\n```\n"));
+    }
+
+    #[test]
+    fn text_opened_comment_hides_its_lines_and_leaves_the_prose_between() {
+        let body = "%% template note start\nhidden text\n%%\n\nReal [[real-link]] prose.\n\n%% second comment\nmore hidden\n%%\n\nLast prose.\n";
+        let syntax = crate::body_syntax::BodySyntax::new(body);
+        let pc: Vec<bool> = (1..=11)
+            .map(|l| syntax.line_is_percent_comment(l))
+            .collect();
+        assert_eq!(
+            pc,
+            [
+                true, true, true, false, false, false, true, true, true, false, false
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_text_opener_stays_prose() {
+        let syntax = crate::body_syntax::BodySyntax::new("%% a note with no closer\n\nprose\n");
+        assert!(!syntax.line_is_percent_comment(1));
+        assert!(!syntax.line_is_percent_comment(3));
+    }
+
+    #[test]
+    fn percent_inside_a_fence_before_any_comment_is_code() {
+        let body = "```\n%%\nx\n```\n\nprose\n";
+        let syntax = crate::body_syntax::BodySyntax::new(body);
+        assert!(syntax.line_is_code(2));
+        assert!(!syntax.line_is_percent_comment(2));
+        assert!(!syntax.line_is_percent_comment(6));
     }
 
     // --- strip_inline_comments unit tests ---

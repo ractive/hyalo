@@ -124,6 +124,7 @@ impl BodySyntax {
         let mut list_content_columns = Vec::new();
         let mut inline = InlineState::default();
         let mut in_percent_block = false;
+        let mut comment_closer_missing = false;
 
         for (i, physical) in lines.iter().enumerate() {
             let raw_line = physical.raw;
@@ -153,7 +154,7 @@ impl BodySyntax {
                     p.push_block(physical.start..physical.physical_end);
                 }
                 visible[physical.start..physical.start + raw_line.len()].fill(b' ');
-                if crate::scanner::is_comment_fence(line) {
+                if crate::scanner::closes_comment_block(line) {
                     in_percent_block = false;
                 }
                 continue;
@@ -246,7 +247,15 @@ impl BodySyntax {
                     previous_blank = false;
                     continue;
                 }
-                if crate::scanner::is_comment_fence(line) {
+                if crate::scanner::opens_comment_block(line)
+                    && !comment_closer_missing
+                    && !crate::scanner::comment_closer_ahead(rest)
+                {
+                    // No closer anywhere after this line: no later opener
+                    // can succeed either, so do not search again.
+                    comment_closer_missing = true;
+                }
+                if crate::scanner::opens_comment_block(line) && !comment_closer_missing {
                     syntax.percent_comment[i] = true;
                     if let Some(p) = prot.as_mut() {
                         p.push_block(physical.start..physical.physical_end);

@@ -3496,7 +3496,7 @@ pub(crate) enum LinksAction {
             list item),\n\
             existing [[wikilinks]] and [markdown](links) — label AND destination, whether the\n\
             destination is internal or external — bare URLs and <autolinks> in prose, headings,\n\
-            comment fences (%%), Liquid/Jinja expressions ({% ... %} and {{ ... }}),\n\
+            %% comment blocks, Liquid/Jinja expressions ({% ... %} and {{ ... }}),\n\
             raw HTML tags including attribute values (<img src=\"...\">, <a name=\"...\">, HTML\n\
             comments), raw HTML blocks (<div> … up to the blank line, <pre>), the text of <a>,\n\
             <code>, <pre>, <kbd>, <script> and <style> elements, $$ / $ math and ^block-ids —\n\
