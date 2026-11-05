@@ -8643,3 +8643,25 @@ query was silently read as something else, or a hint led nowhere.
   `"a b"~N` whose words all occur hints the plain AND and the reversed
   order, never `terms`. FIND 101 is unchanged; QUERY SYNTAX says the slop is
   ordered and shows `'"a b"~5 OR "b a"~5'`.
+
+## DEC-372: Windows binaries link the C runtime statically; a bare `hyalo` prints `-h` and exits 0 (2026-11-01)
+
+**Context.** winget's validator installs the release zip and runs each
+executable without arguments. For the sibling tools hoppy and ff-rdp it
+logged exit 0xC0000135 (STATUS_DLL_NOT_FOUND): MSVC Rust binaries import
+`VCRUNTIME140.dll` by default, which ships with the VC++ Redistributable, not
+with Windows. hyalo is built the same way. Separately, the validator labels
+any non-zero exit `Validation-Executable-Error`, and a bare `hyalo` was a
+clap usage error (help on stderr, exit 2).
+
+**Decision.**
+- `.cargo/config.toml` adds `-C target-feature=+crt-static` to the
+  `cfg(all(target_os = "windows", target_env = "msvc"))` rustflags, next to
+  the 8 MB stack flag. The shipped binary then imports only Windows system
+  DLLs. Crates that build C through `cc` honour the flag. An env `RUSTFLAGS`
+  would replace the config list; neither this repository's workflows nor
+  ractive/release-workflows set one.
+- A bare `hyalo` (no arguments at all) has no default action, so it now runs
+  as `hyalo -h`: the short help page on stdout, exit 0. Any argument without
+  a command (`hyalo --dir x`, `hyalo --no-hints`) stays a usage error with
+  exit 2.

@@ -791,7 +791,14 @@ fn run_inner() -> Result<(), AppError> {
     let raw_args: Vec<String> = std::env::args().collect();
     // iter-256 HELP-5: `hyalo help <cmd>` becomes `hyalo <cmd> -h` here, so
     // the short-help reshaping below applies to it unchanged.
-    let raw_args = crate::cli::help::rewrite_help_to_short_page(raw_args, &cmd);
+    let mut raw_args = crate::cli::help::rewrite_help_to_short_page(raw_args, &cmd);
+    // A bare `hyalo` has no default action: it prints the `-h` page on stdout
+    // and exits 0, so installers that smoke-test the binary without arguments
+    // (winget's validator labels any non-zero exit a failure) see it start.
+    // Any argument without a command (`hyalo --dir x`) stays a usage error.
+    if raw_args.len() == 1 {
+        raw_args.push("-h".to_owned());
+    }
 
     // Inherited flags must be filtered after config hiding and before the
     // short-help pointer is assembled from the applicable options.

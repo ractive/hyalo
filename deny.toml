@@ -6,14 +6,21 @@
 # the release pipeline (the shared `ractive/release-workflows` release.yml).
 
 [advisories]
-# No ignores (re-verified 2026-10-03). RUSTSEC-2025-0141 (bincode) and
-# RUSTSEC-2024-0320 (yaml-rust) used to be ignored because they came in via
-# `comrak -> syntect`; hyalo-mdlint now builds comrak with
-# `default-features = false`, so syntect, bincode and yaml-rust are gone
-# from the tree (`cargo tree -i bincode` / `-i yaml-rust` match nothing) and
-# the stale ignores were dropped. Prefer upgrading over ignoring: e.g.
-# RUSTSEC-2026-0190 (anyhow) was fixed by bumping anyhow, not ignored.
-ignore = []
+# RUSTSEC-2025-0141 (bincode) and RUSTSEC-2024-0320 (yaml-rust) used to be
+# ignored because they came in via `comrak -> syntect`; hyalo-mdlint now
+# builds comrak with `default-features = false`, so syntect, bincode and
+# yaml-rust are gone from the tree (`cargo tree -i bincode` / `-i yaml-rust`
+# match nothing) and the stale ignores were dropped. Prefer upgrading over
+# ignoring: e.g. RUSTSEC-2026-0190 (anyhow) was fixed by bumping anyhow, not
+# ignored.
+ignore = [
+    # unsafe-libyaml is unmaintained (an "unmaintained" notice, no known
+    # vulnerability). It comes in through `mdbook-lint-core 0.16.2 ->
+    # serde_yaml 0.9`, a non-optional dependency, and 0.16.2 is the latest
+    # mdbook-lint-core (2026-11-01), so there is no upgrade. Drop this once
+    # mdbook-lint-core leaves serde_yaml.
+    { id = "RUSTSEC-2024-0449", reason = "unmaintained only; via mdbook-lint-core 0.16.2 -> serde_yaml, no upgrade available" },
+]
 
 [licenses]
 allow = [
