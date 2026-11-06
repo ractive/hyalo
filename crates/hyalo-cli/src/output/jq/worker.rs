@@ -24,11 +24,11 @@ static SIGNAL_HANDLER: OnceLock<()> = OnceLock::new();
 
 /// The flag Ctrl-C raises to cancel a running jq worker (DEC-369).
 ///
-/// Installing the handler is best effort. `ctrlc` refuses when SIGINT already
-/// has a non-default disposition — notably `SIG_IGN`, which is what a shell
-/// background job (`cmd &` in a non-interactive shell), `nohup` and many job
-/// runners hand us. Such a process cannot be interrupted by Ctrl-C anyway, so
-/// the filter simply runs without cancellation; the 3 s deadline and the
+/// Installing the handler is best effort. `ctrlc` refuses when SIGINT, SIGTERM
+/// or SIGHUP already has a non-default disposition — notably `SIG_IGN`, which
+/// is what a shell background job (`cmd &` in a non-interactive shell, for
+/// SIGINT), `nohup` (for SIGHUP) and many job runners hand us. The filter then
+/// simply runs without cancellation; the 3 s deadline and the
 /// worker's resource limits still bound it. Failing the whole command there
 /// (iteration 295's behaviour) broke every `--jq` in a background job.
 fn cancellation() -> &'static AtomicBool {
