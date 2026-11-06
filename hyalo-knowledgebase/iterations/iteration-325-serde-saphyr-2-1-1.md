@@ -3,7 +3,7 @@ title: "Iteration 325: move to serde-saphyr 2.1.1"
 type: iteration
 date: 2026-11-06
 tags: [iteration, dependencies, yaml, release-blocker]
-status: in-progress
+status: completed
 branch: iter-325/serde-saphyr-2-1-1
 priority: 1
 related: ["[[backlog/done/serde-saphyr-2-1-0-is-yanked]]", "[[decision-log]]"]
@@ -25,7 +25,7 @@ hyalo-cli` without `--locked` breaks. 2.1.1 is on crates.io and not yanked. See
 - [x] Probe the `Option` wrapper in `parse_yaml_map`: kept, 2.1.1 reads an empty or comments-only stream as `{}`, but `~`, `null` and `!Tag null` still fail without it
 - [x] Duplicate keys still error under `DuplicateKeyPolicy::Error` (top level and nested); merge keys behave as on the baseline
 - [x] `yanked = "deny"` in `deny.toml`; `cargo deny check` passes, and fails on the 2.1.0 lock
-- [ ] Gates green: fmt, clippy, tests, xtask gates, npm gate, case-sensitive e2e, `hyalo lint --strict`
+- [x] Gates green: fmt, clippy, tests, xtask gates, npm gate, case-sensitive e2e, `hyalo lint --strict`
 - [x] No snapshot format bump: parser output is identical
 
 ## Outcome
