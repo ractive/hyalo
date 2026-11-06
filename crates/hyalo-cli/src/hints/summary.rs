@@ -32,12 +32,16 @@ pub(super) fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> 
             // none exists at all; "refresh" names what actually needs
             // doing.
             if ctx.snapshot_on_disk && ctx.snapshot_stale {
+                let what = match &ctx.refused_index_path {
+                    Some(path) => format!("the index `{path}` was refused by this binary"),
+                    None => "the on-disk `.hyalo-index` snapshot looks stale".to_owned(),
+                };
                 Some(Hint::new(
                     format!(
-                        "Vault has {files_total} files — the on-disk `.hyalo-index` snapshot \
-                         looks stale; refresh the stale index for faster queries"
+                        "Vault has {files_total} files — {what}; refresh the stale index for \
+                         faster queries"
                     ),
-                    build_command_no_glob(ctx, &["create-index"]),
+                    super::create_index_command(ctx),
                 ))
             } else if ctx.snapshot_on_disk {
                 Some(Hint::new(

@@ -308,3 +308,54 @@ fn a_missing_index_file_is_not_threaded_into_hints() {
         );
     }
 }
+
+#[test]
+fn a_refused_custom_index_is_rebuilt_where_it_lives() {
+    let tmp = vault();
+    for i in 0..501 {
+        note(&tmp, &format!("n{i}.md"), "# N\n\nbody\n");
+    }
+    let custom = tmp.path().join("kb/custom.idx");
+    let custom_arg = custom.to_str().unwrap();
+    let built = run(
+        tmp.path(),
+        &["create-index", "-o", custom_arg, "--format", "json"],
+    );
+    assert!(built.status.success());
+    // Make this binary refuse it: the header's `format_version` becomes 7.
+    let mut bytes = fs::read(&custom).unwrap();
+    let key = b"format_version";
+    let at = bytes.windows(key.len()).position(|w| w == key).unwrap() + key.len();
+    assert_eq!(
+        u32::from(bytes[at]),
+        hyalo_core::index::SNAPSHOT_FORMAT_VERSION
+    );
+    bytes[at] = 7;
+    fs::write(&custom, &bytes).unwrap();
+
+    let refused = run(
+        tmp.path(),
+        &["summary", "--index-file", custom_arg, "--format", "json"],
+    );
+    let out = json(&refused);
+    let first = out["hints"][0]["cmd"].as_str().unwrap().to_owned();
+    assert!(first.starts_with("hyalo create-index"), "{first}");
+    assert!(
+        first.contains("--output") && first.contains("custom.idx"),
+        "{first}"
+    );
+    assert!(!tmp.path().join("kb/.hyalo-index").exists());
+
+    let argv: Vec<&str> = first.split_whitespace().skip(1).collect();
+    let rebuilt = run(tmp.path(), &argv);
+    assert!(
+        rebuilt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuilt.stderr)
+    );
+    let again = json(&run(
+        tmp.path(),
+        &["summary", "--index-file", custom_arg, "--format", "json"],
+    ));
+    assert_eq!(again["results"]["source"], "index", "{again}");
+}

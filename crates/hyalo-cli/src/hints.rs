@@ -105,6 +105,16 @@ impl Hint {
     }
 }
 
+/// A `create-index` command for this run. When the run named an index it
+/// refused, the rebuild goes to that file (`--output`): rewriting the default
+/// snapshot would leave the refused one refused (R4).
+pub(super) fn create_index_command(ctx: &HintContext) -> String {
+    match &ctx.refused_index_path {
+        Some(path) => build_command_no_glob(ctx, &["create-index", "--output", path]),
+        None => build_command_no_glob(ctx, &["create-index"]),
+    }
+}
+
 /// Identifies which command produced the output.
 pub enum HintSource {
     Summary,
@@ -674,23 +684,17 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
         // behind the vault — pointing at `--index` here would serve a stale
         // answer with no warning until the authoritative per-entry check in
         // `run.rs` catches up. Point at refreshing it instead.
-        let (description, args): (String, Vec<&str>) = match &ctx.refused_index_path {
-            Some(path) => (
-                format!(
-                    "Command took {elapsed} ms — the index `{path}` was refused by this \
-                     binary; rebuild it"
-                ),
-                vec!["create-index", "--output", path],
+        let description = match &ctx.refused_index_path {
+            Some(path) => format!(
+                "Command took {elapsed} ms — the index `{path}` was refused by this binary; \
+                 rebuild it"
             ),
-            None => (
-                format!(
-                    "Command took {elapsed} ms — the on-disk `.hyalo-index` snapshot looks \
-                     stale; refresh it"
-                ),
-                vec!["create-index"],
+            None => format!(
+                "Command took {elapsed} ms — the on-disk `.hyalo-index` snapshot looks stale; \
+                 refresh it"
             ),
         };
-        return Some(Hint::new(description, build_command_no_glob(ctx, &args)));
+        return Some(Hint::new(description, create_index_command(ctx)));
     }
     if ctx.snapshot_on_disk {
         let description = format!(
