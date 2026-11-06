@@ -137,13 +137,13 @@ pub fn fragment_matches_headings_or_explicit_anchors(
 /// fenced code block, so a `<a id="x">` shown as a *sample* in a fenced
 /// snippet is never collected as a real anchor.
 #[derive(Debug, Default)]
-pub struct ExplicitAnchorScanner {
+pub(crate) struct ExplicitAnchorScanner {
     ids: Vec<String>,
 }
 
 impl ExplicitAnchorScanner {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 

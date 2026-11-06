@@ -54,6 +54,16 @@ use crate::workspace::workspace_root;
 /// the binary's own `Commands:` blocks, recursively.
 static PAGES: std::sync::OnceLock<Vec<Vec<String>>> = std::sync::OnceLock::new();
 
+/// Pages the walk must find, top-level and nested.
+const PAGE_SENTINELS: &[&[&str]] = &[
+    &["find"],
+    &["links"],
+    &["links", "fix"],
+    &["task", "read"],
+    &["tags", "rename"],
+    &["lint-rules", "set"],
+];
+
 fn pages(root: &std::path::Path) -> Result<&'static [Vec<String>]> {
     if let Some(found) = PAGES.get() {
         return Ok(found);
@@ -74,6 +84,17 @@ fn pages(root: &std::path::Path) -> Result<&'static [Vec<String>]> {
         }
     }
     found.sort();
+    // R5: a walk that lost pages would pass with nothing checked. These exist
+    // at every depth the walk must reach.
+    for sentinel in PAGE_SENTINELS {
+        if !found.iter().any(|page| page.as_slice() == *sentinel) {
+            anyhow::bail!(
+                "the help walk found {} pages and not `hyalo {}`; the `Commands:` parser or the help changed",
+                found.len(),
+                sentinel.join(" ")
+            );
+        }
+    }
     Ok(PAGES.get_or_init(|| found))
 }
 

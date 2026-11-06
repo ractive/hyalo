@@ -1902,9 +1902,20 @@ fn run_inner() -> Result<(), AppError> {
                 selection,
                 section,
                 lines,
+                frontmatter,
                 ..
             }) => {
                 let mut ctx = HintContext::from_common(HintSource::Read, &common);
+                if let Some(section) = section {
+                    ctx.read_flags
+                        .extend(["--section".to_owned(), section.clone()]);
+                }
+                if let Some(lines) = lines {
+                    ctx.read_flags.extend(["--lines".to_owned(), lines.clone()]);
+                }
+                if *frontmatter {
+                    ctx.read_flags.push("--frontmatter".to_owned());
+                }
                 if let Some(f) = selection
                     .file_positional
                     .as_ref()
@@ -2185,7 +2196,8 @@ fn run_inner() -> Result<(), AppError> {
         // iter-267 (UX-18): a vault that has already been indexed should be
         // told to *use* the snapshot, not to build another one. Only probed
         // when no index was requested, so the common `--index` path pays
-        // nothing for the stat.
+        // nothing for the stat. (An index that was requested and then refused
+        // is re-set after the load, below.)
         // BUG-15 (iter-277), second half: a snapshot built under a different
         // `site_prefix` answers a different question than this run, so
         // following the hint would change the count it was printed beside.
@@ -2209,9 +2221,11 @@ fn run_inner() -> Result<(), AppError> {
         // B-15: a snapshot written by another format is refused by `--index`,
         // so it is "behind" whatever the mtimes say; the header peek reads a
         // few hundred bytes, not the snapshot.
+        // A header that cannot be decoded is not a verdict: it falls through
+        // to the mtime probe below.
         let refused_format = ctx.snapshot_on_disk
             && hyalo_core::index::peek_format_version(&dir.join(".hyalo-index"))
-                != Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION);
+                .is_some_and(|version| version != hyalo_core::index::SNAPSHOT_FORMAT_VERSION);
         ctx.snapshot_stale = refused_format
             || ctx.snapshot_on_disk
                 && std::fs::metadata(dir.join(".hyalo-index"))
@@ -2251,7 +2265,15 @@ fn run_inner() -> Result<(), AppError> {
         // B-17: a command that reads no snapshot (`types`, `views`,
         // `lint-rules`) still hands its explicit `--index-file` on to the
         // hints that do.
-        if let Some(p) = index_path_buf.as_ref().or(cli.index_file.as_ref()) {
+        // Only a snapshot this binary would accept: a missing or refused path
+        // handed on to `summary --index-file X` fails that command.
+        let hint_index = index_path_buf.as_ref().or_else(|| {
+            cli.index_file.as_ref().filter(|path| {
+                hyalo_core::index::peek_format_version(path)
+                    == Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION)
+            })
+        });
+        if let Some(p) = hint_index {
             let default_path = dir.join(".hyalo-index");
             ctx.find_index = if *p == default_path {
                 HintContext::default_find_index()
@@ -2429,15 +2451,20 @@ fn run_inner() -> Result<(), AppError> {
 
     // B-15: an index this run asked for but refused (older format, other
     // settings) serves nothing, so no derived hint may promise `--index`; they
-    // point at rebuilding it instead.
+    // point at rebuilding it instead -- the refused file, not the default one
+    // (R4). A path that does not exist is not "stale": there is nothing to
+    // refresh, so the slow-query hint says to create an index.
     if snapshot_index.is_none()
-        && index_path_buf.is_some()
+        && let Some(refused) = index_path_buf.as_ref()
         && let Some(ctx) = hint_ctx.as_mut()
     {
         ctx.find_index = crate::hints::FindIndexHint::None;
         ctx.has_index = false;
-        ctx.snapshot_on_disk = true;
-        ctx.snapshot_stale = true;
+        ctx.snapshot_on_disk = refused.is_file();
+        ctx.snapshot_stale = ctx.snapshot_on_disk;
+        if ctx.snapshot_on_disk && *refused != dir.join(".hyalo-index") {
+            ctx.refused_index_path = Some(crate::hints::shorten_index_path_for_hint(refused));
+        }
     }
 
     let config_language_owned = config.search_language.clone();

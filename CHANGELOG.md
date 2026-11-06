@@ -26,9 +26,13 @@ and this project adheres to
 
 ### Changed
 
-- `hyalo-core` narrowed dead public items (`alias_count`, `matches_path`, `opening_span`,
-  `closing_span`, the `reset_*_count` helpers removed; `get_property`, `set_property`,
-  `remove_property`, `into_ids`, `type_for` and others now crate-private) (DEC-397).
+- Breaking, `hyalo-core` (0.x): removed `CaseInsensitiveIndex::alias_count`,
+  `FilenameTemplate::matches_path` and
+  `discovery::reset_scan_excluded_count`/`reset_gitignore_dropped_count`; made
+  crate-private `ExplicitAnchorScanner` (with `explicit_anchor_ids_in_line` and
+  `fragment_matches_explicit_anchor`), `ambiguous_stem_key`, `is_scan_excluded`,
+  `scan_exclude_glob`, `resolve_attachment_from_source` and `SchemaBind::type_for`
+  (DEC-397).
 - On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
   hidden, as every other dot-prefixed name already was (`ignore` 0.4.34).
   Before, `find` and `lint` listed the notes inside it while `summary` and
@@ -108,7 +112,8 @@ and this project adheres to
 - A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`
   lists it (`respons`, `promis`, `databas`) matches that dictionary term when its stem
   does not occur, so `find responce` -> `-- respons` returns the 1,365 documents `terms`
-  counts, and `find` and `terms` agree on whether a word occurs (DEC-393).
+  counts, inside quotes too (DEC-393). When the typed word's own stem occurs, only that
+  stem is searched.
 - Search ranks the page about a term above a long page that merely repeats it: the
   title saturates on its own, is length-normalised and is multiplied by its
   `[search.weights] title`, which now changes the order (`title = 10` ranks harder than

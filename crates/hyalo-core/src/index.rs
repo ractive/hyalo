@@ -667,10 +667,48 @@ pub fn peek_format_version(path: &Path) -> Option<u32> {
     use serde::de::DeserializeSeed as _;
     use std::io::Read as _;
 
-    /// Reads the header out of the envelope map and then stops with an error:
-    /// the truncated read does not hold the rest, and the format version has
-    /// already been stored by then.
+    /// Reads the header's first key out of the envelope map and then stops with
+    /// an error: the truncated read does not hold the rest (a vault with
+    /// thousands of attachments has a header far larger than the peek), and the
+    /// format version, the header's first field, has been stored by then.
     struct Seed<'a>(&'a std::cell::Cell<Option<u32>>);
+
+    /// The header map: `format_version` when it leads, else the pre-iter-276
+    /// layout that has none, which reads as version 0.
+    struct HeaderSeed<'a>(&'a std::cell::Cell<Option<u32>>);
+
+    impl<'de> serde::de::Visitor<'de> for HeaderSeed<'_> {
+        type Value = ();
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a snapshot header")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> std::result::Result<(), A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            match map.next_key::<String>()? {
+                Some(key) if key == "format_version" => {
+                    self.0.set(Some(map.next_value::<u32>()?));
+                }
+                Some(_) => self.0.set(Some(0)),
+                None => {}
+            }
+            Err(serde::de::Error::custom("header read"))
+        }
+    }
+
+    impl<'de> serde::de::DeserializeSeed<'de> for HeaderSeed<'_> {
+        type Value = ();
+
+        fn deserialize<D>(self, deserializer: D) -> std::result::Result<(), D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_map(self)
+        }
+    }
 
     impl<'de> serde::de::Visitor<'de> for Seed<'_> {
         type Value = ();
@@ -685,8 +723,7 @@ pub fn peek_format_version(path: &Path) -> Option<u32> {
         {
             match map.next_key::<String>()? {
                 Some(key) if key == "header" => {
-                    self.0
-                        .set(Some(map.next_value::<SnapshotHeader>()?.format_version));
+                    map.next_value_seed(HeaderSeed(self.0))?;
                     Err(serde::de::Error::custom("header read"))
                 }
                 _ => Err(serde::de::Error::custom(
@@ -4495,6 +4532,14 @@ Content.
     /// Serialize a snapshot envelope exactly as `write_snapshot` does, so
     /// crafted-input tests exercise the real wire format (field order included).
     fn snapshot_bytes(entries: &[IndexEntry], bm25: Option<&Bm25InvertedIndex>) -> Vec<u8> {
+        snapshot_bytes_with_attachments(entries, bm25, Vec::new())
+    }
+
+    fn snapshot_bytes_with_attachments(
+        entries: &[IndexEntry],
+        bm25: Option<&Bm25InvertedIndex>,
+        attachments: Vec<String>,
+    ) -> Vec<u8> {
         let graph = LinkGraph::default();
         let data = SnapshotDataRef {
             header: SnapshotHeader {
@@ -4503,7 +4548,7 @@ Content.
                 site_prefix: None,
                 created_at: 0,
                 pid: std::process::id(),
-                attachments: Vec::new(),
+                attachments,
                 scan_excluded: 0,
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
@@ -4817,7 +4862,6 @@ Content.
         );
     }
 
-    /// A snapshot without a BM25 section must load, and stay BM25-less.
     #[test]
     fn peeking_the_format_version_reads_only_the_header() {
         let dir = tempfile::tempdir().unwrap();
@@ -4834,6 +4878,20 @@ Content.
         assert_eq!(peek_format_version(&dir.path().join("missing")), None);
     }
 
+    #[test]
+    fn peeking_survives_a_header_larger_than_the_peek() {
+        // 6000 attachment paths put the header itself past HEADER_PEEK_BYTES.
+        let attachments: Vec<String> = (0..6000)
+            .map(|i| format!("assets/image-{i:05}.png"))
+            .collect();
+        let bytes = snapshot_bytes_with_attachments(&[test_entry("a.md")], None, attachments);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snap.idx");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(peek_format_version(&path), Some(SNAPSHOT_FORMAT_VERSION));
+    }
+
+    /// A snapshot without a BM25 section must load, and stay BM25-less.
     #[test]
     fn load_inner_without_bm25_section_reports_absent() {
         let bytes = snapshot_bytes(&[test_entry("doc.md")], None);

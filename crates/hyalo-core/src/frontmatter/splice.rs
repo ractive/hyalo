@@ -153,6 +153,18 @@ pub(super) fn splice_frontmatter(
     props: &IndexMap<String, Value>,
     compact_list_indent: bool,
 ) -> SpliceOutcome {
+    splice_frontmatter_noted(original_yaml, props, compact_list_indent, &mut Vec::new())
+}
+
+/// [`splice_frontmatter`], also collecting notes about what the minimal-diff
+/// result still lost (a comment that has nowhere to go), for the caller to
+/// print with the file's path.
+pub(super) fn splice_frontmatter_noted(
+    original_yaml: &str,
+    props: &IndexMap<String, Value>,
+    compact_list_indent: bool,
+    notes: &mut Vec<String>,
+) -> SpliceOutcome {
     // Normalize line endings to LF for the whole operation. A frontmatter
     // block is either LF or CRLF throughout (`find_body_offset` records
     // which); a stray lone `\r` means content the caller's CRLF re-expansion
@@ -211,7 +223,7 @@ pub(super) fn splice_frontmatter(
             // Changed: keep the key's comment block, re-serialize its value.
             Some(seg) => {
                 out.push_str(seg.pre_trivia);
-                match render_changed_segment(key, seg, new_value, compact_list_indent) {
+                match render_changed_segment(key, seg, new_value, compact_list_indent, notes) {
                     Ok(text) => out.push_str(&text),
                     Err(reason) => return SpliceOutcome::Fallback(reason),
                 }
@@ -447,6 +459,7 @@ fn render_changed_segment(
     seg: &Segment<'_>,
     new_value: &Value,
     compact_list_indent: bool,
+    notes: &mut Vec<String>,
 ) -> Result<String, FallbackReason> {
     if let (Value::Array(old_items), Value::Array(new_items)) = (&seg.value, new_value)
         && old_items.iter().all(is_inline_scalar)
@@ -482,7 +495,7 @@ fn render_changed_segment(
             .is_some_and(|(_, rest)| rest.trim_start().starts_with('['))
         && has_comment_outside_quotes(seg.body)
     {
-        crate::warn::warn(format!(
+        notes.push(format!(
             "`{key}` was a multi-line flow list and is now a block list; its comment is lost"
         ));
     }
@@ -515,7 +528,17 @@ fn has_comment_outside_quotes(text: &str) -> bool {
             (Some(b'"'), b'\\') => i += 1,
             (Some(b'\''), b'\'') if bytes.get(i + 1) == Some(&b'\'') => i += 1,
             (Some(q), b) if b == q => quote = None,
-            (None, b'\'' | b'"') => quote = Some(bytes[i]),
+            // A quote opens only where a scalar starts: an apostrophe inside
+            // a plain scalar (`it's`) is just a character.
+            (None, b'\'' | b'"')
+                if i == 0
+                    || matches!(
+                        bytes[i - 1],
+                        b' ' | b'\t' | b'\n' | b'[' | b',' | b'{' | b':'
+                    ) =>
+            {
+                quote = Some(bytes[i]);
+            }
             (None, b'#') if i > 0 && bytes[i - 1].is_ascii_whitespace() => return true,
             _ => {}
         }
@@ -2149,5 +2172,11 @@ mod rename_tests {
         assert!(has_comment_outside_quotes("tags: [a,\n  b] # n\n"));
         assert!(!has_comment_outside_quotes("tags: [\"a #b\",\n  'c #d']\n"));
         assert!(!has_comment_outside_quotes("tags: [a#b, c]\n"));
+    }
+
+    #[test]
+    fn an_apostrophe_in_a_plain_scalar_does_not_open_a_quote() {
+        assert!(has_comment_outside_quotes("tags: [it's,\n  a] # note\n"));
+        assert!(!has_comment_outside_quotes("tags: ['it #s',\n  a]\n"));
     }
 }

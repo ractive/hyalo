@@ -18,8 +18,9 @@
 //!    outside the guard, and a class entry naming a vanished module is stale.
 //!
 //! The sanctioned set for direct persistence is: the journal itself,
-//! `create_index` / `drop_index` (whole-index build/drop commands), and
-//! `run.rs` (initial snapshot load/save plumbing outside command dispatch).
+//! `create_index` / `drop_index` (whole-index build/drop commands). `run.rs` is
+//! not listed: it holds no forbidden token, and an exemption that matches
+//! nothing today would silently excuse a future bypass.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -75,7 +76,6 @@ const SANCTIONED: &[&str] = &[
     "commands/journal.rs",
     "commands/create_index.rs",
     "commands/drop_index.rs",
-    "run.rs",
 ];
 
 /// Modules that persist the index themselves and are checked by the token scan
@@ -281,6 +281,26 @@ fn source_names_journal(source: &str) -> Result<bool> {
                 visit::visit_item_mod(self, item);
             }
         }
+        fn visit_item(&mut self, item: &'ast syn::Item) {
+            let attrs = match item {
+                syn::Item::Use(v) => &v.attrs,
+                syn::Item::Impl(v) => &v.attrs,
+                syn::Item::Const(v) => &v.attrs,
+                syn::Item::Static(v) => &v.attrs,
+                syn::Item::Struct(v) => &v.attrs,
+                syn::Item::Trait(v) => &v.attrs,
+                syn::Item::Type(v) => &v.attrs,
+                _ => return visit::visit_item(self, item),
+            };
+            if !crate::typed_output::test_only(attrs) {
+                visit::visit_item(self, item);
+            }
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            if !crate::typed_output::test_only(&item.attrs) {
+                visit::visit_impl_item_fn(self, item);
+            }
+        }
         fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
             if !crate::typed_output::test_only(&item.attrs) {
                 visit::visit_item_fn(self, item);
@@ -307,6 +327,16 @@ mod tests {
         assert!(!source_names_journal("// MutationJournal\nfn f() {}").unwrap());
         assert!(!source_names_journal("/// MutationJournal\nfn f() {}").unwrap());
         assert!(!source_names_journal("#[cfg(test)]\nmod t { use x::MutationJournal; }").unwrap());
+        assert!(!source_names_journal("#[cfg(test)]\nuse x::MutationJournal;\nfn f() {}").unwrap());
+        assert!(
+            !source_names_journal(
+                "struct S;\nimpl S {\n#[cfg(test)]\nfn t(j: &MutationJournal) {}\n}"
+            )
+            .unwrap()
+        );
+        assert!(
+            !source_names_journal("#[cfg(test)]\nimpl S { fn t(j: &MutationJournal) {} }").unwrap()
+        );
         assert!(source_names_journal("use x::MutationJournal;\nfn f() {}").unwrap());
         assert!(source_names_journal("fn f(j: &mut MutationJournal) {}").unwrap());
     }

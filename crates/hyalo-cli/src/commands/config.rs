@@ -299,7 +299,12 @@ pub(crate) fn collect_config_report(
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
-        index_file: index_file.map(crate::hints::shorten_index_path_for_hint),
+        index_file: index_file
+            .filter(|path| {
+                hyalo_core::index::peek_format_version(path)
+                    == Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION)
+            })
+            .map(crate::hints::shorten_index_path_for_hint),
         format: resolved.format,
         effective_format: effective_format.to_string(),
         format_source,

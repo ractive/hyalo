@@ -763,19 +763,66 @@ impl Compiler<'_> {
                             && only.whole.is_none()
                             && only.parts.len() == 1
                         {
+                            let mut stems = only.parts[0].clone();
+                            let folded = super::tokenizer::fold_lower(raw);
+                            if !stems.contains(&folded) {
+                                stems.push(folded);
+                            }
                             self.words.push(QueryWord {
                                 raw: raw.to_owned(),
                                 start: content_start + local_start,
                                 end: content_start + local_end,
-                                stems: only.parts[0].clone(),
+                                stems,
                             });
                         }
                     }
                 }
                 let mut alternatives = sequences(&text, self.stemmers);
+                // R2: a dictionary term is a stem, and a did-you-mean
+                // correction splices one into the quotes (`"respons time"`),
+                // where it must match as the word `terms` lists, as it does
+                // outside them. Each position whose spelling differs from its
+                // stem also tries the spelling (at most three such positions).
+                let literals: Vec<String> = phrase_raw_words(&text)
+                    .iter()
+                    .map(|(raw, ..)| super::tokenizer::fold_lower(raw))
+                    .collect();
+                let plain = !literals.is_empty()
+                    && literals
+                        .iter()
+                        .all(|l| !l.is_empty() && l.chars().all(char::is_alphanumeric));
+                if plain
+                    && literals.len() == 1
+                    && alternatives.iter().all(|seq| seq.len() == 1)
+                    && !alternatives.is_empty()
+                {
+                    let stems = alternatives.drain(..).flatten().collect();
+                    return Ok(Some(Node::Word(stems, literals[0].clone())));
+                }
                 if alternatives.iter().all(|seq| seq.len() == 1) && !alternatives.is_empty() {
                     Some(Node::Term(alternatives.drain(..).flatten().collect()))
                 } else {
+                    if plain
+                        && let Some(primary) = alternatives.first().cloned()
+                        && primary.len() == literals.len()
+                    {
+                        let differing: Vec<usize> = (0..primary.len())
+                            .filter(|&i| primary[i] != literals[i])
+                            .collect();
+                        if differing.len() <= 3 {
+                            for mask in 1_u32..(1 << differing.len()) {
+                                let mut seq = primary.clone();
+                                for (bit, &i) in differing.iter().enumerate() {
+                                    if (mask >> bit) & 1 == 1 {
+                                        seq[i].clone_from(&literals[i]);
+                                    }
+                                }
+                                if !alternatives.contains(&seq) {
+                                    alternatives.push(seq);
+                                }
+                            }
+                        }
+                    }
                     (!alternatives.is_empty()).then_some(Node::Phrase(alternatives, slop))
                 }
             }
@@ -1438,11 +1485,16 @@ impl DocSet {
 struct ScoringUnit<'a> {
     terms: Vec<&'a str>,
     docs: DocSet,
+    /// Units sharing a group are spellings of one leaf (a word's stem and its
+    /// literal form, a phrase's alternative sequences): a document holding
+    /// several of them scores the best, not their sum.
+    group: Option<usize>,
 }
 
 struct Evaluator<'a> {
     index: &'a Bm25InvertedIndex,
     units: Vec<ScoringUnit<'a>>,
+    groups: usize,
 }
 
 impl<'a> Evaluator<'a> {
@@ -1496,7 +1548,7 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|s| (vec![s.as_str()], self.term_docs(s)))
                     .collect();
-                self.leaf(units.into_iter(), positive)
+                self.leaf(units.into_iter(), positive, false)
             }
             Node::Word(stems, literal) => {
                 let units: Vec<_> = self
@@ -1505,7 +1557,7 @@ impl<'a> Evaluator<'a> {
                     .into_iter()
                     .map(|s| (vec![s], self.term_docs(s)))
                     .collect();
-                self.leaf(units.into_iter(), positive)
+                self.leaf(units.into_iter(), positive, true)
             }
             Node::Prefix(candidates) => {
                 let expanded = self.index.expand_prefix(candidates);
@@ -1513,7 +1565,7 @@ impl<'a> Evaluator<'a> {
                     .into_iter()
                     .map(|t| (vec![t], self.term_docs(t)))
                     .collect();
-                self.leaf(units.into_iter(), positive)
+                self.leaf(units.into_iter(), positive, false)
             }
             Node::Phrase(alternatives, slop) => {
                 let units: Vec<_> = alternatives
@@ -1525,7 +1577,7 @@ impl<'a> Evaluator<'a> {
                         )
                     })
                     .collect();
-                self.leaf(units.into_iter(), positive)
+                self.leaf(units.into_iter(), positive, true)
             }
         }
     }
@@ -1535,12 +1587,17 @@ impl<'a> Evaluator<'a> {
         &mut self,
         units: impl Iterator<Item = (Vec<&'a str>, DocSet)>,
         positive: bool,
+        grouped: bool,
     ) -> DocSet {
         let mut acc = DocSet::empty(self.len());
+        let group = grouped.then(|| {
+            self.groups += 1;
+            self.groups
+        });
         for (terms, docs) in units {
             acc.union(&docs);
             if positive {
-                self.units.push(ScoringUnit { terms, docs });
+                self.units.push(ScoringUnit { terms, docs, group });
             }
         }
         acc
@@ -1614,6 +1671,7 @@ impl Bm25InvertedIndex {
         let mut evaluator = Evaluator {
             index: self,
             units: Vec::new(),
+            groups: 0,
         };
         evaluator.eval(node, true)
     }
@@ -1697,6 +1755,7 @@ impl Bm25InvertedIndex {
         let mut evaluator = Evaluator {
             index: self,
             units: Vec::new(),
+            groups: 0,
         };
         let admitted = evaluator.eval(root, true);
 
@@ -1705,7 +1764,12 @@ impl Bm25InvertedIndex {
         let weights = query.params.weights;
         let avg_title = self.avg_title_len();
         let mut scores: HashMap<u32, f64> = admitted.iter().map(|id| (id, 0.0)).collect();
+        // Best contribution per (group, document): spellings of one leaf. Ordered,
+        // so the float sums are the same on every run.
+        let mut grouped: std::collections::BTreeMap<(usize, u32), f64> =
+            std::collections::BTreeMap::new();
         for unit in &evaluator.units {
+            let mut unit_scores: HashMap<u32, f64> = HashMap::new();
             for term in &unit.terms {
                 let Some(postings) = self.postings.get(*term) else {
                     continue;
@@ -1740,10 +1804,26 @@ impl Bm25InvertedIndex {
                     let title_norm =
                         weights.title * title_tf * (Self::K1 + 1.0) / (title_tf + Self::K1);
                     let tf_norm = pool_norm + title_norm;
-                    if let Some(score) = scores.get_mut(&p.doc_id) {
-                        *score += idf * tf_norm;
+                    *unit_scores.entry(p.doc_id).or_insert(0.0) += idf * tf_norm;
+                }
+            }
+            for (doc_id, contribution) in unit_scores {
+                match unit.group {
+                    Some(group) => {
+                        let best = grouped.entry((group, doc_id)).or_insert(0.0);
+                        *best = best.max(contribution);
+                    }
+                    None => {
+                        if let Some(score) = scores.get_mut(&doc_id) {
+                            *score += contribution;
+                        }
                     }
                 }
+            }
+        }
+        for ((_, doc_id), contribution) in grouped {
+            if let Some(score) = scores.get_mut(&doc_id) {
+                *score += contribution;
             }
         }
         let mut ranked: Vec<(u32, f64)> = scores.into_iter().collect();
@@ -1830,7 +1910,15 @@ impl Bm25InvertedIndex {
     }
 
     /// The dictionary terms a plain word stands for: its stems, or the word
-    /// itself when no stem occurs and the word does (B-5).
+    /// itself when no stem occurs and the word does (B-5). `terms` lists
+    /// stems, and a stem such as `respons` is not what the stemmer makes of
+    /// `respons` (`respon`), so a listed term would otherwise find nothing.
+    ///
+    /// Either/or, not both: with the union an English query matched a German
+    /// note's unstemmed token (its stem is itself), against the language
+    /// precedence pinned by iteration 292's reference model. So when the typed word's own stem occurs, only
+    /// that stem is searched, and a document filed under the typed spelling
+    /// is found by the word that stems to it.
     pub(super) fn word_terms<'a>(&self, stems: &'a [String], literal: &'a str) -> Vec<&'a str> {
         if !stems.iter().any(|s| self.postings.contains_key(s))
             && self.postings.contains_key(literal)
@@ -2797,5 +2885,28 @@ mod tests {
         let index = Bm25InvertedIndex::build(docs);
         let ranked = index.score_compiled(&compile("alphaword"));
         assert_eq!(ranked[0].rel_path, "canonical.md");
+    }
+
+    #[test]
+    fn a_typed_stem_is_searched_when_its_own_stem_does_not_occur() {
+        let index = corpus(&[("a.md", "the response arrived"), ("c.md", "unrelated")]);
+        assert_eq!(hits(&index, "respons"), vec!["a.md"]);
+        // When the typed word's own stem occurs, only that stem is searched:
+        // the documents `terms` files under `respons` stay with "response".
+        let both = corpus(&[
+            ("a.md", "the response arrived"),
+            ("b.md", "the word respons appears here"),
+        ]);
+        assert_eq!(hits(&both, "respons"), vec!["b.md"]);
+        assert_eq!(hits(&both, "response"), vec!["a.md"]);
+    }
+
+    #[test]
+    fn a_dictionary_spelling_inside_quotes_matches_too() {
+        // R2: a correction splices the stem into a quoted phrase.
+        let index = corpus(&[("a.md", "the response time was long"), ("b.md", "nothing")]);
+        assert_eq!(hits(&index, "\"respons time\""), vec!["a.md"]);
+        assert_eq!(hits(&index, "\"respons\""), vec!["a.md"]);
+        assert_eq!(hits(&index, "\"response time\""), vec!["a.md"]);
     }
 }

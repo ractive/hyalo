@@ -221,3 +221,90 @@ fn set_without_a_target_names_the_positional_form() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("hyalo set FILE"), "{stderr}");
 }
+
+#[test]
+fn a_correction_inside_quotes_runs() {
+    let tmp = vault();
+    note(&tmp, "a.md", "# A\n\nThe response time was long.\n");
+    for typo in ["\"responce time\"", "\"responce\"", "responce time"] {
+        let out = json(&run(tmp.path(), &["find", typo, "--format", "json"]));
+        let fixed = out["hints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| {
+                h["description"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Did you mean")
+            })
+            .unwrap_or_else(|| panic!("{typo}: no correction in {out}"));
+        let cmd = fixed["cmd"].as_str().unwrap();
+        // The hint is `hyalo find ... -- '<query>'`; run it through the shell-free parser.
+        let query = cmd.rsplit(" -- ").next().unwrap().trim_matches('\'');
+        let found = json(&run(tmp.path(), &["find", "--format", "json", "--", query]));
+        assert!(found["total"].as_u64().unwrap() > 0, "{typo}: {cmd}");
+    }
+}
+
+#[test]
+fn a_comment_loss_warning_names_the_file() {
+    let tmp = vault();
+    note(&tmp, "a.md", "---\ntags: [it's,\n  a] # note\n---\nbody\n");
+    let out = run(tmp.path(), &["tags", "rename", "--from", "a", "--to", "c"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("a.md") && stderr.contains("comment is lost"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_dry_run_says_the_override_would_be_rewritten() {
+    let tmp = vault();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \"kb\"\n\n[lint.rules]\nMD013 = { severity = \"eror\" }\n",
+    )
+    .unwrap();
+    let out = run(
+        tmp.path(),
+        &[
+            "lint-rules",
+            "set",
+            "MD013",
+            "--severity",
+            "warn",
+            "--dry-run",
+            "--format",
+            "text",
+        ],
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("would be rewritten") && !text.contains("was rewritten"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_missing_index_file_is_not_threaded_into_hints() {
+    let tmp = vault();
+    let out = json(&run(
+        tmp.path(),
+        &[
+            "--index-file",
+            "missing.idx",
+            "types",
+            "list",
+            "--format",
+            "json",
+        ],
+    ));
+    for hint in out["hints"].as_array().unwrap() {
+        assert!(
+            !hint["cmd"].as_str().unwrap().contains("missing.idx"),
+            "{hint}"
+        );
+    }
+}

@@ -831,10 +831,12 @@ pub(super) fn format_lint_rules_mutation_text(
             // N1: an unusable stored override (`severity = "warning"`) already
             // behaved as the default, so the effective state is unchanged while
             // the file still changes; "(no change)" next to a write lied.
-            s.push_str(if wrote {
-                " (effective state unchanged; the stored override was rewritten)"
-            } else {
-                " (no change)"
+            s.push_str(match (wrote, dry_run) {
+                (true, true) => {
+                    " (effective state unchanged; the stored override would be rewritten)"
+                }
+                (true, false) => " (effective state unchanged; the stored override was rewritten)",
+                (false, _) => " (no change)",
             });
         }
     }
