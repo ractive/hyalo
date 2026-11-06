@@ -514,7 +514,8 @@ pub(super) fn lint_files_extended_observed(
                     .available_rules()
                     .iter()
                     .find(|e| &e.id == rule_id)
-                    .is_some_and(|e| e.autofixable);
+                    .is_some_and(|e| e.autofixable)
+                    && remaining_violations.iter().any(|v| v.fix.is_some());
                 let severity = remaining_violations
                     .first()
                     .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
@@ -628,11 +629,16 @@ pub(super) fn lint_files_extended_observed(
                     // `false` (mapl BUG-3).
                     violations.iter().any(|v| v.autofixable.unwrap_or(true))
                 } else {
+                    // W7 (iter-327): per finding, not per rule — a fix the
+                    // engine withheld (a tab inside a code block, DEC-382) is a
+                    // finding `--fix` will leave alone, so a group made only of
+                    // those is not autofixable and earns no `--fix` hint.
                     md_lint_engine
                         .available_rules()
                         .iter()
                         .find(|e| &e.id == rule_id)
                         .is_some_and(|e| e.autofixable)
+                        && violations.iter().any(|v| v.fix.is_some())
                 };
                 let severity = group_severity(violations);
 

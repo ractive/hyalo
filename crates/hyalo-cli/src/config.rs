@@ -463,6 +463,10 @@ pub(crate) struct ResolvedDefaults {
     /// validation (`--validate`, or `[schema] validate_on_write`) must refuse
     /// instead, because validating against an empty schema rejects nothing.
     pub(crate) schema_invalid: Option<String>,
+    /// The `[schema]` half of [`Self::schema_invalid`] alone. `new` and
+    /// `types list`/`show` read the schema, not `[lint.rules]`, so an invalid
+    /// lint severity is no reason for them to refuse (iter-327, W10, DEC-390).
+    pub(crate) schema_only_invalid: Option<String>,
     /// Default output limit for list commands.
     /// `None` = use hardcoded default (50).
     /// `Some(0)` = unlimited.
@@ -600,6 +604,7 @@ impl ResolvedDefaults {
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             schema_invalid: None,
+            schema_only_invalid: None,
             default_limit: None,
             pi_session_summary: false,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
@@ -1155,9 +1160,14 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // L-5 (DEC-390): a severity the engine would read as warn is the same kind
     // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
     // `hyalo config` reports it, a plain write is unaffected.
-    let schema_invalid = match (schema_invalid, invalid_lint_severity(cfg.lint.as_ref())) {
+    let schema_only_invalid = schema_invalid;
+    let schema_invalid = match (
+        schema_only_invalid.as_deref(),
+        invalid_lint_severity(cfg.lint.as_ref()),
+    ) {
         (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
-        (schema, severity) => schema.or(severity),
+        (Some(schema), None) => Some(schema.to_owned()),
+        (None, severity) => severity,
     };
 
     // Parse [links] fields — borrow before moving.
@@ -1255,6 +1265,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         schema_invalid,
+        schema_only_invalid,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
         case_insensitive_resolve,
@@ -1869,8 +1880,81 @@ pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
     })
 }
 
+/// The vault directory string a snapshot stores and every reader compares
+/// against: `std::fs::canonicalize`, deliberately not `dunce`, so on Windows it
+/// keeps the `\\?\` prefix `create-index` has always written. The one
+/// derivation for `create-index`, the loader and `hyalo config`, so they cannot
+/// disagree (the Windows CI failure of PR 409).
+pub(crate) fn snapshot_vault_dir(dir: &Path) -> String {
+    std::fs::canonicalize(dir)
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The settings a run reads a snapshot under, taken from a resolved config
+/// rather than from process globals (R1): `hyalo config` runs before they are
+/// installed.
+pub(crate) struct SnapshotRun<'a> {
+    pub(crate) vault_dir: String,
+    pub(crate) site_prefix: Option<&'a str>,
+    pub(crate) skip_code_blocks: bool,
+    pub(crate) frontmatter_link_props: Option<&'a [String]>,
+    pub(crate) scan_include: Vec<String>,
+}
+
+impl<'a> SnapshotRun<'a> {
+    /// The run described by a resolved config for the vault at `dir`.
+    pub(crate) fn from_config(
+        config: &'a ResolvedDefaults,
+        dir: &Path,
+        site_prefix: Option<&'a str>,
+    ) -> Self {
+        Self {
+            vault_dir: snapshot_vault_dir(dir),
+            site_prefix,
+            skip_code_blocks: config.search_settings.skip_code_blocks,
+            frontmatter_link_props: config.frontmatter_link_props.as_deref(),
+            scan_include: config.scan_include.clone(),
+        }
+    }
+
+    /// Why this run must not read the snapshot at `path` — `None` when it can,
+    /// and also when its header cannot be read at all (a "could not use" the
+    /// loader reports, not a settings mismatch). The one answer `hyalo config`
+    /// and the hints share with the loader (W9, iter-327).
+    pub(crate) fn refusal(&self, path: &Path) -> Option<hyalo_core::index::SnapshotRefusal> {
+        hyalo_core::index::peek_build(path)?.refusal(&hyalo_core::index::RunBuild {
+            vault_dir: &self.vault_dir,
+            site_prefix: self.site_prefix,
+            skip_code_blocks: self.skip_code_blocks,
+            frontmatter_link_props: self.frontmatter_link_props,
+            scan_include: &self.scan_include,
+        })
+    }
+
+    /// Whether this run would read the snapshot at `path`: its header decodes
+    /// and [`Self::refusal`] finds nothing against it.
+    pub(crate) fn usable(&self, path: &Path) -> bool {
+        hyalo_core::index::peek_build(path).is_some() && self.refusal(path).is_none()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_snapshot_vault_string_is_what_std_canonicalize_gives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expected = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(snapshot_vault_dir(tmp.path()), expected);
+        let defaults = ResolvedDefaults::hardcoded();
+        let run = SnapshotRun::from_config(&defaults, tmp.path(), None);
+        assert_eq!(run.vault_dir, expected);
+    }
+
     use std::fs;
 
     use tempfile::TempDir;

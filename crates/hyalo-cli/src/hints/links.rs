@@ -5,8 +5,8 @@
 //! inside the one module, so `hints::...` paths and behaviour are unchanged.
 
 use super::{
-    Hint, HintContext, MAX_HINTS, build_command_no_glob, build_command_with_glob,
-    format_confidence, shell_quote,
+    Hint, HintContext, build_command_no_glob, build_command_with_glob, format_confidence,
+    shell_quote,
 };
 
 fn links_fix_apply_hint(
@@ -55,17 +55,50 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
         .get("anchor_fixable")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let applicable = fixable.saturating_sub(unapplied) + anchor_fixable;
+    // Case-mismatch, relocation and alias repairs are written by plain
+    // `--apply` but are *not* part of `fixable` (iter-210; ALIAS-2, DEC-308).
+    // W11 (iter-327): they count toward the hinted total too — "Apply 2
+    // fixes" used to write 4 when two more of these sat beside the two.
+    let case_mismatches = data
+        .get("case_mismatches")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let relocations = data
+        .get("relocations")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let alias_fixes = data
+        .get("alias_fixes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let plain_apply_fixes = case_mismatches + relocations + alias_fixes;
+    let certain = fixable.saturating_sub(unapplied) + anchor_fixable;
+    let applicable = (fixable + plain_apply_fixes).saturating_sub(unapplied) + anchor_fixable;
 
     if is_dry_run && applicable > 0 {
-        hints.push(links_fix_apply_hint(
-            ctx,
+        let label = if certain > 0 {
             format!(
                 "Apply {applicable} fix{}",
                 if applicable == 1 { "" } else { "es" }
-            ),
-            None,
-        ));
+            )
+        } else {
+            let mut parts = Vec::new();
+            if case_mismatches > 0 {
+                parts.push(format!("{case_mismatches} case-mismatch"));
+            }
+            if relocations > 0 {
+                parts.push(format!("{relocations} relocation"));
+            }
+            if alias_fixes > 0 {
+                parts.push(format!("{alias_fixes} alias"));
+            }
+            format!(
+                "Apply {} fix{}",
+                parts.join(" and "),
+                if plain_apply_fixes == 1 { "" } else { "es" }
+            )
+        };
+        hints.push(links_fix_apply_hint(ctx, label, None));
     }
 
     // Fuzzy-match fixes are excluded from --apply by default. Surface the
@@ -155,49 +188,6 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
             "{failed} fix(es) failed to write — see `failed_fixes` for the per-file \
              error, check file permissions"
         )));
-    }
-
-    // Case-mismatch and relocation repairs are written by plain `--apply` but
-    // are *not* part of `fixable`, so a vault whose only problem was one of
-    // these produced no "Apply" hint at all — the fix was available and
-    // unadvertised (iter-210). NEW-13 (dogfood pre3) split relocations out of
-    // `case_mismatches` into their own bucket; both still land here since
-    // both are written by plain `--apply`.
-    let case_mismatches = data
-        .get("case_mismatches")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let relocations = data
-        .get("relocations")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    // ALIAS-2 / DEC-308: a bare `[[alias]]` fix is written by plain `--apply`
-    // exactly like a case-mismatch or relocation fix, but was missing from
-    // this fallback entirely -- a vault whose only proposals were alias
-    // fixes got no "Apply" hint at all (iteration 311 Hints task, a sibling
-    // of UX-8's case/relocation gap).
-    let alias_fixes = data
-        .get("alias_fixes")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let plain_apply_fixes = case_mismatches + relocations + alias_fixes;
-    if is_dry_run && plain_apply_fixes > 0 && applicable == 0 && hints.len() < MAX_HINTS {
-        let mut parts = Vec::new();
-        if case_mismatches > 0 {
-            parts.push(format!("{case_mismatches} case-mismatch"));
-        }
-        if relocations > 0 {
-            parts.push(format!("{relocations} relocation"));
-        }
-        if alias_fixes > 0 {
-            parts.push(format!("{alias_fixes} alias"));
-        }
-        let label = format!(
-            "Apply {} fix{}",
-            parts.join(" and "),
-            if plain_apply_fixes == 1 { "" } else { "es" }
-        );
-        hints.push(links_fix_apply_hint(ctx, label, None));
     }
 
     // A vault with nothing broken used to emit no hints whatsoever, making

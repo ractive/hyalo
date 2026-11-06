@@ -1361,14 +1361,15 @@ fn deinitialize_observed(
         // L-7 (DEC-390): a config that carries anything beyond `dir` (a schema,
         // views, lint rules, a profile) is the user's work, and deleting it
         // took all of that with it; one that does not parse is kept as well.
+        // W14 (iter-327): so is a `dir`-only config a user added a comment or
+        // reformatted — only the exact bytes `minimal_toml_dir` writes go.
         let toml_path = root.join(".hyalo.toml");
         // R7: any read failure other than "not there" (a stray non-UTF-8 byte,
         // a permission error) keeps the file: it cannot be shown to be ours.
         let keep_reason = match fs::read_to_string(&toml_path) {
-            Ok(text) => text
-                .parse::<toml_edit::DocumentMut>()
-                .map_or(true, |doc| doc.iter().any(|(key, _)| key != "dir"))
-                .then_some("holds settings beyond `dir`; delete it yourself if you want it gone"),
+            Ok(text) => (!written_by_init(&text)).then_some(
+                "is not exactly what `init` wrote (settings beyond `dir`, or edited); delete it yourself if you want it gone",
+            ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(_) => Some(
                 "could not be read as UTF-8 text; kept, delete it yourself if you want it gone",
@@ -1583,6 +1584,14 @@ fn minimal_toml_dir(dir_value: &str) -> String {
             dir_value.replace('\\', "\\\\").replace('"', "\\\"")
         )
     })
+}
+
+/// Whether `text` is byte-for-byte the `dir`-only config `init` writes.
+fn written_by_init(text: &str) -> bool {
+    text.parse::<toml_edit::DocumentMut>()
+        .ok()
+        .and_then(|doc| doc.get("dir")?.as_str().map(minimal_toml_dir))
+        .is_some_and(|written| written == text)
 }
 
 /// Recursively count `.md` files under `dir`.
@@ -2536,6 +2545,23 @@ mod tests {
             .to_text();
         assert!(out3.contains("updated  .claude/skills/hyalo/SKILL.md"));
         assert!(out3.contains("unchanged  .claude/skills/hyalo-tidy/SKILL.md"));
+    }
+
+    #[test]
+    fn written_by_init_is_exactly_the_dir_only_config() {
+        assert!(written_by_init(&minimal_toml_dir(".")));
+        assert!(written_by_init(&minimal_toml_dir("kb \\ \"x\"")));
+        for edited in [
+            "# note\ndir = \".\"\n",
+            "dir = \".\" # note\n",
+            "dir  = \".\"\n",
+            "dir = \".\"\n\n",
+            "dir = \".\"\nformat = \"text\"\n",
+            "dir = 3\n",
+            "dir = \".\"\n[broken",
+        ] {
+            assert!(!written_by_init(edited), "{edited:?}");
+        }
     }
 
     #[test]

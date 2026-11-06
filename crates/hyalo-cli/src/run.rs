@@ -18,21 +18,43 @@ use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::OutputPipeline;
 use hyalo_core::index::SnapshotIndex;
 
-/// Whether two frontmatter-link allow-lists scan the same properties (`None`
-/// is every value; order does not matter).
-pub(crate) fn same_link_props(a: Option<&[String]>, b: Option<&[String]>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => {
-            fn sorted(props: &[String]) -> Vec<&str> {
-                let mut props = props.iter().map(String::as_str).collect::<Vec<_>>();
-                props.sort_unstable();
-                props.dedup();
-                props
-            }
-            sorted(a) == sorted(b)
-        }
-        _ => false,
+/// The `-q`-proof warning for a snapshot this run refuses to read, naming
+/// what to re-run.
+fn refusal_message(
+    refusal: &hyalo_core::index::SnapshotRefusal,
+    index_code_blocks: &str,
+    config_code_blocks: &str,
+) -> String {
+    use hyalo_core::index::SnapshotRefusal;
+    match refusal {
+        SnapshotRefusal::Format { found } => format!(
+            "index format is {} than this binary (index v{found}, binary v{}); falling back \
+             to disk scan — re-run create-index",
+            if *found > hyalo_core::index::SNAPSHOT_FORMAT_VERSION {
+                "newer"
+            } else {
+                "older"
+            },
+            hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+        ),
+        SnapshotRefusal::Vault => "index was built for another vault or site prefix than this \
+             run; falling back to disk scan — re-run create-index"
+            .to_owned(),
+        SnapshotRefusal::CodeBlocks => format!(
+            "index was built with [search] code_blocks = \"{index_code_blocks}\", this run's \
+             config says \"{config_code_blocks}\"; falling back to disk scan — re-run \
+             create-index"
+        ),
+        SnapshotRefusal::FrontmatterLinks => "index was built with another `[links] frontmatter` \
+             setting than this run's config; falling back to disk scan — re-run create-index"
+            .to_owned(),
+        SnapshotRefusal::ScanInclude => "index was built with other `[scan] include` globs than \
+             this run's config; falling back to disk scan — re-run create-index"
+            .to_owned(),
+        SnapshotRefusal::IgnoreSource(path) => format!(
+            "an ignore file that shaped the index changed since it was built ({path}); falling \
+             back to disk scan — re-run create-index"
+        ),
     }
 }
 
@@ -1383,10 +1405,16 @@ fn run_inner() -> Result<(), AppError> {
     // `--validate`-specific refusal for that case, in `commands::mod::
     // reject_write_with_unloadable_schema`). So `schema_invalid` only joins
     // the refusal when the command is a gate, never merely because it writes.
+    // W10 (iter-327): a command that only *reads the schema* refuses over an
+    // unloadable `[schema]`, not over a `[lint.rules]` severity it never uses.
     let gate_diagnostic = config.malformed.as_deref().or_else(|| {
-        (cli.command.gates() || cli.command.reads_schema())
-            .then_some(config.schema_invalid.as_deref())
-            .flatten()
+        if cli.command.gates() {
+            config.schema_invalid.as_deref()
+        } else if cli.command.reads_schema() {
+            config.schema_only_invalid.as_deref()
+        } else {
+            None
+        }
     });
     // R14: a lossy read answers "no such file"; a lossy *write* would store
     // U+FFFD in place of the bytes the caller meant. A dry run is the same
@@ -2223,9 +2251,12 @@ fn run_inner() -> Result<(), AppError> {
         // few hundred bytes, not the snapshot.
         // A header that cannot be decoded is not a verdict: it falls through
         // to the mtime probe below.
-        let refused_format = ctx.snapshot_on_disk
-            && hyalo_core::index::peek_format_version(&dir.join(".hyalo-index"))
-                .is_some_and(|version| version != hyalo_core::index::SNAPSHOT_FORMAT_VERSION);
+        // W9: not only another format — any reason `--index` would refuse it.
+        let mut snapshot_run = crate::config::SnapshotRun::from_config(&config, &dir, site_prefix);
+        // The installed globals also hold a `--profile` overlay's globs.
+        snapshot_run.scan_include = hyalo_core::discovery::scan_include_patterns();
+        let refused_format =
+            ctx.snapshot_on_disk && snapshot_run.refusal(&dir.join(".hyalo-index")).is_some();
         ctx.snapshot_stale = refused_format
             || ctx.snapshot_on_disk
                 && std::fs::metadata(dir.join(".hyalo-index"))
@@ -2268,10 +2299,9 @@ fn run_inner() -> Result<(), AppError> {
         // Only a snapshot this binary would accept: a missing or refused path
         // handed on to `summary --index-file X` fails that command.
         let hint_index = index_path_buf.as_ref().or_else(|| {
-            cli.index_file.as_ref().filter(|path| {
-                hyalo_core::index::peek_format_version(path)
-                    == Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION)
-            })
+            cli.index_file
+                .as_ref()
+                .filter(|path| snapshot_run.usable(path))
         });
         if let Some(p) = hint_index {
             let default_path = dir.join(".hyalo-index");
@@ -2295,8 +2325,7 @@ fn run_inner() -> Result<(), AppError> {
             Ok(Some(idx)) => {
                 // Warn when the snapshot was built for a different vault or
                 // site-prefix — the index data may not match the current run.
-                let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-                let vault_dir_str = canonical_dir.to_string_lossy();
+                let vault_dir_str = crate::config::snapshot_vault_dir(&dir);
                 if !idx.format_is_current() {
                     // BUG-12 / G4 (dogfood v0.22.0): a snapshot written by an
                     // older binary decodes fine and then answers differently
@@ -2315,17 +2344,12 @@ fn run_inner() -> Result<(), AppError> {
                         format_version: idx.format_version(),
                         code_blocks: None,
                     });
-                    let relation =
-                        if idx.format_version() > hyalo_core::index::SNAPSHOT_FORMAT_VERSION {
-                            "newer"
-                        } else {
-                            "older"
-                        };
-                    crate::warn::warn_always(format!(
-                        "index format is {relation} than this binary (index v{}, binary v{}); \
-                         falling back to disk scan — re-run create-index",
-                        idx.format_version(),
-                        hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+                    crate::warn::warn_always(refusal_message(
+                        &hyalo_core::index::SnapshotRefusal::Format {
+                            found: idx.format_version(),
+                        },
+                        "",
+                        "",
                     ));
                     None
                 } else if idx.validate(&vault_dir_str, site_prefix) {
@@ -2345,46 +2369,37 @@ fn run_inner() -> Result<(), AppError> {
                     // command accepting `--index` on MDN — most of which
                     // (summary, tags, properties, a plain `find --property`)
                     // never otherwise touch BM25 at all.
+                    //
+                    // W9 (iter-327): one refusal, `SnapshotBuild::refusal`, that
+                    // the hints and `hyalo config` ask too; W2 added the
+                    // `[scan] include` globs and the ignore files to it.
                     let index_skip_code_blocks = idx.skip_code_blocks();
                     let config_skip_code_blocks =
                         hyalo_core::bm25::search_settings().skip_code_blocks;
-                    if index_skip_code_blocks == config_skip_code_blocks
-                        && same_link_props(
-                            hyalo_core::index::VaultIndex::frontmatter_link_props(&idx),
-                            config.frontmatter_link_props.as_deref(),
-                        )
-                    {
-                        // Content refresh belongs to the prepared invocation,
-                        // after cardinality validation and rooted target checks.
-                        Some(idx)
-                    } else if index_skip_code_blocks == config_skip_code_blocks {
-                        // A-6: the entries' frontmatter links were scanned
-                        // under another `[links] frontmatter` setting, so the
-                        // graph edges would differ from a disk scan's.
-                        refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
-                            format_version: idx.format_version(),
-                            code_blocks: None,
-                        });
-                        crate::warn::warn_always(
-                            "index was built with another `[links] frontmatter` setting \
-                             than this run's config; falling back to disk scan — re-run \
-                             create-index",
-                        );
-                        None
-                    } else {
-                        let label = |skip: bool| if skip { "skip" } else { "index" };
+                    let scan_include = hyalo_core::discovery::scan_include_patterns();
+                    let label = |skip: bool| if skip { "skip" } else { "index" };
+                    let refusal = idx.build_info().refusal(&hyalo_core::index::RunBuild {
+                        vault_dir: &vault_dir_str,
+                        site_prefix,
+                        skip_code_blocks: config_skip_code_blocks,
+                        frontmatter_link_props: config.frontmatter_link_props.as_deref(),
+                        scan_include: &scan_include,
+                    });
+                    if let Some(refusal) = refusal {
                         refused_index_info = Some(crate::dispatch::RefusedIndexInfo {
                             format_version: idx.format_version(),
                             code_blocks: Some(label(index_skip_code_blocks).to_owned()),
                         });
-                        crate::warn::warn_always(format!(
-                            "index was built with [search] code_blocks = \"{}\", this run's \
-                             config says \"{}\"; falling back to disk scan — re-run \
-                             create-index",
+                        crate::warn::warn_always(refusal_message(
+                            &refusal,
                             label(index_skip_code_blocks),
                             label(config_skip_code_blocks),
                         ));
                         None
+                    } else {
+                        // Content refresh belongs to the prepared invocation,
+                        // after cardinality validation and rooted target checks.
+                        Some(idx)
                     }
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();

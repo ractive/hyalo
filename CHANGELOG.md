@@ -26,13 +26,61 @@ and this project adheres to
 
 ### Changed
 
-- Breaking, `hyalo-core` (0.x): removed `CaseInsensitiveIndex::alias_count`,
-  `FilenameTemplate::matches_path` and
-  `discovery::reset_scan_excluded_count`/`reset_gitignore_dropped_count`; made
-  crate-private `ExplicitAnchorScanner` (with `explicit_anchor_ids_in_line` and
-  `fragment_matches_explicit_anchor`), `ambiguous_stem_key`, `is_scan_excluded`,
-  `scan_exclude_glob`, `resolve_attachment_from_source` and `SchemaBind::type_for`
-  (DEC-397).
+- Breaking, `hyalo-core` (0.x), a diff of its public API against 0.25.1.
+  Removed: `CaseInsensitiveIndex::alias_count`, `FilenameTemplate::matches_path`,
+  `FrontmatterFrame::opening_span` and `closing_span`, and
+  `discovery::reset_scan_excluded_count`/`reset_gitignore_dropped_count`. Made
+  crate-private: `ExplicitAnchorScanner` (with `explicit_anchor_ids_in_line` and
+  `fragment_matches_explicit_anchor`), `anchor_fix::plan_anchor_fixes` (use
+  `plan_anchor_fixes_filtered`), `bm25`'s `heading_body_lines`,
+  `BodySyntax::line_is_indented_code`, `PartialExecuteReport::applied_paths`,
+  `Document::{get_property, set_property, remove_property}`, `ambiguous_stem_key`,
+  `is_scan_excluded`, `scan_exclude_glob`, `resolve_attachment_from_source` and
+  `SchemaBind::type_for` (DEC-397). Changed in a way that breaks a caller that
+  builds or matches them: the new variant `WrittenForm::ParentRelative` (an
+  exhaustive `match` stops compiling), the new `LinkInfo::ambiguous` and
+  `candidates` fields (a struct literal stops compiling), the new
+  `BrokenLinkReport::unresolved_relocations` field, the new `FixPlan::occurrence`
+  field (a struct literal stops compiling), `link_fix::EmittedTargets` keyed by
+  `EmittedKey`, `(FixPlanKey, occurrence)`, instead of `FixPlanKey` (two plans with
+  one key no longer share a slot, DEC-399), and `SNAPSHOT_FORMAT_VERSION`, 7 to 11. Added:
+  the modules `link_target` and `protected`;
+  `CaseInsensitiveIndex::{lookup_path_suffix, stem_ambiguity, ambiguity,
+  target_ambiguity, target_stem_ambiguity, literal_target_stem_ambiguity,
+  ambiguous_candidates, ambiguous_stem_candidates, path_suffix_ambiguity}`;
+  `link_fix::{EmittedKey, assign_occurrences, FixPlan::emitted_key}`;
+  `SnapshotIndex::build_info`; `BodySyntax::{with_protected,
+  protected, line_in_block_quote, line_in_list_item, line_is_fence_delimiter}`;
+  `anchor::suggest_heading`; `discovery::{scan_include_allows_dir,
+  scan_include_patterns, ignore_stamps, set_ignore_stamps}`;
+  `index::{peek_build, same_link_props, SnapshotBuild,
+  RunBuild, SnapshotRefusal, IgnoreStamp}`; `rooted::is_portable_windows_name`.
+- **Breaking: a dry run exits 0.** `changelog release`, `changelog add` and
+  `madr toc` exited 1 on a dry run that would change the file, which is how a CI
+  step used them as a drift gate (`hyalo madr toc --dry-run` failing on a stale
+  table of contents). They now exit 0 like `okf index`, `links fix` and every
+  other preview, and `results.changed` carries the drift (DEC-307, DEC-390). A
+  gate on the exit code stops firing; read `results.changed` instead:
+  `hyalo madr toc --dry-run --jq '.results.changed' | grep -qx false`.
+  `append` onto a mapping now exits 1, not 2.
+- **Breaking: an invalid lint severity is refused.** `[lint.rules.X] severity`
+  must be exactly `error`, `warn` or `warning`. `eror` or `Error`, which read as
+  `warn` before and let a CI gate pass, now make `lint`, `find --strict` and
+  `views run` exit 1 (like an unloadable `[schema]`, DEC-362); `hyalo config`
+  reports `malformed: true`, `set --validate` refuses, and the message names
+  `hyalo lint-rules set X --severity warn` and `--severity error` for the repair.
+  Everything else keeps working, `new` and `types` included (DEC-390, DEC-399).
+- **Breaking: `init` and `deinit` protect your `.hyalo.toml`.** `init` refuses a
+  `.hyalo.toml` that does not parse (exit 1, nothing created) instead of
+  replacing it with `dir = "..."` and losing its schema, views and lint rules.
+  `deinit` used to delete the file whatever it held; it now removes it only when
+  it is exactly the `dir = "..."` file `init` writes, and keeps one that holds
+  other settings, a comment, or any reformatting, and says so (DEC-390, DEC-399).
+- **Breaking: `new --file` names a note, and `\` separates paths only on
+  Windows.** `new --file` requires `<stem>.md`, lower-case. A backslash is a
+  separator in `new`, `okf`, `changelog`, `madr`, `--files-from` and `dir` on
+  Windows only; elsewhere it is an ordinary filename byte (DEC-363, DEC-390). It
+  still separates a link target on every platform (DEC-400).
 - On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
   hidden, as every other dot-prefixed name already was (`ignore` 0.4.34).
   Before, `find` and `lint` listed the notes inside it while `summary` and
@@ -66,11 +114,16 @@ and this project adheres to
   how `a: 0X1F` reads; and a kept trailing blank line in a `|+` or `>+` value
   is written as an empty line instead of an indent-only one (the value reads
   the same).
-- **Breaking: snapshot format 8.** An index written by an older binary is
-  refused with a warning and the command falls back to disk; rebuild it with
-  `hyalo create-index`. The parser change above makes a reused 7 entry wrong
-  (`flag: tRUE` stays `true` under `--index` while a disk scan says `"tRUE"`),
-  and an incremental `create-index` would have kept it (DEC-375).
+- **Breaking: snapshot format 11** (0.25.1 wrote format 7). A snapshot written
+  by any other format, older or newer, is refused with a `-q`-proof warning and
+  the command falls back to disk; rebuild it with `hyalo create-index`. This
+  release moved the format four times, each because a reused entry would have
+  been wrong: the YAML parser change below (`flag: tRUE` stays `true` under
+  `--index` while a disk scan says `"tRUE"`, DEC-375), the code-span and `%%`
+  scanner changes below, which alter the links a body yields (DEC-381), the
+  `[links] frontmatter` allow-list the entries were scanned under (DEC-389), and
+  the `[scan] include` globs and ignore files the file set was built under
+  (DEC-399).
 - The jev tidy helper moves to `@typesafe-ai/sdk` 0.7.0 and Bun 1.4.4. Its
   requests stay uncompressed JSON, a token count the API leaves `null` sets
   `usageUnknown` instead of failing the batch, and a note holding text the SDK
@@ -94,6 +147,13 @@ and this project adheres to
 - `MD010` still reports a hard tab inside a code block, but `--fix` no longer
   rewrites one (a Makefile recipe or a Go sample is tab-significant), nor a tab
   on a fence delimiter or inside a raw HTML block (DEC-382).
+- A `%%` comment block opens on `%% note text` as well as on a lone `%%`, and
+  closes on `last words %%` as well as on a lone `%%`; a `%%` with no closer
+  ahead stays prose instead of swallowing the file. A link inside such a block
+  is not a link (it never was inside a lone-`%%` block), so `find --fields links`,
+  `backlinks`, `--orphan`, `--dead-end`, `--broken-links` and `summary.links`
+  change for a note written that way, on disk and under `--index` (DEC-381, the
+  snapshot format above).
 - MD022 and MD031 report but no longer fix inside a block quote, where the
   blank line they insert would split the quote; MD023 stays quiet inside a list
   item or quote (DEC-383).
@@ -102,9 +162,7 @@ and this project adheres to
   a block of any size is scanned in linear time (it was quadratic: 22 s for a
   60 000-line note). A code span longer than 128 lines is read as literal text.
   A fence indented with tabs under a list item is now recognised as a fence
-  (DEC-381). The snapshot format is now 9 because these scanner changes alter
-  the links a body yields: an older snapshot is refused and rebuilt with
-  `create-index`.
+  (DEC-381).
 - `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
 - Move to serde-saphyr 2.1.1; main moves off the yanked 2.1.0 (published releases were never affected). Parsed frontmatter and the write path are byte-identical to 2.1.0 on every corpus and edge case checked, so the snapshot format is unchanged. `cargo deny` now fails on a yanked crate.
 
@@ -139,7 +197,7 @@ and this project adheres to
   page it cannot render. `drop-index --help` gained examples (DEC-396).
 
 - `links fix` and `find --broken-links` name the same heading for a broken anchor (the numbered-heading repair `--apply` writes wins over a prefix match), and the text `Fixable:` line spells out its split, `Fixable: 5 (0 links + 5 anchor repairs)`, beside the unchanged JSON `fixable` and `anchor_fixable` (DEC-376).
-- `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter and `types list`/`types show` under an unusable `[schema]` say so; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).
+- `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter says so; `types list`, `types show` and `new` under an unusable `.hyalo.toml` or `[schema]` exit 1 with the diagnostic instead of answering from an empty fallback; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).
 - A `--jq` result over the 10 MiB cap exits 1 and names `--format json` or a narrower filter on a read-only run; a mutation that already wrote keeps exit 2 with its effects (DEC-378).
 - `hyalo changelog release` writes the footer links (`[X.Y.Z]: …/compare/vPREV...vX.Y.Z`, `[Unreleased]: …/compare/vX.Y.Z...HEAD`) instead of `[X.Y.Z]: TBD`; `xtask generate-npm-packages --generate` rewrites the versions in `npm/hyalo/package-lock.json`, `--check` fails on a stale one, and the release docs list all 16 files a bump touches (DEC-379).
 - `lint --fix` no longer leaves stray text when two fixes meet at one offset: an
@@ -160,11 +218,28 @@ and this project adheres to
   (it exited 0 with "fixed 0").
 - `mv` rewrites the links it counts as backlinks: `[[note?x=1]]`, `[[note?]]` and a frontmatter `[[./note]]` or `[[note?]]` follow a moved note and keep their `?query` (DEC-384).
 - `links fix` writes an alias fix as `[[sub/Target#Second|AKA]]` (fragment on the target) in the body and in frontmatter, where the alias and the declaring note's folder were dropped; frontmatter fixes now report `emitted_target` (DEC-385).
+- A partial path two notes end in (`[[x/note]]` for `a/x/note.md` and `b/x/note.md`) is
+  reported ambiguous by every reader, as a bare stem already was: `find --fields links`
+  carries `ambiguous: true` and sorted `candidates` with `path: null`, HYALO006 says
+  "matches 2 candidates", and `links fix` lists it under `ambiguous_links`, on disk and
+  under `--index`. It is still broken everywhere (`summary.links.broken`, `--broken-links`);
+  before, only `mv` and `backlinks` knew, and `links fix` called it unfixable with "no
+  candidate" (DEC-374, DEC-399).
+- `lint`'s `autofixable` follows the findings, not the rule: a note whose only `MD010`
+  finding is a tab inside a code block (its fix is withheld, DEC-382) reports `false` and no
+  longer earns a "Preview auto-fixes" hint that fixes 0 forever (DEC-399).
+- `links fix` reports `emitted_target` per occurrence: `[[AKA]] [[AKA#S]] [[AKA|x]]` showed
+  `Real|AKA` three times and now shows `Real|AKA`, `Real#S|AKA`, `Real|x`, what `--apply`
+  writes. Its "Apply N fixes" hint counts the case-mismatch, relocation and alias repairs
+  plain `--apply` also writes, and one unapplied plan no longer drops its twin from
+  `applied_fixes` (DEC-399).
+- `changelog add --help` said it exits non-zero on drift; it exits 0 on a dry run, as the
+  breaking item above says.
 - `summary.links.broken` and `links fix` agree with `find --broken-links` on short forms the reader resolves (`[[note?]]`, `[[my%20note]]`) and on path-form links relocated to another folder (DEC-384).
 - Moving a note re-aims its own `./x` and `../x` wikilinks (single and batch, body and frontmatter); before, they broke or silently pointed at another note. A frontmatter link spelling a moved directory index keeps naming the directory (DEC-384).
 - A link that names two notes (`[[./note]]`, a shared partial path `[[x/note]]`) is no longer a backlink of either; `mv` lists it in `skipped_ambiguous` instead of leaving it to resolve to the twin. `--allow-ambiguous` rewrites body and frontmatter alike, `?query` kept (DEC-384).
 - A `?` in a note name is part of the name for every reader and for `mv`; wikilinks write `?`, `%` and `:` literally instead of `%3F`. `links fix` keeps a body wikilink's `?query` and reports the whole bracket text as `emitted_target`; a partial path folds case only when `[links] case_insensitive` does (DEC-387, DEC-385).
-- `--index` answers like a disk scan or is refused (DEC-389). `backlinks FILE`,
+- `--index` answers like a disk scan or is refused (DEC-389, DEC-399). `backlinks FILE`,
   `find --file F --fields backlinks|links` and the orphan, dead-end and
   broken-link filters repair the whole drift in memory, not only the named
   file, so a deleted or added referrer no longer shows up stale. The snapshot
@@ -175,33 +250,34 @@ and this project adheres to
   directory that `[scan] include` admits. A snapshot written by a newer binary
   is refused like an older one, and `create-index` no longer reuses its
   entries. A named `lint FILE --index` repairs the drift too, so HYALO006 sees
-  a deleted target. The snapshot format is now 10: rebuild with `hyalo create-index`.
+  a deleted target. The snapshot also records the `[scan] include` globs and a
+  stamp (path, size, whole-second mtime) of each ignore file that governed its
+  walk: `.ignore`, `.gitignore` and `.git/info/exclude` of the vault and of each
+  ancestor directory, git's global excludes file, and the nested `.gitignore` and
+  `.ignore` files the walk met. A run refuses it, with a `-q`-proof warning, when
+  the globs differ or when one of them changed or an absent one now exists, and
+  answers from disk, so an edited `.gitignore` no longer leaves `--index` listing
+  a file a disk scan drops. `create-index` rewrites the header when they changed.
+  Stamps are taken before the walk reads anything. Also covered: a git worktree
+  (`.git` as a file, its git dir's and common dir's `info/exclude`) and a `.jj`
+  checkout, where nested ignore files are found by a walk of their own. Not
+  detected: a nested ignore file created after the build, and an edit made in
+  the second the file was stamped that leaves its size unchanged. `hyalo config` and the
+  hints refuse a snapshot for the same reasons the loader does, and `summary
+  --index` reports the snapshot's `code_blocks` whichever setting refused it.
 - Frontmatter comments survive writes: removing the last key keeps the block's
   own comments, `set` on a comment-only block keeps them, a trailing `# note`
   stays on a changed scalar, a renamed tag or a flow list, comments between
   block-list items stay put, and `tags rename` keeps a flow list flow with the
   untouched items' quoting. A whole-block rewrite that is still needed now warns
   that every comment in the block is lost.
-- `init` refuses a `.hyalo.toml` that does not parse (exit 1, nothing created)
-  instead of replacing it with `dir = ...`, and reports a byte-identical config
-  as `unchanged`. `deinit` keeps a `.hyalo.toml` that holds more than `dir`.
-  A failure that wrote nothing no longer lists "Effects", its hint no longer
-  mentions `task toggle`, and `init --profile` on a broken config names the
-  TOML error.
-- `changelog release`, `changelog add` and `madr toc` exit 0 on a dry run and
-  report the drift in `results.changed`, like `okf index` (DEC-307). Before,
-  they exited 1.
+- `init` reports a byte-identical `.hyalo.toml` as `unchanged`. A failure that
+  wrote nothing no longer lists "Effects", its hint no longer mentions `task
+  toggle`, and `init --profile` on a broken config names the TOML error.
 - `changelog release` rejects an impossible `--date` and a version below the
   newest release; `changelog add` rejects a continuation line that would parse
   as a heading or a link definition; a fenced example is not mistaken for the
   footer or a version heading.
-- `append` onto a mapping exits 1, not 2.
-- `[lint.rules.X] severity` must be exactly `error`, `warn` or `warning`;
-  `eror` or `Error` makes `lint`, `find --strict` and `views run` refuse (like an
-  unloadable `[schema]`) instead of reading as `warn` and letting a CI gate
-  pass, and the message names `lint-rules set` for both repairs.
-- `new --file` requires `<stem>.md`; `\` is a path separator only on Windows
-  in `new`, `okf`, `changelog`, `madr`, `--files-from` and `dir`.
 - `--jq` keeps leading empty-string outputs (`"", "", "a"` prints three lines).
 - A wikilink written relative (`[[../t]]`, `[[./sib]]`) stays relative when its
   note or its target moves, in body and frontmatter, single and batch `mv`

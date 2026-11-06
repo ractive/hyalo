@@ -1485,13 +1485,15 @@ pub(crate) enum Commands {
             or --broken-links --strict to fail CI on any finding.\n\
             INDEX REPORTING: with --index/--index-file, the result also carries \
             `index_format_version` (the snapshot's own format version), `code_blocks` \
-            (its effective `[search] code_blocks` setting, \"index\" or \"skip\") and \
+            (its effective `[search] code_blocks` setting, \"index\" or \"skip\"; omitted \
+            when the snapshot is of another format) and \
             `source` (\"index\" when the snapshot actually answered this summary, \"disk\" \
-            when a scan did instead). All three are populated even when the snapshot was \
-            refused \u{2014} too old a format, or a `code_blocks` mismatch with this run's \
-            config \u{2014} so the fallback is visible in JSON rather than reporting \
-            `index_format_version: null`. Omitted entirely when --index/--index-file was not \
-            given.\n\
+            when a scan did instead). They are populated even when the snapshot was \
+            refused \u{2014} another format, another vault or site prefix, a `[search] code_blocks`, `[links] frontmatter` \
+            or `[scan] include` setting that differs from this run's config, or an ignore \
+            file (`.gitignore`, `.ignore`) that changed since the build \u{2014} so the \
+            fallback is visible in JSON rather than reporting `index_format_version: null`. \
+            Omitted entirely when --index/--index-file was not given.\n\
             PROPERTIES: one entry per property NAME. A property that appears with more than one\n\
             type across the vault reads `type: \"mixed\"` with a `mixed_types` breakdown\n\
             ('published (103: 79 datetime, 24 date)' in text), so the property count is the\n\
@@ -1996,7 +1998,7 @@ Repeatable (AND).\n\
     },
     /// Remove hyalo configuration and tool integration artifacts
     #[command(
-        long_about = "Remove .hyalo.toml (when it holds only `dir`) and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
+        long_about = "Remove .hyalo.toml (only when it is exactly what `init` wrote; one with other settings, a comment or any edit is kept) and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
             A .hyalo.toml with a schema, views, lint rules or a profile is yours, not init's:\n\
             deinit keeps it and says so. Delete it yourself to remove it.\n\n\
             Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\
@@ -2760,7 +2762,7 @@ Repeatable (AND).\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile madr` to check\n\
             ADR conformance (status pattern, required sections, supersede references).\n\n\
             EXAMPLES:\n\
-            hyalo madr toc --dry-run              # CI: fail if the TOC is stale\n\
+            hyalo madr toc --dry-run              # CI: exits 0; `results.changed` says if the TOC is stale\n\
             hyalo madr toc --apply                # regenerate docs/decisions/README.md\n\
             hyalo madr toc docs/adr --apply       # scope to a custom ADR directory"
     )]
@@ -3088,7 +3090,8 @@ pub(crate) enum ChangelogAction {
             missing (a fresh `# Changelog` skeleton is created when the file is absent).\n\
             Category must be one of the six Keep a Changelog kinds: Added, Changed,\n\
             Deprecated, Removed, Fixed, Security (case-insensitive).\n\n\
-            Defaults to --dry-run and exits non-zero on drift; pass --apply to write.\n\n\
+            Defaults to --dry-run and exits 0 (DEC-307); `results.changed` reports the drift. Pass\n\
+            --apply to write.\n\n\
             SIDE EFFECTS: writes/creates CHANGELOG.md only with --apply.\n\n\
             EXAMPLES:\n\
             hyalo changelog add --category Added --message \"New export format\" --apply\n\

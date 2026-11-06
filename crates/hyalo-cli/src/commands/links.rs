@@ -366,14 +366,6 @@ pub fn links_fix(
                     | hyalo_core::link_fix::FixStrategy::BasenameFallback
             )
         });
-    // Fuzzy fixes the policy accepts (opted-in and at/above the confidence
-    // floor). iter-212: the floor is `DEFAULT_FUZZY_MIN_CONFIDENCE` unless the
-    // user overrode it, so a bare `--apply-fuzzy` no longer writes every guess.
-    let applicable_fuzzy: Vec<_> = fuzzy_fixes
-        .iter()
-        .filter(|f| fuzzy.accepts(f.confidence))
-        .cloned()
-        .collect();
     // Proposals that have a candidate but did not clear the floor. Reported so
     // the gap between "we found something" and "we wrote something" is visible
     // without diffing two lists.
@@ -417,6 +409,24 @@ pub fn links_fix(
         .filter(|b| in_scope(b.source.as_str()))
         .collect();
     let ambiguous_count = ambiguous.len();
+    // Fuzzy fixes the policy accepts (opted-in and at/above the confidence
+    // floor). iter-212: the floor is `DEFAULT_FUZZY_MIN_CONFIDENCE` unless the
+    // user overrode it, so a bare `--apply-fuzzy` no longer writes every guess.
+    // R10: twins (`[[AKA]] [[AKA#S]]`) share a key, so each plan carries its
+    // place among them; the order is the planner's input order below.
+    hyalo_core::link_fix::assign_occurrences(
+        certain_fixes
+            .iter_mut()
+            .chain(fuzzy_fixes.iter_mut())
+            .chain(case_mismatches.iter_mut())
+            .chain(relocations.iter_mut())
+            .chain(alias_fixes.iter_mut()),
+    );
+    let applicable_fuzzy: Vec<_> = fuzzy_fixes
+        .iter()
+        .filter(|f| fuzzy.accepts(f.confidence))
+        .cloned()
+        .collect();
 
     let mut modified_files = Vec::new();
     // Fixes that were part of the plan but produced no on-disk change (e.g. a
@@ -632,35 +642,16 @@ pub fn links_fix(
         // A fix is "applied" only if it was neither unapplied (stale text) nor
         // failed (write error). Both buckets exclude it from the applied set so
         // "Applied: yes" never over-reports a fix that did not land on disk.
-        let mut excluded_keys: std::collections::HashSet<(&str, usize, &str, &str)> =
-            unapplied_fixes
-                .iter()
-                .map(|f| {
-                    (
-                        f.source.as_str(),
-                        f.line,
-                        f.old_target.as_str(),
-                        f.new_target.as_str(),
-                    )
-                })
-                .collect();
-        for ff in &failed_fixes {
-            excluded_keys.insert((
-                ff.fix.source.as_str(),
-                ff.fix.line,
-                ff.fix.old_target.as_str(),
-                ff.fix.new_target.as_str(),
-            ));
-        }
-        // Guard-rejected fixes were never written either.
-        for rf in &rejected_fixes {
-            excluded_keys.insert((
-                rf.source.as_str(),
-                rf.line,
-                rf.old_target.as_str(),
-                rf.new_target.as_str(),
-            ));
-        }
+        // R10: excluded by occurrence, not by key alone — with twins
+        // (`[[AKA]] [[AKA#S]]`) one going unapplied must not take the other
+        // out of the applied list, or swap which one is listed.
+        let excluded: std::collections::HashSet<_> = unapplied_fixes
+            .iter()
+            .chain(failed_fixes.iter().map(|failed| &failed.fix))
+            // Guard-rejected fixes were never written either.
+            .chain(rejected_fixes.iter())
+            .map(hyalo_core::link_fix::FixPlan::emitted_key)
+            .collect();
         certain_fixes
             .iter()
             .chain(applicable_fuzzy.iter())
@@ -669,14 +660,7 @@ pub fn links_fix(
             // iter-275 (ALIAS-2): alias fixes are written by plain `--apply`,
             // so they belong in the applied set like every other certain fix.
             .chain(alias_fixes.iter())
-            .filter(|f| {
-                !excluded_keys.contains(&(
-                    f.source.as_str(),
-                    f.line,
-                    f.old_target.as_str(),
-                    f.new_target.as_str(),
-                ))
-            })
+            .filter(|f| !excluded.contains(&f.emitted_key()))
             .cloned()
             .collect()
     };

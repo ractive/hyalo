@@ -111,10 +111,7 @@ pub fn create_index(
         .collect();
 
     // Serialize vault_dir as a canonical string (fall back to raw display)
-    let vault_dir_str = std::fs::canonicalize(dir)
-        .unwrap_or_else(|_| dir.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
+    let vault_dir_str = crate::config::snapshot_vault_dir(dir);
 
     // DEC-339: reuse the previous snapshot's unchanged entries and postings.
     let mut previous = if force || !replacing_existing {
@@ -125,7 +122,7 @@ pub fn create_index(
             // A-6: entries scanned under another `[links] frontmatter`
             // setting hold the wrong link set; re-scan them all.
             .filter(|prev| {
-                crate::run::same_link_props(
+                hyalo_core::index::same_link_props(
                     hyalo_core::index::VaultIndex::frontmatter_link_props(prev),
                     frontmatter_link_props,
                 )
@@ -261,6 +258,19 @@ pub fn create_index(
                 && prev.scan_excluded() == current_scan_excluded
                 && prev.scan_exclude() == current_scan_exclude
                 && prev.gitignore_dropped() == current_gitignore_dropped
+                // W2 (iter-327): the file set is what the `[scan] include`
+                // globs and the ignore files say, so a header written under
+                // others must be rewritten even when every entry matches.
+                && prev
+                    .build_info()
+                    .refusal(&hyalo_core::index::RunBuild {
+                        vault_dir: &vault_dir_str,
+                        site_prefix,
+                        skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
+                        frontmatter_link_props,
+                        scan_include: &discovery::scan_include_patterns(),
+                    })
+                    .is_none()
                 // DEC-368: the shared rule, so a slow publish tail is not a
                 // moved tree on every later run.
                 && !hyalo_core::index::tree_moved(prev, dir)

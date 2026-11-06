@@ -572,14 +572,35 @@ impl CaseInsensitiveIndex {
 
     /// Sorted, vault-relative candidates an authored link `target` is
     /// ambiguous between (reading side — stems and doubly claimed aliases), or
-    /// `None` when it is not a bare, ambiguous target. Path-form targets assert
-    /// a location and are never ambiguous.
+    /// `None` when it is not ambiguous. A bare target is ambiguous between files
+    /// sharing the stem; a partially qualified one (`x/note`) between two or
+    /// more whose path ends in it ([`Self::path_suffix_ambiguity`]); an exact
+    /// path, `./`, `../` and `/` target is never ambiguous.
     ///
     /// `find --fields links`' `ambiguous`/`candidates`, HYALO006's "matches N
     /// candidates" and `links fix`'s `ambiguous_links` all read this.
     #[must_use]
     pub fn ambiguous_candidates(&self, target: &str) -> Option<Vec<String>> {
-        self.target_ambiguity(target).map(sorted_candidates)
+        self.target_ambiguity(target)
+            .map(sorted_candidates)
+            .or_else(|| self.path_suffix_ambiguity(target))
+    }
+
+    /// The notes a partially qualified wikilink target (`x/note` for
+    /// `a/x/note.md` and `b/x/note.md`) is ambiguous between — two or more
+    /// whose path ends in it (iter-327, W8). The reader's rule
+    /// ([`crate::catalog::resolve`]): an exact path is tried first, so a caller
+    /// asks only of a link that resolved to nothing. Sorted, vault-relative.
+    /// `None` for a bare, relative (`./`, `../`) or absolute target.
+    #[must_use]
+    pub fn path_suffix_ambiguity(&self, target: &str) -> Option<Vec<String>> {
+        let raw = crate::link_target::TargetParts::split(target).resolution_path();
+        let raw = raw.trim_end_matches('/');
+        if !raw.contains('/') || raw.starts_with(['.', '/']) {
+            return None;
+        }
+        let found = self.lookup_path_suffix(raw);
+        (found.len() > 1).then(|| sorted_candidates(&found))
     }
 
     /// Like [`Self::ambiguous_candidates`] but for *filename* stems only —
@@ -1750,6 +1771,26 @@ mod tests {
             matches!(bare_stem("plain"), Some(std::borrow::Cow::Borrowed(_))),
             "the common case must not allocate"
         );
+    }
+
+    #[test]
+    fn a_partial_path_two_files_end_in_is_ambiguous_like_a_bare_stem() {
+        let mut idx = CaseInsensitiveIndex::new();
+        for path in ["b/x/note.md", "a/x/note.md", "a/y/solo.md", "c/Y/Solo.md"] {
+            idx.insert(path);
+        }
+        let want = Some(vec!["a/x/note.md".to_owned(), "b/x/note.md".to_owned()]);
+        assert_eq!(idx.ambiguous_candidates("x/note"), want);
+        assert_eq!(idx.ambiguous_candidates("x/note.md"), want);
+        assert_eq!(idx.ambiguous_candidates("x/note#Heading"), want);
+        // Never for what asserts a location, or names one note.
+        assert_eq!(idx.ambiguous_candidates("./x/note"), None);
+        assert_eq!(idx.ambiguous_candidates("/x/note"), None);
+        assert_eq!(idx.ambiguous_candidates("a/x/note"), None);
+        assert_eq!(idx.ambiguous_candidates("z/note"), None);
+        // The bare-stem verdict is untouched, and filename-only lookups (what
+        // `mv` asks) never see a path.
+        assert_eq!(idx.ambiguous_stem_candidates("x/note"), None);
     }
 
     #[test]
