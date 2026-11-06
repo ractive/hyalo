@@ -93,10 +93,11 @@ pub fn hyalo_options() -> Options {
 /// the string as written. A written `12.0` stays a float; an explicitly
 /// tagged scalar (`!!int 0x10`) is never re-resolved either way.
 pub fn parse_yaml_map(yaml: &str) -> Result<IndexMap<String, Value>, serde_saphyr::Error> {
-    // Both parses go through `Option`: since serde-saphyr 2.1 a null document
-    // (comments only, `~`, `null`, `!Tag null`) is no longer read as an empty
-    // mapping but fails with "expected mapping start". A block holding nothing
-    // but comments is frontmatter with no properties, as it always was (DEC-375).
+    // Both parses go through `Option`: since serde-saphyr 2.1 an explicit null
+    // document (`~`, `null`, `!Tag null`) is no longer read as an empty mapping
+    // but fails with "expected mapping start" (2.1.1 reads an empty or
+    // comments-only stream as `{}` again, but not these). A block holding only
+    // such a null is frontmatter with no properties, as it always was (DEC-375).
     let fast: IndexMap<String, Value> =
         serde_saphyr::from_str_with_options::<Option<_>>(yaml, hyalo_options())?
             .unwrap_or_default();

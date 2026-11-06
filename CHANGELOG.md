@@ -106,6 +106,7 @@ and this project adheres to
   the links a body yields: an older snapshot is refused and rebuilt with
   `create-index`.
 - `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
+- Move to serde-saphyr 2.1.1; main moves off the yanked 2.1.0 (published releases were never affected). Parsed frontmatter and the write path are byte-identical to 2.1.0 on every corpus and edge case checked, so the snapshot format is unchanged. `cargo deny` now fails on a yanked crate.
 
 ### Fixed
 

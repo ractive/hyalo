@@ -6,6 +6,9 @@
 # the release pipeline (the shared `ractive/release-workflows` release.yml).
 
 [advisories]
+# A yanked crate fails the check: serde-saphyr 2.1.0 was yanked upstream on
+# 2026-11-05 and sat in the lock until iteration 325 moved to 2.1.1.
+yanked = "deny"
 # RUSTSEC-2025-0141 (bincode) and RUSTSEC-2024-0320 (yaml-rust) used to be
 # ignored because they came in via `comrak -> syntect`; hyalo-mdlint now
 # builds comrak with `default-features = false`, so syntect, bincode and
