@@ -181,13 +181,16 @@ fn jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects() {
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // A background job inherits an ignored SIGINT, and DEC-369 then runs
-        // the filter without its handler, so the handler this test is about
-        // never fires. Reset the signal rather than depend on the launcher.
+        // `ctrlc` installs nothing unless SIGINT, SIGTERM and SIGHUP are all at
+        // their default (DEC-369). A background job of a non-interactive shell
+        // inherits an ignored SIGINT and `nohup` an ignored SIGHUP, so reset
+        // them rather than depend on the launcher for the handler under test.
         // SAFETY: `signal` is async-signal-safe and touches only this child.
         unsafe {
             command.pre_exec(|| {
-                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
                 Ok(())
             });
         }

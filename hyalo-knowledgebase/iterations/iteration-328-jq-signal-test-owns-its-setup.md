@@ -13,11 +13,12 @@ related: ["[[backlog/done/jq-sigint-test-flakes-under-load]]"]
 
 ## Problem
 
-A test filed as flaky under load really depended on how its gate run was launched: a background job inherits an ignored SIGINT, and DEC-369 then runs the filter without the handler the test exercises. The backlog item has the evidence.
+A test filed as flaky under load depended on how it was launched: a background job of a non-interactive shell inherits an ignored SIGINT, and `ctrlc` then installs no handler, so the one the test exercises never ran. The backlog item has the evidence and what stays unproven.
 
 ## Tasks
 
-- [x] Reproduce the failure with SIGINT ignored (8 of 8 failed)
-- [x] Reset SIGINT in the spawned child
-- [x] Confirm 8 of 8 pass with SIGINT ignored and 8 of 8 without
-- [x] Close the backlog item with the proven cause
+- [x] Reproduce the failure with SIGINT ignored (8 of 8 failed) and as a real background `cargo test` (4 of 4 failed, 3 of 3 passed in the foreground)
+- [x] Reset SIGINT, SIGTERM and SIGHUP in the spawned child
+- [x] Confirm the test passes with each of the three ignored, with all three ignored, with none, and as a background `cargo test`
+- [x] Correct DEC-369's account of `ctrlc` and `nohup` (DEC-401)
+- [x] Close the backlog item, stating what was shown and what was not
