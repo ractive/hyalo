@@ -1880,6 +1880,18 @@ pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
     })
 }
 
+/// The vault directory string a snapshot stores and every reader compares
+/// against: `std::fs::canonicalize`, deliberately not `dunce`, so on Windows it
+/// keeps the `\\?\` prefix `create-index` has always written. The one
+/// derivation for `create-index`, the loader and `hyalo config`, so they cannot
+/// disagree (the Windows CI failure of PR 409).
+pub(crate) fn snapshot_vault_dir(dir: &Path) -> String {
+    std::fs::canonicalize(dir)
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// The settings a run reads a snapshot under, taken from a resolved config
 /// rather than from process globals (R1): `hyalo config` runs before they are
 /// installed.
@@ -1898,9 +1910,8 @@ impl<'a> SnapshotRun<'a> {
         dir: &Path,
         site_prefix: Option<&'a str>,
     ) -> Self {
-        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         Self {
-            vault_dir: canonical.to_string_lossy().into_owned(),
+            vault_dir: snapshot_vault_dir(dir),
             site_prefix,
             skip_code_blocks: config.search_settings.skip_code_blocks,
             frontmatter_link_props: config.frontmatter_link_props.as_deref(),
@@ -1931,6 +1942,19 @@ impl<'a> SnapshotRun<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_snapshot_vault_string_is_what_std_canonicalize_gives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expected = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(snapshot_vault_dir(tmp.path()), expected);
+        let defaults = ResolvedDefaults::hardcoded();
+        let run = SnapshotRun::from_config(&defaults, tmp.path(), None);
+        assert_eq!(run.vault_dir, expected);
+    }
+
     use std::fs;
 
     use tempfile::TempDir;

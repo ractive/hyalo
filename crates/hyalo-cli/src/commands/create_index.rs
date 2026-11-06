@@ -111,10 +111,7 @@ pub fn create_index(
         .collect();
 
     // Serialize vault_dir as a canonical string (fall back to raw display)
-    let vault_dir_str = std::fs::canonicalize(dir)
-        .unwrap_or_else(|_| dir.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
+    let vault_dir_str = crate::config::snapshot_vault_dir(dir);
 
     // DEC-339: reuse the previous snapshot's unchanged entries and postings.
     let mut previous = if force || !replacing_existing {

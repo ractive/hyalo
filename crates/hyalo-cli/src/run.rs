@@ -2325,8 +2325,7 @@ fn run_inner() -> Result<(), AppError> {
             Ok(Some(idx)) => {
                 // Warn when the snapshot was built for a different vault or
                 // site-prefix — the index data may not match the current run.
-                let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-                let vault_dir_str = canonical_dir.to_string_lossy();
+                let vault_dir_str = crate::config::snapshot_vault_dir(&dir);
                 if !idx.format_is_current() {
                     // BUG-12 / G4 (dogfood v0.22.0): a snapshot written by an
                     // older binary decodes fine and then answers differently
