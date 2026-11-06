@@ -40,18 +40,20 @@ and this project adheres to
   builds or matches them: the new variant `WrittenForm::ParentRelative` (an
   exhaustive `match` stops compiling), the new `LinkInfo::ambiguous` and
   `candidates` fields (a struct literal stops compiling), the new
-  `FixReport::unresolved_relocations` field, `link_fix::EmittedTargets` keyed by
-  `(FixPlanKey, occurrence)` instead of `FixPlanKey` (two plans with one key no
-  longer share a slot, DEC-399), and `SNAPSHOT_FORMAT_VERSION`, 7 to 11. Added:
+  `BrokenLinkReport::unresolved_relocations` field, the new `FixPlan::occurrence`
+  field (a struct literal stops compiling), `link_fix::EmittedTargets` keyed by
+  `EmittedKey`, `(FixPlanKey, occurrence)`, instead of `FixPlanKey` (two plans with
+  one key no longer share a slot, DEC-399), and `SNAPSHOT_FORMAT_VERSION`, 7 to 11. Added:
   the modules `link_target` and `protected`;
   `CaseInsensitiveIndex::{lookup_path_suffix, stem_ambiguity, ambiguity,
   target_ambiguity, target_stem_ambiguity, literal_target_stem_ambiguity,
   ambiguous_candidates, ambiguous_stem_candidates, path_suffix_ambiguity}`;
-  `case_index::{bare_stem, sorted_candidates}`; `BodySyntax::{with_protected,
+  `link_fix::{EmittedKey, assign_occurrences, FixPlan::emitted_key}`;
+  `SnapshotIndex::build_info`; `BodySyntax::{with_protected,
   protected, line_in_block_quote, line_in_list_item, line_is_fence_delimiter}`;
   `anchor::suggest_heading`; `discovery::{scan_include_allows_dir,
-  scan_include_patterns, nested_ignore_sources, set_nested_ignore_sources}`;
-  `index::{peek_format_version, peek_build, same_link_props, SnapshotBuild,
+  scan_include_patterns, ignore_stamps, set_ignore_stamps}`;
+  `index::{peek_build, same_link_props, SnapshotBuild,
   RunBuild, SnapshotRefusal, IgnoreStamp}`; `rooted::is_portable_windows_name`.
 - **Breaking: a dry run exits 0.** `changelog release`, `changelog add` and
   `madr toc` exited 1 on a dry run that would change the file, which is how a CI
@@ -78,7 +80,7 @@ and this project adheres to
   Windows.** `new --file` requires `<stem>.md`, lower-case. A backslash is a
   separator in `new`, `okf`, `changelog`, `madr`, `--files-from` and `dir` on
   Windows only; elsewhere it is an ordinary filename byte (DEC-363, DEC-390). It
-  still separates a link target on every platform (DEC-399).
+  still separates a link target on every platform (DEC-400).
 - On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
   hidden, as every other dot-prefixed name already was (`ignore` 0.4.34).
   Before, `find` and `lint` listed the notes inside it while `summary` and
@@ -256,9 +258,11 @@ and this project adheres to
   the globs differ or when one of them changed or an absent one now exists, and
   answers from disk, so an edited `.gitignore` no longer leaves `--index` listing
   a file a disk scan drops. `create-index` rewrites the header when they changed.
-  Not detected: a nested ignore file created after the build, an edit within the
-  second the snapshot was written, and an ignore file in a layout the walk does
-  not report (a `.jj` repository or a git worktree file). `hyalo config` and the
+  Stamps are taken before the walk reads anything. Also covered: a git worktree
+  (`.git` as a file, its git dir's and common dir's `info/exclude`) and a `.jj`
+  checkout, where nested ignore files are found by a walk of their own. Not
+  detected: a nested ignore file created after the build, and an edit made in
+  the second the file was stamped that leaves its size unchanged. `hyalo config` and the
   hints refuse a snapshot for the same reasons the loader does, and `summary
   --index` reports the snapshot's `code_blocks` whichever setting refused it.
 - Frontmatter comments survive writes: removing the last key keeps the block's

@@ -250,15 +250,74 @@ pub(crate) fn current_stamps(root_dir: &Path, nested: &[PathBuf]) -> Vec<IgnoreS
         ] {
             stamps.push(IgnoreStamp::of(&file, false));
         }
+        // A git worktree keeps `.git` as a file pointing at its own git dir;
+        // its `info/exclude` and the common dir's live there, not under `.git/`.
+        // A jj repository keeps a colocated git store of its own.
+        for file in layout_excludes(dir) {
+            stamps.push(IgnoreStamp::of(&file, false));
+        }
     }
     if let Some(global) = ignore::gitignore::gitconfig_excludes_path() {
         stamps.push(IgnoreStamp::of(&global, false));
     }
-    stamps.extend(nested.iter().map(|path| {
-        let abs = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
-        IgnoreStamp::of(&abs, true)
-    }));
+    stamps.extend(nested.iter().map(|path| nested_stamp(path)));
     stamps
+}
+
+/// The stamp of a nested ignore file, by absolute path.
+pub(crate) fn nested_stamp(path: &Path) -> IgnoreStamp {
+    let abs = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    IgnoreStamp::of(&abs, true)
+}
+
+/// The `info/exclude` files a `.git` *file* (a worktree) or a `.jj`
+/// directory in `dir` points at.
+fn layout_excludes(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let git = dir.join(".git");
+    if git.is_file()
+        && let Ok(text) = std::fs::read_to_string(&git)
+        && let Some(target) = text.trim().strip_prefix("gitdir:")
+    {
+        let gitdir = dir.join(target.trim());
+        found.push(gitdir.join("info").join("exclude"));
+        if let Ok(common) = std::fs::read_to_string(gitdir.join("commondir")) {
+            found.push(gitdir.join(common.trim()).join("info").join("exclude"));
+        }
+    }
+    let jj = dir.join(".jj");
+    if jj.is_dir() {
+        found.push(
+            jj.join("repo")
+                .join("store")
+                .join("git")
+                .join("info")
+                .join("exclude"),
+        );
+    }
+    found
+}
+
+/// The `.gitignore` and `.ignore` files below the root of `root_dir`, found
+/// by a walk that applies no ignore rule: the route for layouts the
+/// classifier does not reproduce (a git worktree, `.jj`).
+pub(crate) fn nested_ignore_files(root_dir: &Path) -> Vec<PathBuf> {
+    let mut builder = ignore::WalkBuilder::new(root_dir);
+    builder.standard_filters(false).hidden(false);
+    builder.filter_entry(|entry| {
+        let name = entry.file_name();
+        name != ".git" && name != ".jj"
+    });
+    builder
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry.depth() >= 2
+                && entry.file_type().is_some_and(|t| t.is_file())
+                && (entry.file_name() == ".gitignore" || entry.file_name() == ".ignore")
+        })
+        .map(ignore::DirEntry::into_path)
+        .collect()
 }
 
 /// The first of `stamps` whose source no longer looks as it did.

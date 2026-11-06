@@ -161,18 +161,23 @@ pub struct FixPlan {
     /// in that case, so an unannotated report keeps its previous shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emitted_target: Option<String>,
+    /// This plan's place among the plans that share its [`FixPlanKey`], in the
+    /// order the planner consumes them (iter-327, W11, R10); set by
+    /// [`assign_occurrences`], `0` until then. Not part of the report.
+    #[serde(skip)]
+    pub occurrence: usize,
 }
 
 /// Identity of a fix plan for emitted-target lookup: `(source, line,
 /// old_target, new_target)`.
 pub type FixPlanKey = (String, usize, String, String);
 
-/// A plan's key plus its place among the plans sharing that key, in plan order
-/// (iter-327, W11). `[[AKA]] [[AKA#S]]` yields two plans that differ in
-/// nothing the key holds — same line, same `old_target` (the fragment is not
-/// part of it), same `new_target` — yet write different text; the planner
-/// hands the k-th such plan the k-th such link, so the ordinal tells them
-/// apart.
+/// A plan's key plus its place among the plans sharing that key
+/// ([`FixPlan::occurrence`], iter-327). `[[AKA]] [[AKA#S]]` yields two plans
+/// that differ in nothing the key holds — same line, same `old_target` (the
+/// fragment is not part of it), same `new_target` — yet write different text;
+/// the planner hands the k-th such plan the k-th such link, so the ordinal
+/// tells them apart.
 pub type EmittedKey = (FixPlanKey, usize);
 
 /// The text `--apply` writes, keyed by [`EmittedKey`] (iter-272 Part F).
@@ -189,35 +194,36 @@ impl FixPlan {
             self.new_target.clone(),
         )
     }
+
+    /// This plan's [`EmittedKey`].
+    #[must_use]
+    pub fn emitted_key(&self) -> EmittedKey {
+        (self.key(), self.occurrence)
+    }
 }
 
-/// The [`EmittedKey`] of each plan in `fixes`, in order.
-fn emitted_keys<'a>(fixes: impl IntoIterator<Item = &'a FixPlan>) -> Vec<EmittedKey> {
+/// Number the plans that share a key, in iteration order, so each one is
+/// identifiable after the planner reports it applied, unapplied or failed.
+/// Call it once over every plan handed to the planner, in the order they are
+/// handed over — plans of one key may sit in different buckets.
+pub fn assign_occurrences<'a>(plans: impl IntoIterator<Item = &'a mut FixPlan>) {
     let mut seen: HashMap<FixPlanKey, usize> = HashMap::new();
-    fixes
-        .into_iter()
-        .map(|fix| {
-            let key = fix.key();
-            let ordinal = seen.entry(key.clone()).or_insert(0);
-            let at = *ordinal;
-            *ordinal += 1;
-            (key, at)
-        })
-        .collect()
+    for plan in plans {
+        let next = seen.entry(plan.key()).or_insert(0);
+        plan.occurrence = *next;
+        *next += 1;
+    }
 }
 
 /// Copy the emitted target text onto every plan in `fixes` that the planner
-/// produced one for (iter-272 Part F).
+/// produced one for (iter-272 Part F), looked up by [`FixPlan::emitted_key`].
 ///
 /// Called by the reporting layer once per bucket, so every `links fix` list —
 /// `fixes`, `fuzzy_fixes`, `case_mismatch_fixes`, `relocation_fixes`,
-/// `applied_fixes` — carries the string that lands on disk. Plans with one
-/// key always share a bucket (the classifier sees the same target), so the
-/// ordinals a bucket counts are the ones the planner did.
+/// `applied_fixes` — carries the string that lands on disk.
 pub fn annotate_emitted_targets(fixes: &mut [FixPlan], emitted: &EmittedTargets) {
-    let keys = emitted_keys(fixes.iter());
-    for (fix, key) in fixes.iter_mut().zip(keys) {
-        if let Some(text) = emitted.get(&key) {
+    for fix in fixes {
+        if let Some(text) = emitted.get(&fix.emitted_key()) {
             fix.emitted_target = Some(text.clone());
         }
     }
@@ -647,6 +653,7 @@ pub fn detect_broken_links_from_index(
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                         emitted_target: None,
+                        occurrence: 0,
                     });
                 }
                 LinkResolution::StemRelocation(canonical_str) => {
@@ -696,6 +703,7 @@ pub fn detect_broken_links_from_index(
                         strategy: FixStrategy::ShortestPath,
                         confidence: SHORTEST_PATH_CONFIDENCE,
                         emitted_target: None,
+                        occurrence: 0,
                     });
                 }
                 LinkResolution::ShortFormStemMismatch(correct_stem) => {
@@ -707,6 +715,7 @@ pub fn detect_broken_links_from_index(
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                         emitted_target: None,
+                        occurrence: 0,
                     });
                 }
                 LinkResolution::ShortFormAmbiguous => {
@@ -738,6 +747,7 @@ pub fn detect_broken_links_from_index(
                             strategy: FixStrategy::Alias,
                             confidence: 1.0,
                             emitted_target: None,
+                            occurrence: 0,
                         });
                         continue;
                     }
@@ -1398,6 +1408,7 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
                 strategy: result.strategy,
                 confidence: result.confidence,
                 emitted_target: None,
+                occurrence: 0,
             });
         } else {
             unfixable.push(info.clone());
@@ -1531,9 +1542,8 @@ pub fn apply_fixes_with_catalog(
             site_prefix,
             Some(catalog),
         );
-        let keys = emitted_keys(file_fixes.iter().copied());
         for (idx, text) in file_emitted {
-            emitted.insert(keys[idx].clone(), text);
+            emitted.insert(file_fixes[idx].emitted_key(), text);
         }
 
         let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
@@ -1707,9 +1717,8 @@ pub fn plan_fixes_dry_run_with_catalog(
             site_prefix,
             Some(catalog),
         );
-        let keys = emitted_keys(file_fixes.iter().copied());
         for (idx, text) in file_emitted {
-            emitted.insert(keys[idx].clone(), text);
+            emitted.insert(file_fixes[idx].emitted_key(), text);
         }
 
         for (idx, fix) in file_fixes.iter().enumerate() {
@@ -2658,6 +2667,7 @@ mod tests {
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
             emitted_target: None,
+            occurrence: 0,
         }
     }
 
@@ -2711,6 +2721,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
             emitted_target: None,
+            occurrence: 0,
         };
         let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None, None);
         assert_eq!(
@@ -3213,6 +3224,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::BasenameFallback,
             confidence: BASENAME_FALLBACK_CONFIDENCE,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, rejected, _emitted) =
@@ -3261,6 +3273,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, rejected, _emitted) =
@@ -3291,6 +3304,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (would_modify, unapplied, rejected, _emitted) =
@@ -3400,6 +3414,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3434,6 +3449,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3476,6 +3492,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::CaseInsensitive,
                 confidence: 1.0,
                 emitted_target: None,
+                occurrence: 0,
             },
             FixPlan {
                 source: "sub/src.md".to_string(),
@@ -3485,6 +3502,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::ShortestPath,
                 confidence: 1.0,
                 emitted_target: None,
+                occurrence: 0,
             },
         ];
 
@@ -3492,7 +3510,7 @@ See [broken](old-name.md) here.
             plan_fixes_dry_run(tmp.path(), &fixes, Some("site")).unwrap();
         // The dry run reports the *written* form, not the vault-relative path.
         assert_eq!(
-            dry_emitted.get(&(fixes[0].key(), 0)).map(String::as_str),
+            dry_emitted.get(&fixes[0].emitted_key()).map(String::as_str),
             Some("Right.md"),
             "{dry_emitted:?}"
         );
@@ -3505,13 +3523,51 @@ See [broken](old-name.md) here.
         let written = fs::read_to_string(tmp.path().join("sub/src.md")).unwrap();
         assert_eq!(plans.len(), 1);
         for fix in &fixes {
-            if let Some(text) = apply_emitted.get(&(fix.key(), 0)) {
+            if let Some(text) = apply_emitted.get(&fix.emitted_key()) {
                 assert!(
                     written.contains(text.as_str()),
                     "emitted {text:?} is not in the applied text {written:?}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn twin_plans_are_told_apart_by_occurrence() {
+        let tmp = vault_with_files(&[
+            ("sub/Real.md", "# Real\n\n## S\n"),
+            ("src.md", "[[real]] [[real#S]]\n"),
+        ]);
+        let plan = |emitted: Option<&str>| FixPlan {
+            source: "src.md".to_string(),
+            line: 1,
+            old_target: "real".to_string(),
+            new_target: "sub/Real.md".to_string(),
+            strategy: FixStrategy::LinkCaseMismatch,
+            confidence: 1.0,
+            emitted_target: emitted.map(str::to_string),
+            occurrence: 0,
+        };
+        let mut twins = vec![plan(None), plan(None)];
+        assign_occurrences(twins.iter_mut());
+        assert_eq!(
+            twins.iter().map(|p| p.occurrence).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        let (_, unapplied, _, emitted) = plan_fixes_dry_run(tmp.path(), &twins, None).unwrap();
+        assert!(unapplied.is_empty(), "{unapplied:?}");
+        annotate_emitted_targets(&mut twins, &emitted);
+        assert_eq!(twins[0].emitted_target.as_deref(), Some("sub/Real"));
+        assert_eq!(twins[1].emitted_target.as_deref(), Some("sub/Real#S"));
+        // A third twin with no link left is the unapplied one, and carries its
+        // own occurrence, not its sibling's.
+        let mut three = vec![plan(None), plan(None), plan(None)];
+        assign_occurrences(three.iter_mut());
+        let (_, unapplied, _, _) = plan_fixes_dry_run(tmp.path(), &three, None).unwrap();
+        assert_eq!(
+            unapplied.iter().map(|p| p.occurrence).collect::<Vec<_>>(),
+            [2]
+        );
     }
 
     #[test]
@@ -3525,6 +3581,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::ShortestPath,
                 confidence: 1.0,
                 emitted_target: None,
+                occurrence: 0,
             },
             FixPlan {
                 source: "a.md".to_string(),
@@ -3534,10 +3591,11 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::ShortestPath,
                 confidence: 1.0,
                 emitted_target: None,
+                occurrence: 0,
             },
         ];
         let mut emitted = EmittedTargets::new();
-        emitted.insert((plans[0].key(), 0), "sub/X".to_string());
+        emitted.insert(plans[0].emitted_key(), "sub/X".to_string());
         annotate_emitted_targets(&mut plans, &emitted);
         assert_eq!(plans[0].emitted_target.as_deref(), Some("sub/X"));
         assert_eq!(plans[1].emitted_target, None);
@@ -3564,6 +3622,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3600,6 +3659,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3636,6 +3696,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::ShortestPath,
                 confidence: 0.95,
                 emitted_target: None,
+                occurrence: 0,
             },
             FixPlan {
                 source: "a.md".to_string(),
@@ -3645,6 +3706,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::ShortestPath,
                 confidence: 0.95,
                 emitted_target: None,
+                occurrence: 0,
             },
         ];
 
@@ -3692,6 +3754,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3724,6 +3787,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3759,6 +3823,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3793,6 +3858,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         };
         let fixes = vec![plan.clone(), plan];
 
@@ -3831,6 +3897,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (plans, unapplied, _failed, _rejected, _emitted) =
@@ -3867,6 +3934,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
             emitted_target: None,
+            occurrence: 0,
         };
         let fixes = vec![plan.clone(), plan];
 
@@ -4646,6 +4714,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (would_modify, unapplied, _rejected, _emitted) =
@@ -4679,6 +4748,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (would_modify_dry, unapplied_dry, _rejected_dry, _emitted) =
@@ -4726,6 +4796,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::FuzzyMatch,
                 confidence: 0.9,
                 emitted_target: None,
+                occurrence: 0,
             },
             FixPlan {
                 source: "still-here.md".to_string(),
@@ -4735,6 +4806,7 @@ See [broken](old-name.md) here.
                 strategy: FixStrategy::FuzzyMatch,
                 confidence: 0.9,
                 emitted_target: None,
+                occurrence: 0,
             },
         ];
 
@@ -4784,6 +4856,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (would_modify, unapplied, _rejected, _emitted) =
@@ -4818,6 +4891,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
             emitted_target: None,
+            occurrence: 0,
         }];
 
         let (would_modify, unapplied, _rejected, _emitted) =
@@ -4849,6 +4923,7 @@ See [broken](old-name.md) here.
                     strategy: FixStrategy::ShortestPath,
                     confidence: 1.0,
                     emitted_target: None,
+                    occurrence: 0,
                 })
                 .collect();
             let (_, unapplied, failed, rejected, _) =

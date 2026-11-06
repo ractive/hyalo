@@ -1880,29 +1880,53 @@ pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
     })
 }
 
-/// Why a run with the installed settings must not read the snapshot at `path`
-/// — `None` when it can, and also when its header cannot be read at all (that
-/// is a "could not use" the loader reports, not a settings mismatch). One
-/// answer for `--index` loading's hints, `hyalo config` and `types` (W9,
-/// iter-327).
-pub(crate) fn snapshot_refusal(
-    path: &Path,
-    frontmatter_link_props: Option<&[String]>,
-) -> Option<hyalo_core::index::SnapshotRefusal> {
-    let build = hyalo_core::index::peek_build(path)?;
-    let scan_include = hyalo_core::discovery::scan_include_patterns();
-    build.refusal(&hyalo_core::index::RunBuild {
-        skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
-        frontmatter_link_props,
-        scan_include: &scan_include,
-    })
+/// The settings a run reads a snapshot under, taken from a resolved config
+/// rather than from process globals (R1): `hyalo config` runs before they are
+/// installed.
+pub(crate) struct SnapshotRun<'a> {
+    pub(crate) vault_dir: String,
+    pub(crate) site_prefix: Option<&'a str>,
+    pub(crate) skip_code_blocks: bool,
+    pub(crate) frontmatter_link_props: Option<&'a [String]>,
+    pub(crate) scan_include: Vec<String>,
 }
 
-/// Whether this run would read the snapshot at `path`: its header decodes and
-/// [`snapshot_refusal`] finds nothing against it.
-pub(crate) fn snapshot_usable(path: &Path, frontmatter_link_props: Option<&[String]>) -> bool {
-    hyalo_core::index::peek_build(path).is_some()
-        && snapshot_refusal(path, frontmatter_link_props).is_none()
+impl<'a> SnapshotRun<'a> {
+    /// The run described by a resolved config for the vault at `dir`.
+    pub(crate) fn from_config(
+        config: &'a ResolvedDefaults,
+        dir: &Path,
+        site_prefix: Option<&'a str>,
+    ) -> Self {
+        let canonical = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        Self {
+            vault_dir: canonical.to_string_lossy().into_owned(),
+            site_prefix,
+            skip_code_blocks: config.search_settings.skip_code_blocks,
+            frontmatter_link_props: config.frontmatter_link_props.as_deref(),
+            scan_include: config.scan_include.clone(),
+        }
+    }
+
+    /// Why this run must not read the snapshot at `path` — `None` when it can,
+    /// and also when its header cannot be read at all (a "could not use" the
+    /// loader reports, not a settings mismatch). The one answer `hyalo config`
+    /// and the hints share with the loader (W9, iter-327).
+    pub(crate) fn refusal(&self, path: &Path) -> Option<hyalo_core::index::SnapshotRefusal> {
+        hyalo_core::index::peek_build(path)?.refusal(&hyalo_core::index::RunBuild {
+            vault_dir: &self.vault_dir,
+            site_prefix: self.site_prefix,
+            skip_code_blocks: self.skip_code_blocks,
+            frontmatter_link_props: self.frontmatter_link_props,
+            scan_include: &self.scan_include,
+        })
+    }
+
+    /// Whether this run would read the snapshot at `path`: its header decodes
+    /// and [`Self::refusal`] finds nothing against it.
+    pub(crate) fn usable(&self, path: &Path) -> bool {
+        hyalo_core::index::peek_build(path).is_some() && self.refusal(path).is_none()
+    }
 }
 
 #[cfg(test)]

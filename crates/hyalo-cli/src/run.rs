@@ -37,6 +37,9 @@ fn refusal_message(
             },
             hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
         ),
+        SnapshotRefusal::Vault => "index was built for another vault or site prefix than this \
+             run; falling back to disk scan — re-run create-index"
+            .to_owned(),
         SnapshotRefusal::CodeBlocks => format!(
             "index was built with [search] code_blocks = \"{index_code_blocks}\", this run's \
              config says \"{config_code_blocks}\"; falling back to disk scan — re-run \
@@ -2249,12 +2252,11 @@ fn run_inner() -> Result<(), AppError> {
         // A header that cannot be decoded is not a verdict: it falls through
         // to the mtime probe below.
         // W9: not only another format — any reason `--index` would refuse it.
-        let refused_format = ctx.snapshot_on_disk
-            && crate::config::snapshot_refusal(
-                &dir.join(".hyalo-index"),
-                config.frontmatter_link_props.as_deref(),
-            )
-            .is_some();
+        let mut snapshot_run = crate::config::SnapshotRun::from_config(&config, &dir, site_prefix);
+        // The installed globals also hold a `--profile` overlay's globs.
+        snapshot_run.scan_include = hyalo_core::discovery::scan_include_patterns();
+        let refused_format =
+            ctx.snapshot_on_disk && snapshot_run.refusal(&dir.join(".hyalo-index")).is_some();
         ctx.snapshot_stale = refused_format
             || ctx.snapshot_on_disk
                 && std::fs::metadata(dir.join(".hyalo-index"))
@@ -2297,9 +2299,9 @@ fn run_inner() -> Result<(), AppError> {
         // Only a snapshot this binary would accept: a missing or refused path
         // handed on to `summary --index-file X` fails that command.
         let hint_index = index_path_buf.as_ref().or_else(|| {
-            cli.index_file.as_ref().filter(|path| {
-                crate::config::snapshot_usable(path, config.frontmatter_link_props.as_deref())
-            })
+            cli.index_file
+                .as_ref()
+                .filter(|path| snapshot_run.usable(path))
         });
         if let Some(p) = hint_index {
             let default_path = dir.join(".hyalo-index");
@@ -2343,17 +2345,12 @@ fn run_inner() -> Result<(), AppError> {
                         format_version: idx.format_version(),
                         code_blocks: None,
                     });
-                    let relation =
-                        if idx.format_version() > hyalo_core::index::SNAPSHOT_FORMAT_VERSION {
-                            "newer"
-                        } else {
-                            "older"
-                        };
-                    crate::warn::warn_always(format!(
-                        "index format is {relation} than this binary (index v{}, binary v{}); \
-                         falling back to disk scan — re-run create-index",
-                        idx.format_version(),
-                        hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+                    crate::warn::warn_always(refusal_message(
+                        &hyalo_core::index::SnapshotRefusal::Format {
+                            found: idx.format_version(),
+                        },
+                        "",
+                        "",
                     ));
                     None
                 } else if idx.validate(&vault_dir_str, site_prefix) {
@@ -2383,6 +2380,8 @@ fn run_inner() -> Result<(), AppError> {
                     let scan_include = hyalo_core::discovery::scan_include_patterns();
                     let label = |skip: bool| if skip { "skip" } else { "index" };
                     let refusal = idx.build_info().refusal(&hyalo_core::index::RunBuild {
+                        vault_dir: &vault_dir_str,
+                        site_prefix,
                         skip_code_blocks: config_skip_code_blocks,
                         frontmatter_link_props: config.frontmatter_link_props.as_deref(),
                         scan_include: &scan_include,

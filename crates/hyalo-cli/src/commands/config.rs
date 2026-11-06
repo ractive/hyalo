@@ -282,6 +282,13 @@ pub(crate) fn collect_config_report(
         "auto"
     };
 
+    // R1: judged against this config, not process globals that are installed
+    // only after `config` has answered.
+    let usable_index = index_file.filter(|path| {
+        crate::config::SnapshotRun::from_config(&resolved, &dir, site_prefix.as_deref())
+            .usable(path)
+    });
+
     let raw_contents = match (raw, &config_path) {
         (true, Some(path)) => Some(
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
@@ -299,11 +306,7 @@ pub(crate) fn collect_config_report(
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
-        index_file: index_file
-            .filter(|path| {
-                crate::config::snapshot_usable(path, resolved.frontmatter_link_props.as_deref())
-            })
-            .map(crate::hints::shorten_index_path_for_hint),
+        index_file: usable_index.map(crate::hints::shorten_index_path_for_hint),
         format: resolved.format,
         effective_format: effective_format.to_string(),
         format_source,

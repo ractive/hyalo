@@ -197,33 +197,39 @@ pub fn note_gitignore_dropped(dropped: usize) {
     GITIGNORE_DROPPED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The `.gitignore` / `.ignore` files below the vault root the last counting
-/// walk met, for the snapshot's ignore fingerprint (iter-327, W2). Seeded by
-/// the walk or replayed from a loaded snapshot's header, like
-/// [`GITIGNORE_DROPPED_COUNT`].
-static NESTED_IGNORE_SOURCES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+/// The ignore-source stamps of the last walk (iter-327, W2, R11): the fixed
+/// places [`crate::ignore_classify::current_stamps`] looks, taken **before**
+/// the walk reads anything, plus each nested `.gitignore`/`.ignore` stamped
+/// the moment the walk meets it. Seeded by a walk or replayed from a loaded
+/// snapshot's header, like [`GITIGNORE_DROPPED_COUNT`]; `None` before either.
+static IGNORE_STAMPS: Mutex<Option<Vec<crate::ignore_classify::IgnoreStamp>>> = Mutex::new(None);
 
-/// Replace the remembered nested ignore sources.
-pub fn set_nested_ignore_sources(paths: Vec<PathBuf>) {
-    if let Ok(mut known) = NESTED_IGNORE_SOURCES.lock() {
-        *known = paths;
+/// Replace the remembered ignore stamps (a loaded snapshot's, or a fresh set).
+pub fn set_ignore_stamps(stamps: Option<Vec<crate::ignore_classify::IgnoreStamp>>) {
+    if let Ok(mut known) = IGNORE_STAMPS.lock() {
+        *known = stamps;
     }
 }
 
-/// The nested ignore sources the last walk met or a loaded snapshot recorded.
+/// The ignore stamps the last walk took or a loaded snapshot recorded.
 #[must_use]
-pub fn nested_ignore_sources() -> Vec<PathBuf> {
-    NESTED_IGNORE_SOURCES
-        .lock()
-        .map(|known| known.clone())
-        .unwrap_or_default()
+pub fn ignore_stamps() -> Option<Vec<crate::ignore_classify::IgnoreStamp>> {
+    IGNORE_STAMPS.lock().ok().and_then(|known| known.clone())
 }
 
+/// Start a walk's stamps: the fixed places only, before the walk reads them.
+fn begin_ignore_stamps(dir: &Path) {
+    set_ignore_stamps(Some(crate::ignore_classify::current_stamps(dir, &[])));
+}
+
+/// A nested ignore file met by a walk. Each path is visited once per walk, so
+/// there is nothing to deduplicate.
 fn note_nested_ignore_source(path: &Path) {
-    if let Ok(mut known) = NESTED_IGNORE_SOURCES.lock()
-        && !known.iter().any(|p| p == path)
+    let stamp = crate::ignore_classify::nested_stamp(path);
+    if let Ok(mut known) = IGNORE_STAMPS.lock()
+        && let Some(stamps) = known.as_mut()
     {
-        known.push(path.to_path_buf());
+        stamps.push(stamp);
     }
 }
 
@@ -549,11 +555,13 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    // Before anything is read (and before the layout fallback below), so a
+    // list left by an earlier header never leaks into this build's stamps.
+    begin_ignore_stamps(dir);
     let Ok(pre) = PreknownIgnores::load(dir) else {
         return two_walk_count(dir, include);
     };
     let pre = Arc::new(pre);
-    set_nested_ignore_sources(Vec::new());
     let nested_source = Arc::new(AtomicBool::new(false));
     let dropped: Arc<Mutex<CountingHits>> = Arc::new(Mutex::new(CountingHits::default()));
 
@@ -697,6 +705,11 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
 /// layout (a `.jj` directory, a `.git` worktree file) is outside what
 /// [`crate::ignore_classify`] reproduces.
 fn two_walk_count(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathBuf>, usize)> {
+    // This route has no classifying pass to meet nested ignore files, so look
+    // for them first, before the walks read the vault (W2, R2).
+    for nested in crate::ignore_classify::nested_ignore_files(dir) {
+        note_nested_ignore_source(&nested);
+    }
     let files =
         discover_files_with_include_ext_policy(dir, include, FileKind::Markdown, true, true)?;
     let ignoring =

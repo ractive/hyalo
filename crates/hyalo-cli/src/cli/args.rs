@@ -1485,10 +1485,11 @@ pub(crate) enum Commands {
             or --broken-links --strict to fail CI on any finding.\n\
             INDEX REPORTING: with --index/--index-file, the result also carries \
             `index_format_version` (the snapshot's own format version), `code_blocks` \
-            (its effective `[search] code_blocks` setting, \"index\" or \"skip\") and \
+            (its effective `[search] code_blocks` setting, \"index\" or \"skip\"; omitted \
+            when the snapshot is of another format) and \
             `source` (\"index\" when the snapshot actually answered this summary, \"disk\" \
-            when a scan did instead). All three are populated even when the snapshot was \
-            refused \u{2014} another format, a `[search] code_blocks`, `[links] frontmatter` \
+            when a scan did instead). They are populated even when the snapshot was \
+            refused \u{2014} another format, another vault or site prefix, a `[search] code_blocks`, `[links] frontmatter` \
             or `[scan] include` setting that differs from this run's config, or an ignore \
             file (`.gitignore`, `.ignore`) that changed since the build \u{2014} so the \
             fallback is visible in JSON rather than reporting `index_format_version: null`. \
@@ -1997,7 +1998,7 @@ Repeatable (AND).\n\
     },
     /// Remove hyalo configuration and tool integration artifacts
     #[command(
-        long_about = "Remove .hyalo.toml (when it holds only `dir`) and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
+        long_about = "Remove .hyalo.toml (only when it is exactly what `init` wrote; one with other settings, a comment or any edit is kept) and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
             A .hyalo.toml with a schema, views, lint rules or a profile is yours, not init's:\n\
             deinit keeps it and says so. Delete it yourself to remove it.\n\n\
             Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\

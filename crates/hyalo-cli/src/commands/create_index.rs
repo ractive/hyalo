@@ -267,6 +267,8 @@ pub fn create_index(
                 && prev
                     .build_info()
                     .refusal(&hyalo_core::index::RunBuild {
+                        vault_dir: &vault_dir_str,
+                        site_prefix,
                         skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
                         frontmatter_link_props,
                         scan_include: &discovery::scan_include_patterns(),

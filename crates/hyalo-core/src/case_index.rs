@@ -572,8 +572,10 @@ impl CaseInsensitiveIndex {
 
     /// Sorted, vault-relative candidates an authored link `target` is
     /// ambiguous between (reading side — stems and doubly claimed aliases), or
-    /// `None` when it is not a bare, ambiguous target. Path-form targets assert
-    /// a location and are never ambiguous.
+    /// `None` when it is not ambiguous. A bare target is ambiguous between files
+    /// sharing the stem; a partially qualified one (`x/note`) between two or
+    /// more whose path ends in it ([`Self::path_suffix_ambiguity`]); an exact
+    /// path, `./`, `../` and `/` target is never ambiguous.
     ///
     /// `find --fields links`' `ambiguous`/`candidates`, HYALO006's "matches N
     /// candidates" and `links fix`'s `ambiguous_links` all read this.

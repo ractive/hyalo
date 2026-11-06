@@ -414,17 +414,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `created_at` cannot fall permanently behind the vault; only a bump of the index's own
   directory that coincides with the index file's mtime, re-stamped after the publishing
   rename, is excused — DEC-368) — leaves the snapshot file
-  untouched and reports `written: false` (iter-313, amended in review). Current-format
-  snapshots of the current format only (`hyalo config --jq .results.snapshot_format_version`
+  untouched and reports `written: false` (iter-313, amended in review). Only a snapshot of the
+  current format is read (`hyalo config --jq .results.snapshot_format_version`
   names it) — an older or newer one is refused with a `-q`-proof warning, and so is one built
   under a different `[search] code_blocks`, `[links] frontmatter` or `[scan] include` than the
   config, or whose ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`, git's global
-  excludes, the nested ones the build met) changed or appeared since, all read from the header
+  excludes, the nested ones the build met, in a git worktree or `.jj` checkout too) changed or appeared since, or for another vault or site prefix, all read from the header
   (never forcing BM25's lazy decode) and answered from disk instead (DEC-360, DEC-389, DEC-399);
   `hyalo config` and the hints refuse it for the same reasons. A nested ignore file created after
   the build, and an edit within the build's own second, go unnoticed. `summary --index` reports
-  `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused
-  snapshot, rather than `index_format_version: null`.
+  `index_format_version`, `code_blocks` (omitted for a snapshot of another format) and `source`
+  ("index" or "disk") even on a refused snapshot, rather than `index_format_version: null`.
 - **Result caps are visible in JSON, not just text** (UX-5, iter-313): any command whose
   `results` is a bare array (`find`, `properties`, `tags`, `terms`, `task toggle`/`task
   set`) carries `truncated: true` whenever `--limit` (or the default 50-item cap) cut it

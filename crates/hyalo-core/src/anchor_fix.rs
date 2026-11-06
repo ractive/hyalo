@@ -670,6 +670,7 @@ mod tests {
             strategy: crate::link_fix::FixStrategy::CaseInsensitive,
             confidence: 1.0,
             emitted_target: None,
+            occurrence: 0,
         };
         let applied = apply_anchor_fixes(temp.path(), &report.fixes, &[target_fix]).unwrap();
         assert!(applied.applied.is_empty());

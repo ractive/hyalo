@@ -683,6 +683,10 @@ const HEADER_PEEK_BYTES: u64 = 64 * 1024;
 pub struct SnapshotBuild {
     /// The snapshot's format version.
     pub format_version: u32,
+    /// The canonical vault directory it was built for.
+    pub vault_dir: String,
+    /// The `--site-prefix` it was built under.
+    pub site_prefix: Option<String>,
     /// `[search] code_blocks = "skip"` when it was built.
     pub skip_code_blocks: bool,
     /// The `[links] frontmatter` allow-list, `None` for every value.
@@ -696,6 +700,10 @@ pub struct SnapshotBuild {
 /// The settings of the run that wants to read a snapshot.
 #[derive(Debug, Clone, Copy)]
 pub struct RunBuild<'a> {
+    /// The canonical vault directory of this run.
+    pub vault_dir: &'a str,
+    /// The site prefix of this run.
+    pub site_prefix: Option<&'a str>,
     /// `[search] code_blocks = "skip"`.
     pub skip_code_blocks: bool,
     /// The `[links] frontmatter` allow-list, `None` for every value.
@@ -714,6 +722,8 @@ pub enum SnapshotRefusal {
         /// The snapshot's version.
         found: u32,
     },
+    /// Built for another vault directory or site prefix.
+    Vault,
     /// Tokenized under another `[search] code_blocks`.
     CodeBlocks,
     /// Its links were scanned under another `[links] frontmatter` list.
@@ -752,6 +762,9 @@ impl SnapshotBuild {
                 found: self.format_version,
             });
         }
+        if self.vault_dir != run.vault_dir || self.site_prefix.as_deref() != run.site_prefix {
+            return Some(SnapshotRefusal::Vault);
+        }
         if self.skip_code_blocks != run.skip_code_blocks {
             return Some(SnapshotRefusal::CodeBlocks);
         }
@@ -769,34 +782,52 @@ impl SnapshotBuild {
     }
 }
 
-/// The format version in the header of the snapshot at `path`, read without
-/// decoding entries, graph or search index (B-15). `None` for a missing,
-/// unreadable or undecodable header.
-#[must_use]
-pub fn peek_format_version(path: &Path) -> Option<u32> {
-    peek_build(path).map(|build| build.format_version)
-}
-
 /// The header of the snapshot at `path` — what it was built under — read
 /// without decoding entries, graph or search index (B-15, W9): a hint that
 /// wants to know whether `--index` would be refused cannot afford the load
 /// that refuses it. `None` for a missing, unreadable or undecodable header.
+///
+/// The read starts at [`HEADER_PEEK_BYTES`] and grows while a compatibility
+/// field is cut off, as the ignore stamps of a vault with hundreds of nested
+/// `.gitignore` files are (R3); a header still cut off at the cap is `None`.
 #[must_use]
 pub fn peek_build(path: &Path) -> Option<SnapshotBuild> {
+    let mut size = HEADER_PEEK_BYTES;
+    loop {
+        let (build, complete, read_all) = peek_build_within(path, size)?;
+        if complete {
+            return Some(build);
+        }
+        if read_all || size >= HEADER_PEEK_MAX_BYTES {
+            return None;
+        }
+        size *= 16;
+    }
+}
+
+/// Upper bound of the growing header read.
+const HEADER_PEEK_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// One [`peek_build`] attempt over the first `limit` bytes: the header, whether
+/// every compatibility field was read whole, and whether the file ended inside
+/// the limit.
+fn peek_build_within(path: &Path, limit: u64) -> Option<(SnapshotBuild, bool, bool)> {
     use serde::de::DeserializeSeed as _;
     use std::cell::RefCell;
     use std::io::Read as _;
 
+    type Slot = RefCell<Option<(SnapshotBuild, bool)>>;
+
     /// Reads the header's compatibility keys out of the envelope map and then
-    /// stops with an error: the truncated read does not hold the rest (a vault
-    /// with thousands of attachments has a header far larger than the peek),
-    /// and the compatibility fields lead the header, so they are stored by then.
-    struct Seed<'a>(&'a RefCell<Option<SnapshotBuild>>);
+    /// stops with an error: the truncated read does not hold the rest, and the
+    /// compatibility fields lead the header, so they are stored by then.
+    struct Seed<'a>(&'a Slot);
 
     /// The header map: the leading keys it knows, then a stop at the first it
     /// does not. A header that opens with anything but `format_version` is the
-    /// pre-iter-276 layout, which reads as version 0.
-    struct HeaderSeed<'a>(&'a RefCell<Option<SnapshotBuild>>);
+    /// pre-iter-276 layout, which reads as version 0. A value the read ends in
+    /// the middle of leaves the header marked incomplete.
+    struct HeaderSeed<'a>(&'a Slot);
 
     impl<'de> serde::de::Visitor<'de> for HeaderSeed<'_> {
         type Value = ();
@@ -811,20 +842,37 @@ pub fn peek_build(path: &Path) -> Option<SnapshotBuild> {
         {
             use serde::de::IgnoredAny;
             let mut build = SnapshotBuild::default();
-            while let Some(key) = map.next_key::<String>()? {
-                match key.as_str() {
-                    "format_version" => build.format_version = map.next_value()?,
-                    "vault_dir" | "site_prefix" | "created_at" | "pid" => {
-                        map.next_value::<IgnoredAny>()?;
+            let mut complete = false;
+            loop {
+                let key = match map.next_key::<String>() {
+                    Ok(Some(key)) => key,
+                    Ok(None) => {
+                        complete = true;
+                        break;
                     }
-                    "skip_code_blocks" => build.skip_code_blocks = map.next_value()?,
-                    "frontmatter_link_props" => build.frontmatter_link_props = map.next_value()?,
-                    "scan_include" => build.scan_include = map.next_value()?,
-                    "ignore_sources" => build.ignore_sources = map.next_value()?,
-                    _ => break,
+                    Err(_) => break,
+                };
+                let read = match key.as_str() {
+                    "format_version" => map.next_value().map(|v| build.format_version = v),
+                    "vault_dir" => map.next_value().map(|v| build.vault_dir = v),
+                    "site_prefix" => map.next_value().map(|v| build.site_prefix = v),
+                    "created_at" | "pid" => map.next_value::<IgnoredAny>().map(|_| ()),
+                    "skip_code_blocks" => map.next_value().map(|v| build.skip_code_blocks = v),
+                    "frontmatter_link_props" => {
+                        map.next_value().map(|v| build.frontmatter_link_props = v)
+                    }
+                    "scan_include" => map.next_value().map(|v| build.scan_include = v),
+                    "ignore_sources" => map.next_value().map(|v| build.ignore_sources = v),
+                    _ => {
+                        complete = true;
+                        break;
+                    }
+                };
+                if read.is_err() {
+                    break;
                 }
             }
-            *self.0.borrow_mut() = Some(build);
+            *self.0.borrow_mut() = Some((build, complete));
             Err(serde::de::Error::custom("header read"))
         }
     }
@@ -877,12 +925,14 @@ pub fn peek_build(path: &Path) -> Option<SnapshotBuild> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .ok()?
-        .take(HEADER_PEEK_BYTES)
+        .take(limit)
         .read_to_end(&mut bytes)
         .ok()?;
-    let build = RefCell::new(None);
-    let _ = Seed(&build).deserialize(&mut rmp_serde::Deserializer::from_read_ref(&bytes));
-    build.into_inner()
+    let read_all = (bytes.len() as u64) < limit;
+    let slot: Slot = RefCell::new(None);
+    let _ = Seed(&slot).deserialize(&mut rmp_serde::Deserializer::from_read_ref(&bytes));
+    let (build, complete) = slot.into_inner()?;
+    Some((build, complete, read_all))
 }
 
 /// Which envelope field a top-level map key names.
@@ -2010,6 +2060,8 @@ impl SnapshotIndex {
     pub fn build_info(&self) -> SnapshotBuild {
         SnapshotBuild {
             format_version: self.header.format_version,
+            vault_dir: self.header.vault_dir.clone(),
+            site_prefix: self.header.site_prefix.clone(),
             skip_code_blocks: self.header.skip_code_blocks,
             frontmatter_link_props: self.header.frontmatter_link_props.clone(),
             scan_include: self.header.scan_include.clone(),
@@ -2268,16 +2320,9 @@ impl SnapshotIndex {
             crate::discovery::note_gitignore_dropped(
                 usize::try_from(header.gitignore_dropped).unwrap_or(usize::MAX),
             );
-            // W2: a snapshot saved from this process keeps the nested ignore
-            // files its build met, as it keeps the counts above.
-            crate::discovery::set_nested_ignore_sources(
-                header
-                    .ignore_sources
-                    .iter()
-                    .filter(|stamp| stamp.nested)
-                    .map(|stamp| PathBuf::from(&stamp.path))
-                    .collect(),
-            );
+            // W2: a snapshot saved from this process keeps the stamps its
+            // build took, as it keeps the counts above.
+            crate::discovery::set_ignore_stamps(Some(header.ignore_sources.clone()));
         }
 
         let path_index: HashMap<String, usize> = entries
@@ -2587,10 +2632,10 @@ fn write_snapshot_with_session(
         skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
         frontmatter_link_props: index.frontmatter_link_props().map(<[String]>::to_vec),
         scan_include: crate::discovery::scan_include_patterns(),
-        ignore_sources: crate::ignore_classify::current_stamps(
-            Path::new(vault_dir),
-            &crate::discovery::nested_ignore_sources(),
-        ),
+        // Taken before the walk read anything (R11); a snapshot written
+        // without a walk in this process (a bare `save_to`) stamps fresh.
+        ignore_sources: crate::discovery::ignore_stamps()
+            .unwrap_or_else(|| crate::ignore_classify::current_stamps(Path::new(vault_dir), &[])),
         file_mtime: 0,
         file_dir: None,
     };
@@ -4698,6 +4743,15 @@ Content.
         bm25: Option<&Bm25InvertedIndex>,
         attachments: Vec<String>,
     ) -> Vec<u8> {
+        snapshot_bytes_with_stamps(entries, bm25, attachments, Vec::new())
+    }
+
+    fn snapshot_bytes_with_stamps(
+        entries: &[IndexEntry],
+        bm25: Option<&Bm25InvertedIndex>,
+        attachments: Vec<String>,
+        ignore_sources: Vec<IgnoreStamp>,
+    ) -> Vec<u8> {
         let graph = LinkGraph::default();
         let data = SnapshotDataRef {
             header: SnapshotHeader {
@@ -4714,7 +4768,7 @@ Content.
                 skip_code_blocks: false,
                 frontmatter_link_props: None,
                 scan_include: Vec::new(),
-                ignore_sources: Vec::new(),
+                ignore_sources,
                 file_mtime: 0,
                 file_dir: None,
             },
@@ -5032,10 +5086,16 @@ Content.
         let bytes = snapshot_bytes(&entries, Some(&sample_bm25()));
         assert!(bytes.len() as u64 > HEADER_PEEK_BYTES);
         std::fs::write(&path, &bytes).unwrap();
-        assert_eq!(peek_format_version(&path), Some(SNAPSHOT_FORMAT_VERSION));
+        assert_eq!(
+            peek_build(&path).map(|b| b.format_version),
+            Some(SNAPSHOT_FORMAT_VERSION)
+        );
         std::fs::write(&path, b"not a snapshot").unwrap();
-        assert_eq!(peek_format_version(&path), None);
-        assert_eq!(peek_format_version(&dir.path().join("missing")), None);
+        assert_eq!(peek_build(&path).map(|b| b.format_version), None);
+        assert_eq!(
+            peek_build(&dir.path().join("missing")).map(|b| b.format_version),
+            None
+        );
     }
 
     #[test]
@@ -5052,11 +5112,18 @@ Content.
         assert!(!build.skip_code_blocks);
         assert_eq!(build.frontmatter_link_props, None);
         let run = RunBuild {
+            vault_dir: "/tmp/vault",
+            site_prefix: None,
             skip_code_blocks: false,
             frontmatter_link_props: None,
             scan_include: &[],
         };
         assert_eq!(build.refusal(&run), None);
+        let other = RunBuild {
+            site_prefix: Some("docs"),
+            ..run
+        };
+        assert_eq!(build.refusal(&other), Some(SnapshotRefusal::Vault));
         let other = RunBuild {
             skip_code_blocks: true,
             ..run
@@ -5080,10 +5147,32 @@ Content.
     }
 
     #[test]
+    fn the_peek_grows_to_read_a_stamp_list_longer_than_the_first_read() {
+        // 3000 nested ignore files put the stamps well past HEADER_PEEK_BYTES.
+        let stamps: Vec<IgnoreStamp> = (0..3000)
+            .map(|i| IgnoreStamp {
+                path: format!("/tmp/vault/some/deeply/nested/directory-{i:05}/.gitignore"),
+                size: Some(12),
+                mtime: 1,
+                nested: true,
+            })
+            .collect();
+        let bytes = snapshot_bytes_with_stamps(&[test_entry("a.md")], None, Vec::new(), stamps);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snap.idx");
+        std::fs::write(&path, &bytes).unwrap();
+        let build = peek_build(&path).unwrap();
+        assert_eq!(build.ignore_sources.len(), 3000);
+        assert_eq!(build.format_version, SNAPSHOT_FORMAT_VERSION);
+    }
+
+    #[test]
     fn a_recorded_ignore_source_that_changed_or_appeared_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let run = RunBuild {
+            vault_dir: "",
+            site_prefix: None,
             skip_code_blocks: false,
             frontmatter_link_props: None,
             scan_include: &[],
@@ -5123,6 +5212,8 @@ Content.
             ..SnapshotBuild::default()
         };
         let run = RunBuild {
+            vault_dir: "",
+            site_prefix: None,
             skip_code_blocks: false,
             frontmatter_link_props: None,
             scan_include: &[],
@@ -5145,7 +5236,10 @@ Content.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snap.idx");
         std::fs::write(&path, &bytes).unwrap();
-        assert_eq!(peek_format_version(&path), Some(SNAPSHOT_FORMAT_VERSION));
+        assert_eq!(
+            peek_build(&path).map(|b| b.format_version),
+            Some(SNAPSHOT_FORMAT_VERSION)
+        );
     }
 
     /// A snapshot without a BM25 section must load, and stay BM25-less.

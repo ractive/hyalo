@@ -683,8 +683,11 @@ differs from this run's in `[search] code_blocks`, `[links] frontmatter` or `[sc
 include`, or when an ignore file that governed its walk — `.gitignore`, `.ignore` or
 `.git/info/exclude` of the vault or an ancestor, git's global excludes, or a nested ignore
 file the walk met — changed or appeared since. The command then answers from disk. A
-nested ignore file created after the build, and an edit made within the second the
-snapshot was written, are not noticed.
+nested ignore file created after the build, and an edit that leaves an ignore file's
+size unchanged within the second it was stamped, are not noticed. A git worktree
+(`.git` as a file) and a `.jj` checkout are covered too, `info/exclude` of the
+common dir included. A snapshot built for another vault directory or site prefix is
+refused as well.
 
 A read with `--index` against a snapshot that has drifted re-scans just the
 drifted files in memory and prints a `-q`-proof note naming how many (and up to

@@ -496,3 +496,246 @@ fn w2_an_unchanged_rerun_stays_a_no_op_and_a_changed_ignore_file_rewrites() {
     let (v, _, _) = run(d, &["create-index"]);
     assert_eq!(v["results"]["written"], true, "{v}");
 }
+
+// ---- review round: R1 -------------------------------------------------------
+
+#[test]
+fn r1_config_judges_a_snapshot_under_the_resolved_config() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    fs::write(
+        d.join(".hyalo.toml"),
+        "[search]\ncode_blocks = \"skip\"\n[scan]\ninclude = [\".notes/**\"]\n",
+    )
+    .unwrap();
+    write_md(d, "a.md", "# A\n");
+    write_md(d, ".notes/h.md", "# h\n");
+    let snap = d.join("snap.idx");
+    let snap = snap.to_str().unwrap();
+    run(d, &["create-index", "--output", snap]);
+    let hinted = |d: &Path| -> String {
+        let out = super::common::hyalo()
+            .arg("--dir")
+            .arg(d)
+            .args(["--index-file", snap, "config", "--format", "json"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    // Built under this config: the loader reads it, so `config` hints it.
+    let (_, err, _) = run(d, &["summary", "--index-file", snap]);
+    assert!(!err.contains("falling back"), "{err}");
+    assert!(hinted(d).contains("--index-file"), "{}", hinted(d));
+    // Another `code_blocks`, and another include: the loader refuses, `config` says nothing.
+    fs::write(d.join(".hyalo.toml"), "[scan]\ninclude = [\".notes/**\"]\n").unwrap();
+    assert!(!hinted(d).contains("--index-file"), "{}", hinted(d));
+    fs::write(d.join(".hyalo.toml"), "[search]\ncode_blocks = \"skip\"\n").unwrap();
+    assert!(!hinted(d).contains("--index-file"), "{}", hinted(d));
+}
+
+#[test]
+fn r4_config_does_not_hint_a_snapshot_built_under_another_site_prefix() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    write_md(d, "a.md", "# A\n");
+    let snap = d.join("snap.idx");
+    let snap = snap.to_str().unwrap();
+    run(
+        d,
+        &["--site-prefix", "foo", "create-index", "--output", snap],
+    );
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(d)
+        .args(["--index-file", snap, "config", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("--index-file"));
+    let out = super::common::hyalo()
+        .arg("--dir")
+        .arg(d)
+        .args([
+            "--site-prefix",
+            "foo",
+            "--index-file",
+            snap,
+            "config",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--index-file"));
+}
+
+// ---- review round: R2 and the ignore-source matrix ---------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Layout {
+    Plain,
+    Worktree,
+    NoGit,
+    Jj,
+}
+
+/// A vault with `keep.md` and `sub/n.md`, laid out as `layout` says. Returns
+/// the vault and the path of the `info/exclude` a repository would read.
+fn matrix_vault(layout: Layout) -> (TempDir, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    let vault = d.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let exclude = match layout {
+        Layout::Plain => {
+            fs::create_dir_all(vault.join(".git/info")).unwrap();
+            vault.join(".git/info/exclude")
+        }
+        Layout::Worktree => {
+            let common = d.join("main.git");
+            let gitdir = common.join("worktrees/w");
+            fs::create_dir_all(common.join("info")).unwrap();
+            fs::create_dir_all(&gitdir).unwrap();
+            fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+            fs::write(
+                vault.join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
+            common.join("info/exclude")
+        }
+        Layout::Jj => {
+            fs::create_dir_all(vault.join(".jj")).unwrap();
+            fs::create_dir_all(vault.join(".git/info")).unwrap();
+            vault.join(".git/info/exclude")
+        }
+        Layout::NoGit => vault.join("unused-exclude"),
+    };
+    write_md(&vault, "keep.md", "# keep\n");
+    write_md(&vault, "sub/n.md", "# n\n");
+    write_md(&vault, "sub/m.md", "# m\n");
+    (tmp, exclude)
+}
+
+fn listing(vault: &Path, index: bool) -> (Vec<String>, String) {
+    listed(vault, index)
+}
+
+#[test]
+fn w2_matrix_an_index_equals_disk_or_warns_and_answers_from_disk() {
+    let mut cells = 0;
+    let mut failures = Vec::new();
+    for layout in [Layout::Plain, Layout::Worktree, Layout::NoGit, Layout::Jj] {
+        for nested in [false, true] {
+            for ignore_name in [".gitignore", ".ignore", "info/exclude"] {
+                if ignore_name == "info/exclude" && nested {
+                    continue;
+                }
+                for reveal in [false, true] {
+                    cells += 1;
+                    let (tmp, exclude) = matrix_vault(layout);
+                    let vault = tmp.path().join("vault");
+                    let (dir_rel, target) = if nested {
+                        ("sub/", "n.md\n")
+                    } else {
+                        ("", "sub/n.md\n")
+                    };
+                    let file = if ignore_name == "info/exclude" {
+                        exclude.clone()
+                    } else {
+                        vault.join(format!("{dir_rel}{ignore_name}"))
+                    };
+                    let write = |text: &str| {
+                        fs::write(&file, text).unwrap();
+                    };
+                    // `reveal`: the note is hidden at build and shown after;
+                    // otherwise shown at build and hidden after.
+                    if reveal {
+                        write(&format!("{target}zz-padding-line.md\n"));
+                    } else if nested {
+                        // A nested ignore file created after the build is the
+                        // documented blind spot (see the test below); here it
+                        // exists at build and is edited.
+                        write("unrelated.md\n");
+                    }
+                    run(&vault, &["create-index"]);
+                    let (clean, err) = listing(&vault, true);
+                    let (disk0, _) = listing(&vault, false);
+                    if clean != disk0 || err.contains("falling back") {
+                        failures.push(format!("{layout:?} nested={nested} {ignore_name} reveal={reveal}: not clean at build: {err}"));
+                        continue;
+                    }
+                    if reveal {
+                        write("unrelated.md\n");
+                    } else {
+                        write(target);
+                    }
+                    let (disk, _) = listing(&vault, false);
+                    let (indexed, err) = listing(&vault, true);
+                    let warned = err.contains("falling back to disk scan");
+                    // Equal to disk is the whole requirement: either the files
+                    // agree anyway, or the warning sent the read to disk.
+                    if indexed != disk {
+                        failures.push(format!(
+                            "{layout:?} nested={nested} {ignore_name} reveal={reveal}: index {indexed:?} disk {disk:?} warn={warned}"
+                        ));
+                    }
+                    if indexed == disk0 && disk != disk0 {
+                        failures.push(format!(
+                            "{layout:?} nested={nested} {ignore_name} reveal={reveal}: served the stale set"
+                        ));
+                    }
+                    // After a rebuild the same tree is quiet again.
+                    run(&vault, &["create-index"]);
+                    let (again, err) = listing(&vault, true);
+                    if again != disk || err.contains("falling back") {
+                        failures.push(format!(
+                            "{layout:?} nested={nested} {ignore_name} reveal={reveal}: not quiet after rebuild: {err}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {cells} cells failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    // 4 layouts x (root: 3 ignore sources, nested: 2) x {hide, reveal}.
+    assert_eq!(cells, 40, "cell count");
+}
+
+#[test]
+fn r2_a_git_worktree_notices_a_nested_ignore_file_edited_after_the_build() {
+    let (tmp, _) = matrix_vault(Layout::Worktree);
+    let vault = tmp.path().join("vault");
+    fs::write(vault.join("sub/.gitignore"), "*.tmp\n").unwrap();
+    run(&vault, &["create-index"]);
+    fs::write(vault.join("sub/b.tmp.md"), "# b\n").unwrap();
+    let (clean, _) = listing(&vault, true);
+    assert!(!clean.iter().any(|f| f.contains("b.tmp")), "{clean:?}");
+    fs::write(vault.join("sub/.gitignore"), "*.tmp.md\n").unwrap();
+    let (disk, _) = listing(&vault, false);
+    let (indexed, err) = listing(&vault, true);
+    assert_eq!(indexed, disk);
+    assert!(
+        err.contains("ignore file that shaped the index changed"),
+        "{err}"
+    );
+}
+
+#[test]
+fn w2_a_nested_ignore_file_created_after_the_build_is_the_documented_blind_spot() {
+    let (tmp, _) = matrix_vault(Layout::Plain);
+    let vault = tmp.path().join("vault");
+    run(&vault, &["create-index"]);
+    fs::write(vault.join("sub/.gitignore"), "n.md\n").unwrap();
+    let (disk, _) = listing(&vault, false);
+    let (indexed, err) = listing(&vault, true);
+    assert_ne!(
+        indexed, disk,
+        "if this now passes, drop the limit from the docs"
+    );
+    assert!(!err.contains("falling back"), "{err}");
+}
