@@ -3,7 +3,7 @@ title: "Iteration 326: npm-launcher on every PR"
 type: iteration
 date: 2026-11-06
 tags: [iteration, ci, gates]
-status: in-progress
+status: completed
 branch: iter-326/npm-launcher-on-every-pr
 priority: 1
 related: ["[[decision-log]]", "[[iterations/iteration-323-index-parity-robustness]]"]
@@ -21,4 +21,4 @@ related: ["[[decision-log]]", "[[iterations/iteration-323-index-parity-robustnes
 - [x] Record the decision and the required order as DEC-398
 - [x] Merge this PR with `npm-launcher` green on all three platforms
 - [x] Add the three `npm-launcher` checks to the `main` ruleset
-- [ ] Confirm a PR outside the old filter reports all three checks
+- [x] Confirm a PR outside the old filter reports all three checks
