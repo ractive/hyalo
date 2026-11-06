@@ -160,13 +160,15 @@ fn jq_worker_abort_runtime_timeout_and_oversize_retain_append_effects() {
 #[test]
 fn jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects() {
     use std::io::Read;
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     for signal in [libc::SIGINT, libc::SIGTERM] {
         let tmp = TempDir::new().unwrap();
         write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
         write_md(tmp.path(), "a.md", "---\ntags: [before]\n---\nBody\n");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_hyalo"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hyalo"));
+        command
             .current_dir(tmp.path())
             .args([
                 "--no-hints",
@@ -178,9 +180,18 @@ fn jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects() {
                 "def f: f; f",
             ])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        // A background job inherits an ignored SIGINT, and DEC-369 then runs
+        // the filter without its handler, so the handler this test is about
+        // never fires. Reset the signal rather than depend on the launcher.
+        // SAFETY: `signal` is async-signal-safe and touches only this child.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !std::fs::read_to_string(tmp.path().join("a.md"))
             .unwrap()
