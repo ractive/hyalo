@@ -19,6 +19,6 @@ related: ["[[decision-log]]", "[[iterations/iteration-323-index-parity-robustnes
 
 - [x] Remove the `paths:` filter from `.github/workflows/npm-packages.yml`
 - [x] Record the decision and the required order as DEC-398
-- [ ] Merge this PR with `npm-launcher` green on all three platforms
-- [ ] Add the three `npm-launcher` checks to the `main` ruleset
+- [x] Merge this PR with `npm-launcher` green on all three platforms
+- [x] Add the three `npm-launcher` checks to the `main` ruleset
 - [ ] Confirm a PR outside the old filter reports all three checks
