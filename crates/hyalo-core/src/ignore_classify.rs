@@ -193,6 +193,80 @@ impl PreknownIgnores {
     }
 }
 
+/// One ignore source as a snapshot saw it when it was built (iter-327, W2):
+/// its absolute path and the size and whole-second mtime it had, or `size:
+/// None` when it did not exist. A snapshot answers like a disk scan only while
+/// every source that governed its build still looks the same.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IgnoreStamp {
+    /// Absolute path of the ignore source.
+    pub path: String,
+    /// Size in bytes, `None` for a source that was not there.
+    pub size: Option<u64>,
+    /// Whole-second modification time, `0` for a source that was not there.
+    pub mtime: u64,
+    /// Found below the vault root while the build walked it, rather than at
+    /// one of the fixed places [`current_stamps`] always looks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nested: bool,
+}
+
+impl IgnoreStamp {
+    fn of(path: &Path, nested: bool) -> Self {
+        let meta = std::fs::metadata(path)
+            .ok()
+            .filter(std::fs::Metadata::is_file);
+        Self {
+            path: path.to_string_lossy().into_owned(),
+            size: meta.as_ref().map(std::fs::Metadata::len),
+            mtime: meta
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs()),
+            nested,
+        }
+    }
+
+    /// Whether the source looks the same on disk now.
+    fn unchanged(&self) -> bool {
+        Self::of(Path::new(&self.path), self.nested) == *self
+    }
+}
+
+/// The stamps of every ignore source a walk rooted at `root_dir` reads: the
+/// `.ignore`, `.gitignore` and `.git/info/exclude` of the root and of each of
+/// its ancestors, git's global excludes file, and the `nested` sources the
+/// build's walk reported below the root. A source that is absent is stamped
+/// absent, so one created later is noticed. A nested source created after the
+/// build is not: nothing says where to look.
+pub(crate) fn current_stamps(root_dir: &Path, nested: &[PathBuf]) -> Vec<IgnoreStamp> {
+    let abs = dunce::canonicalize(root_dir).unwrap_or_else(|_| root_dir.to_path_buf());
+    let mut stamps = Vec::with_capacity(3 * abs.ancestors().count() + 1 + nested.len());
+    for dir in abs.ancestors() {
+        for file in [
+            dir.join(".ignore"),
+            dir.join(".gitignore"),
+            dir.join(".git").join("info").join("exclude"),
+        ] {
+            stamps.push(IgnoreStamp::of(&file, false));
+        }
+    }
+    if let Some(global) = ignore::gitignore::gitconfig_excludes_path() {
+        stamps.push(IgnoreStamp::of(&global, false));
+    }
+    stamps.extend(nested.iter().map(|path| {
+        let abs = dunce::canonicalize(path).unwrap_or_else(|_| path.clone());
+        IgnoreStamp::of(&abs, true)
+    }));
+    stamps
+}
+
+/// The first of `stamps` whose source no longer looks as it did.
+#[must_use]
+pub fn changed_source(stamps: &[IgnoreStamp]) -> Option<&IgnoreStamp> {
+    stamps.iter().find(|stamp| !stamp.unchanged())
+}
+
 /// Whether a file name is one the crate reads ignore rules or a repository
 /// boundary from. Seeing one below the root means the fast path is invalid.
 pub(crate) fn is_ignore_source_name(name: &std::ffi::OsStr) -> bool {

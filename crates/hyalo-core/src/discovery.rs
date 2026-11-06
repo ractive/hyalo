@@ -197,6 +197,46 @@ pub fn note_gitignore_dropped(dropped: usize) {
     GITIGNORE_DROPPED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The `.gitignore` / `.ignore` files below the vault root the last counting
+/// walk met, for the snapshot's ignore fingerprint (iter-327, W2). Seeded by
+/// the walk or replayed from a loaded snapshot's header, like
+/// [`GITIGNORE_DROPPED_COUNT`].
+static NESTED_IGNORE_SOURCES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Replace the remembered nested ignore sources.
+pub fn set_nested_ignore_sources(paths: Vec<PathBuf>) {
+    if let Ok(mut known) = NESTED_IGNORE_SOURCES.lock() {
+        *known = paths;
+    }
+}
+
+/// The nested ignore sources the last walk met or a loaded snapshot recorded.
+#[must_use]
+pub fn nested_ignore_sources() -> Vec<PathBuf> {
+    NESTED_IGNORE_SOURCES
+        .lock()
+        .map(|known| known.clone())
+        .unwrap_or_default()
+}
+
+fn note_nested_ignore_source(path: &Path) {
+    if let Ok(mut known) = NESTED_IGNORE_SOURCES.lock()
+        && !known.iter().any(|p| p == path)
+    {
+        known.push(path.to_path_buf());
+    }
+}
+
+/// The installed `[scan] include` globs (empty when none are), so a snapshot
+/// can record what its file set was built under.
+#[must_use]
+pub fn scan_include_patterns() -> Vec<String> {
+    match SCAN_INCLUDE.get() {
+        Some(Some(include)) => include.patterns.clone(),
+        _ => Vec::new(),
+    }
+}
+
 /// Whether `[scan] include` opens the hidden vault-relative directory `rel`
 /// (forward-slash, no trailing slash) to the walk. `.git` never is. The
 /// staleness probe asks this so it looks where discovery does (C-16).
@@ -513,6 +553,7 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
         return two_walk_count(dir, include);
     };
     let pre = Arc::new(pre);
+    set_nested_ignore_sources(Vec::new());
     let nested_source = Arc::new(AtomicBool::new(false));
     let dropped: Arc<Mutex<CountingHits>> = Arc::new(Mutex::new(CountingHits::default()));
 
@@ -535,6 +576,9 @@ fn counting_walk(dir: &Path, include: Option<&ScanInclude>) -> Result<(Vec<PathB
         builder.filter_entry(move |entry| {
             if entry.depth() >= 2 && is_ignore_source_name(entry.file_name()) {
                 nested_source.store(true, Ordering::Relaxed);
+                if entry.file_name() == ".gitignore" || entry.file_name() == ".ignore" {
+                    note_nested_ignore_source(entry.path());
+                }
             }
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
             let hidden = is_hidden_entry(entry);
@@ -2535,7 +2579,7 @@ pub(crate) fn classify_link_from_source(
             // ambiguous one is `ShortFormAmbiguous` here too.
             if res == LinkResolution::Broken
                 && !expand_short_form
-                && case_index.is_some_and(|idx| idx.target_ambiguity(&link.target).is_some())
+                && case_index.is_some_and(|idx| idx.ambiguous_candidates(&link.target).is_some())
             {
                 return (link.target.clone(), LinkResolution::ShortFormAmbiguous);
             }

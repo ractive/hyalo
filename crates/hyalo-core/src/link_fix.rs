@@ -167,11 +167,19 @@ pub struct FixPlan {
 /// old_target, new_target)`.
 pub type FixPlanKey = (String, usize, String, String);
 
-/// The text `--apply` writes, keyed by [`FixPlanKey`] (iter-272 Part F).
-pub type EmittedTargets = HashMap<FixPlanKey, String>;
+/// A plan's key plus its place among the plans sharing that key, in plan order
+/// (iter-327, W11). `[[AKA]] [[AKA#S]]` yields two plans that differ in
+/// nothing the key holds — same line, same `old_target` (the fragment is not
+/// part of it), same `new_target` — yet write different text; the planner
+/// hands the k-th such plan the k-th such link, so the ordinal tells them
+/// apart.
+pub type EmittedKey = (FixPlanKey, usize);
+
+/// The text `--apply` writes, keyed by [`EmittedKey`] (iter-272 Part F).
+pub type EmittedTargets = HashMap<EmittedKey, String>;
 
 impl FixPlan {
-    /// This plan's lookup key in an [`EmittedTargets`] map.
+    /// This plan's [`FixPlanKey`].
     #[must_use]
     pub fn key(&self) -> FixPlanKey {
         (
@@ -183,15 +191,33 @@ impl FixPlan {
     }
 }
 
+/// The [`EmittedKey`] of each plan in `fixes`, in order.
+fn emitted_keys<'a>(fixes: impl IntoIterator<Item = &'a FixPlan>) -> Vec<EmittedKey> {
+    let mut seen: HashMap<FixPlanKey, usize> = HashMap::new();
+    fixes
+        .into_iter()
+        .map(|fix| {
+            let key = fix.key();
+            let ordinal = seen.entry(key.clone()).or_insert(0);
+            let at = *ordinal;
+            *ordinal += 1;
+            (key, at)
+        })
+        .collect()
+}
+
 /// Copy the emitted target text onto every plan in `fixes` that the planner
 /// produced one for (iter-272 Part F).
 ///
 /// Called by the reporting layer once per bucket, so every `links fix` list —
 /// `fixes`, `fuzzy_fixes`, `case_mismatch_fixes`, `relocation_fixes`,
-/// `applied_fixes` — carries the string that lands on disk.
+/// `applied_fixes` — carries the string that lands on disk. Plans with one
+/// key always share a bucket (the classifier sees the same target), so the
+/// ordinals a bucket counts are the ones the planner did.
 pub fn annotate_emitted_targets(fixes: &mut [FixPlan], emitted: &EmittedTargets) {
-    for fix in fixes {
-        if let Some(text) = emitted.get(&fix.key()) {
+    let keys = emitted_keys(fixes.iter());
+    for (fix, key) in fixes.iter_mut().zip(keys) {
+        if let Some(text) = emitted.get(&key) {
             fix.emitted_target = Some(text.clone());
         }
     }
@@ -1505,8 +1531,9 @@ pub fn apply_fixes_with_catalog(
             site_prefix,
             Some(catalog),
         );
+        let keys = emitted_keys(file_fixes.iter().copied());
         for (idx, text) in file_emitted {
-            emitted.insert(file_fixes[idx].key(), text);
+            emitted.insert(keys[idx].clone(), text);
         }
 
         let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
@@ -1680,8 +1707,9 @@ pub fn plan_fixes_dry_run_with_catalog(
             site_prefix,
             Some(catalog),
         );
+        let keys = emitted_keys(file_fixes.iter().copied());
         for (idx, text) in file_emitted {
-            emitted.insert(file_fixes[idx].key(), text);
+            emitted.insert(keys[idx].clone(), text);
         }
 
         for (idx, fix) in file_fixes.iter().enumerate() {
@@ -3464,7 +3492,7 @@ See [broken](old-name.md) here.
             plan_fixes_dry_run(tmp.path(), &fixes, Some("site")).unwrap();
         // The dry run reports the *written* form, not the vault-relative path.
         assert_eq!(
-            dry_emitted.get(&fixes[0].key()).map(String::as_str),
+            dry_emitted.get(&(fixes[0].key(), 0)).map(String::as_str),
             Some("Right.md"),
             "{dry_emitted:?}"
         );
@@ -3477,7 +3505,7 @@ See [broken](old-name.md) here.
         let written = fs::read_to_string(tmp.path().join("sub/src.md")).unwrap();
         assert_eq!(plans.len(), 1);
         for fix in &fixes {
-            if let Some(text) = apply_emitted.get(&fix.key()) {
+            if let Some(text) = apply_emitted.get(&(fix.key(), 0)) {
                 assert!(
                     written.contains(text.as_str()),
                     "emitted {text:?} is not in the applied text {written:?}"
@@ -3509,7 +3537,7 @@ See [broken](old-name.md) here.
             },
         ];
         let mut emitted = EmittedTargets::new();
-        emitted.insert(plans[0].key(), "sub/X".to_string());
+        emitted.insert((plans[0].key(), 0), "sub/X".to_string());
         annotate_emitted_targets(&mut plans, &emitted);
         assert_eq!(plans[0].emitted_target.as_deref(), Some("sub/X"));
         assert_eq!(plans[1].emitted_target, None);

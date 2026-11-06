@@ -17,6 +17,7 @@ use crate::bm25::{Bm25InvertedIndex, DocTokens, resolve_language};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
+pub use crate::ignore_classify::IgnoreStamp;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use crate::links::{Link, SelfAnchor};
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
@@ -501,7 +502,13 @@ impl VaultIndex for ScannedIndex {
 /// |    |           | false`; a reused entry carries links of the old setting, and
 /// |    |           | the same iteration changes the tasks, titles and language
 /// |    |           | an entry holds, so a v9 snapshot must be rebuilt |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
+/// | 11 | iter-327  | `SnapshotHeader.scan_include` and `.ignore_sources`
+/// |    | (W2, DEC-399) — the `[scan] include` globs and the stamps (path,
+/// |    |           | size, mtime) of the ignore files that governed the build,
+/// |    |           | so a snapshot is refused once the file set a disk scan
+/// |    |           | would return has moved. The compatibility fields now sit
+/// |    |           | before `attachments`, within the header peek |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 11;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -521,6 +528,37 @@ struct SnapshotHeader {
     created_at: u64,
     /// PID of the process that created this snapshot.
     pid: u32,
+    // The build's compatibility fields come first, so a header peek (hints,
+    // `config`) reaches them before the long lists below (W9, iter-327).
+    /// The effective `[search] code_blocks` setting (`true` = `"skip"`) this
+    /// snapshot's BM25 postings were built under (DEC-360 amended, iter-313
+    /// PR #379 review).
+    ///
+    /// Read directly by the format-acceptance check instead of forcing the
+    /// lazy BM25 section's full decode (iter-313's original fix called
+    /// `bm25_index()` just to read this one bool, roughly doubling the cost
+    /// of every `--index` read on MDN: `summary` 0.46 s to 0.85 s, `tags`
+    /// 0.35 s to 0.72 s). `#[serde(default)]` only for forward decode safety
+    /// (a hypothetically newer binary's extra field) — every snapshot at or
+    /// above this format version always writes it.
+    #[serde(default)]
+    skip_code_blocks: bool,
+    /// The frontmatter properties the entries' links were scanned under
+    /// (`[links] frontmatter` / `frontmatter_properties`); `None` means every
+    /// frontmatter value (DEC-389). A run whose config resolves to another
+    /// list refuses the snapshot, and `create-index` re-scans instead of
+    /// reusing its entries.
+    #[serde(default)]
+    frontmatter_link_props: Option<Vec<String>>,
+    /// The `[scan] include` globs the file set was built under (W2, DEC-399);
+    /// they reach hidden directories a plain walk skips, so a run whose config
+    /// names others would list other files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scan_include: Vec<String>,
+    /// The ignore files that governed the build, as they looked then (W2,
+    /// DEC-399). Compared by `stat` when the snapshot loads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ignore_sources: Vec<IgnoreStamp>,
     /// Vault-relative paths of the vault's **attachments** — every non-`.md`
     /// file carrying an extension (iter-261 / BUG-5, BUG-6).
     ///
@@ -577,26 +615,6 @@ struct SnapshotHeader {
     /// unconditionally on load, same as `skipped`.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     gitignore_dropped: u64,
-    /// The effective `[search] code_blocks` setting (`true` = `"skip"`) this
-    /// snapshot's BM25 postings were built under (DEC-360 amended, iter-313
-    /// PR #379 review).
-    ///
-    /// Read directly by the format-acceptance check instead of forcing the
-    /// lazy BM25 section's full decode (iter-313's original fix called
-    /// `bm25_index()` just to read this one bool, roughly doubling the cost
-    /// of every `--index` read on MDN: `summary` 0.46 s to 0.85 s, `tags`
-    /// 0.35 s to 0.72 s). `#[serde(default)]` only for forward decode safety
-    /// (a hypothetically newer binary's extra field) — every snapshot at or
-    /// above this format version always writes it.
-    #[serde(default)]
-    skip_code_blocks: bool,
-    /// The frontmatter properties the entries' links were scanned under
-    /// (`[links] frontmatter` / `frontmatter_properties`); `None` means every
-    /// frontmatter value (DEC-389). A run whose config resolves to another
-    /// list refuses the snapshot, and `create-index` re-scans instead of
-    /// reusing its entries.
-    #[serde(default)]
-    frontmatter_link_props: Option<Vec<String>>,
     /// Whole-second mtime of the snapshot file this header was loaded from,
     /// recorded at load time and never serialized (DEC-368, iter-317). `0`
     /// for a snapshot that was not loaded from a file. See [`tree_moved`].
@@ -653,29 +671,132 @@ struct SnapshotDataRef<'a> {
 // the raw bytes of its (unread) value so the section can be decoded later if a
 // command actually needs it. Nothing about the on-disk format changes.
 
-/// How much of a snapshot file [`peek_format_version`] reads. The header is the
-/// first envelope key and carries a path, a few counters and the exclusion
-/// globs, far below this.
+/// How much of a snapshot file [`peek_build`] reads. The header is the first
+/// envelope key and leads with its compatibility fields, far below this.
 const HEADER_PEEK_BYTES: u64 = 64 * 1024;
 
+/// What a snapshot's header says it was built under (W9, iter-327): the
+/// settings a run must share for the snapshot to answer like a disk scan.
+/// Fields a snapshot of another format does not carry keep their defaults —
+/// its format version alone refuses it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SnapshotBuild {
+    /// The snapshot's format version.
+    pub format_version: u32,
+    /// `[search] code_blocks = "skip"` when it was built.
+    pub skip_code_blocks: bool,
+    /// The `[links] frontmatter` allow-list, `None` for every value.
+    pub frontmatter_link_props: Option<Vec<String>>,
+    /// The `[scan] include` globs.
+    pub scan_include: Vec<String>,
+    /// The ignore files that governed the walk.
+    pub ignore_sources: Vec<IgnoreStamp>,
+}
+
+/// The settings of the run that wants to read a snapshot.
+#[derive(Debug, Clone, Copy)]
+pub struct RunBuild<'a> {
+    /// `[search] code_blocks = "skip"`.
+    pub skip_code_blocks: bool,
+    /// The `[links] frontmatter` allow-list, `None` for every value.
+    pub frontmatter_link_props: Option<&'a [String]>,
+    /// The `[scan] include` globs in effect.
+    pub scan_include: &'a [String],
+}
+
+/// Why a snapshot is not used: the one list `--index` loading, the hints and
+/// `hyalo config` all read (W9), so none of them promises a snapshot another
+/// would refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotRefusal {
+    /// Written by another format.
+    Format {
+        /// The snapshot's version.
+        found: u32,
+    },
+    /// Tokenized under another `[search] code_blocks`.
+    CodeBlocks,
+    /// Its links were scanned under another `[links] frontmatter` list.
+    FrontmatterLinks,
+    /// Built under other `[scan] include` globs.
+    ScanInclude,
+    /// An ignore file that governed the build changed (or appeared) since.
+    IgnoreSource(String),
+}
+
+/// Whether two frontmatter-link allow-lists scan the same properties (`None`
+/// is every value; order does not matter).
+pub fn same_link_props(a: Option<&[String]>, b: Option<&[String]>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            fn sorted(props: &[String]) -> Vec<&str> {
+                let mut props = props.iter().map(String::as_str).collect::<Vec<_>>();
+                props.sort_unstable();
+                props.dedup();
+                props
+            }
+            sorted(a) == sorted(b)
+        }
+        _ => false,
+    }
+}
+
+impl SnapshotBuild {
+    /// Why `run` must not read this snapshot, if it must not. Costs a `stat`
+    /// per recorded ignore source.
+    #[must_use]
+    pub fn refusal(&self, run: &RunBuild<'_>) -> Option<SnapshotRefusal> {
+        if self.format_version != SNAPSHOT_FORMAT_VERSION {
+            return Some(SnapshotRefusal::Format {
+                found: self.format_version,
+            });
+        }
+        if self.skip_code_blocks != run.skip_code_blocks {
+            return Some(SnapshotRefusal::CodeBlocks);
+        }
+        if !same_link_props(
+            self.frontmatter_link_props.as_deref(),
+            run.frontmatter_link_props,
+        ) {
+            return Some(SnapshotRefusal::FrontmatterLinks);
+        }
+        if self.scan_include != run.scan_include {
+            return Some(SnapshotRefusal::ScanInclude);
+        }
+        crate::ignore_classify::changed_source(&self.ignore_sources)
+            .map(|stamp| SnapshotRefusal::IgnoreSource(stamp.path.clone()))
+    }
+}
+
 /// The format version in the header of the snapshot at `path`, read without
-/// decoding entries, graph or search index (B-15): a hint that wants to know
-/// whether `--index` would be refused cannot afford the load that refuses it.
-/// `None` for a missing, unreadable or undecodable header.
+/// decoding entries, graph or search index (B-15). `None` for a missing,
+/// unreadable or undecodable header.
 #[must_use]
 pub fn peek_format_version(path: &Path) -> Option<u32> {
+    peek_build(path).map(|build| build.format_version)
+}
+
+/// The header of the snapshot at `path` — what it was built under — read
+/// without decoding entries, graph or search index (B-15, W9): a hint that
+/// wants to know whether `--index` would be refused cannot afford the load
+/// that refuses it. `None` for a missing, unreadable or undecodable header.
+#[must_use]
+pub fn peek_build(path: &Path) -> Option<SnapshotBuild> {
     use serde::de::DeserializeSeed as _;
+    use std::cell::RefCell;
     use std::io::Read as _;
 
-    /// Reads the header's first key out of the envelope map and then stops with
-    /// an error: the truncated read does not hold the rest (a vault with
-    /// thousands of attachments has a header far larger than the peek), and the
-    /// format version, the header's first field, has been stored by then.
-    struct Seed<'a>(&'a std::cell::Cell<Option<u32>>);
+    /// Reads the header's compatibility keys out of the envelope map and then
+    /// stops with an error: the truncated read does not hold the rest (a vault
+    /// with thousands of attachments has a header far larger than the peek),
+    /// and the compatibility fields lead the header, so they are stored by then.
+    struct Seed<'a>(&'a RefCell<Option<SnapshotBuild>>);
 
-    /// The header map: `format_version` when it leads, else the pre-iter-276
-    /// layout that has none, which reads as version 0.
-    struct HeaderSeed<'a>(&'a std::cell::Cell<Option<u32>>);
+    /// The header map: the leading keys it knows, then a stop at the first it
+    /// does not. A header that opens with anything but `format_version` is the
+    /// pre-iter-276 layout, which reads as version 0.
+    struct HeaderSeed<'a>(&'a RefCell<Option<SnapshotBuild>>);
 
     impl<'de> serde::de::Visitor<'de> for HeaderSeed<'_> {
         type Value = ();
@@ -688,13 +809,22 @@ pub fn peek_format_version(path: &Path) -> Option<u32> {
         where
             A: serde::de::MapAccess<'de>,
         {
-            match map.next_key::<String>()? {
-                Some(key) if key == "format_version" => {
-                    self.0.set(Some(map.next_value::<u32>()?));
+            use serde::de::IgnoredAny;
+            let mut build = SnapshotBuild::default();
+            while let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "format_version" => build.format_version = map.next_value()?,
+                    "vault_dir" | "site_prefix" | "created_at" | "pid" => {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                    "skip_code_blocks" => build.skip_code_blocks = map.next_value()?,
+                    "frontmatter_link_props" => build.frontmatter_link_props = map.next_value()?,
+                    "scan_include" => build.scan_include = map.next_value()?,
+                    "ignore_sources" => build.ignore_sources = map.next_value()?,
+                    _ => break,
                 }
-                Some(_) => self.0.set(Some(0)),
-                None => {}
             }
+            *self.0.borrow_mut() = Some(build);
             Err(serde::de::Error::custom("header read"))
         }
     }
@@ -750,9 +880,9 @@ pub fn peek_format_version(path: &Path) -> Option<u32> {
         .take(HEADER_PEEK_BYTES)
         .read_to_end(&mut bytes)
         .ok()?;
-    let version = std::cell::Cell::new(None);
-    let _ = Seed(&version).deserialize(&mut rmp_serde::Deserializer::from_read_ref(&bytes));
-    version.get()
+    let build = RefCell::new(None);
+    let _ = Seed(&build).deserialize(&mut rmp_serde::Deserializer::from_read_ref(&bytes));
+    build.into_inner()
 }
 
 /// Which envelope field a top-level map key names.
@@ -1874,6 +2004,19 @@ impl SnapshotIndex {
         self.header.skip_code_blocks
     }
 
+    /// What this snapshot was built under — the same [`SnapshotBuild`] a header
+    /// peek returns, so a load and a hint refuse for the same reasons (W9).
+    #[must_use]
+    pub fn build_info(&self) -> SnapshotBuild {
+        SnapshotBuild {
+            format_version: self.header.format_version,
+            skip_code_blocks: self.header.skip_code_blocks,
+            frontmatter_link_props: self.header.frontmatter_link_props.clone(),
+            scan_include: self.header.scan_include.clone(),
+            ignore_sources: self.header.ignore_sources.clone(),
+        }
+    }
+
     // ------------------------------------------------------------------
     // Deserialization
     // ------------------------------------------------------------------
@@ -2124,6 +2267,16 @@ impl SnapshotIndex {
         if replay {
             crate::discovery::note_gitignore_dropped(
                 usize::try_from(header.gitignore_dropped).unwrap_or(usize::MAX),
+            );
+            // W2: a snapshot saved from this process keeps the nested ignore
+            // files its build met, as it keeps the counts above.
+            crate::discovery::set_nested_ignore_sources(
+                header
+                    .ignore_sources
+                    .iter()
+                    .filter(|stamp| stamp.nested)
+                    .map(|stamp| PathBuf::from(&stamp.path))
+                    .collect(),
             );
         }
 
@@ -2433,6 +2586,11 @@ fn write_snapshot_with_session(
         gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
         skip_code_blocks: crate::bm25::search_settings().skip_code_blocks,
         frontmatter_link_props: index.frontmatter_link_props().map(<[String]>::to_vec),
+        scan_include: crate::discovery::scan_include_patterns(),
+        ignore_sources: crate::ignore_classify::current_stamps(
+            Path::new(vault_dir),
+            &crate::discovery::nested_ignore_sources(),
+        ),
         file_mtime: 0,
         file_dir: None,
     };
@@ -4555,6 +4713,8 @@ Content.
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
                 frontmatter_link_props: None,
+                scan_include: Vec::new(),
+                ignore_sources: Vec::new(),
                 file_mtime: 0,
                 file_dir: None,
             },
@@ -4879,6 +5039,103 @@ Content.
     }
 
     #[test]
+    fn the_peek_reads_the_compatibility_fields_past_a_long_attachment_list() {
+        let attachments: Vec<String> = (0..6000)
+            .map(|i| format!("assets/image-{i:05}.png"))
+            .collect();
+        let bytes = snapshot_bytes_with_attachments(&[test_entry("a.md")], None, attachments);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snap.idx");
+        std::fs::write(&path, &bytes).unwrap();
+        let build = peek_build(&path).unwrap();
+        assert_eq!(build.format_version, SNAPSHOT_FORMAT_VERSION);
+        assert!(!build.skip_code_blocks);
+        assert_eq!(build.frontmatter_link_props, None);
+        let run = RunBuild {
+            skip_code_blocks: false,
+            frontmatter_link_props: None,
+            scan_include: &[],
+        };
+        assert_eq!(build.refusal(&run), None);
+        let other = RunBuild {
+            skip_code_blocks: true,
+            ..run
+        };
+        assert_eq!(build.refusal(&other), Some(SnapshotRefusal::CodeBlocks));
+        let props = ["related".to_owned()];
+        let other = RunBuild {
+            frontmatter_link_props: Some(&props),
+            ..run
+        };
+        assert_eq!(
+            build.refusal(&other),
+            Some(SnapshotRefusal::FrontmatterLinks)
+        );
+        let globs = [".notes/**".to_owned()];
+        let other = RunBuild {
+            scan_include: &globs,
+            ..run
+        };
+        assert_eq!(build.refusal(&other), Some(SnapshotRefusal::ScanInclude));
+    }
+
+    #[test]
+    fn a_recorded_ignore_source_that_changed_or_appeared_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let run = RunBuild {
+            skip_code_blocks: false,
+            frontmatter_link_props: None,
+            scan_include: &[],
+        };
+        let mut build = SnapshotBuild {
+            format_version: SNAPSHOT_FORMAT_VERSION,
+            ignore_sources: crate::ignore_classify::current_stamps(root, &[]),
+            ..SnapshotBuild::default()
+        };
+        assert_eq!(build.refusal(&run), None);
+        // A source that was absent when stamped is noticed once it exists.
+        std::fs::write(root.join(".gitignore"), "x.md\n").unwrap();
+        assert!(matches!(
+            build.refusal(&run),
+            Some(SnapshotRefusal::IgnoreSource(path)) if path.ends_with(".gitignore")
+        ));
+        // Re-stamped, it is accepted; a different size is a change.
+        build.ignore_sources = crate::ignore_classify::current_stamps(root, &[]);
+        assert_eq!(build.refusal(&run), None);
+        std::fs::write(root.join(".gitignore"), "x.md\ny.md\n").unwrap();
+        assert!(build.refusal(&run).is_some());
+        // A nested source is stamped when the walk reported it.
+        let nested = root.join("sub");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join(".ignore"), "a\n").unwrap();
+        build.ignore_sources =
+            crate::ignore_classify::current_stamps(root, &[nested.join(".ignore")]);
+        assert_eq!(build.refusal(&run), None);
+        std::fs::write(nested.join(".ignore"), "a\nbb\n").unwrap();
+        assert!(build.refusal(&run).is_some());
+    }
+
+    #[test]
+    fn a_snapshot_of_another_format_is_refused_before_anything_else() {
+        let build = SnapshotBuild {
+            format_version: SNAPSHOT_FORMAT_VERSION - 1,
+            ..SnapshotBuild::default()
+        };
+        let run = RunBuild {
+            skip_code_blocks: false,
+            frontmatter_link_props: None,
+            scan_include: &[],
+        };
+        assert_eq!(
+            build.refusal(&run),
+            Some(SnapshotRefusal::Format {
+                found: SNAPSHOT_FORMAT_VERSION - 1
+            })
+        );
+    }
+
+    #[test]
     fn peeking_survives_a_header_larger_than_the_peek() {
         // 6000 attachment paths put the header itself past HEADER_PEEK_BYTES.
         let attachments: Vec<String> = (0..6000)
@@ -4954,6 +5211,8 @@ Content.
                 gitignore_dropped: 0,
                 skip_code_blocks: false,
                 frontmatter_link_props: None,
+                scan_include: Vec::new(),
+                ignore_sources: Vec::new(),
                 file_mtime: 0,
                 file_dir: None,
             },

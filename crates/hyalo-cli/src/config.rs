@@ -463,6 +463,10 @@ pub(crate) struct ResolvedDefaults {
     /// validation (`--validate`, or `[schema] validate_on_write`) must refuse
     /// instead, because validating against an empty schema rejects nothing.
     pub(crate) schema_invalid: Option<String>,
+    /// The `[schema]` half of [`Self::schema_invalid`] alone. `new` and
+    /// `types list`/`show` read the schema, not `[lint.rules]`, so an invalid
+    /// lint severity is no reason for them to refuse (iter-327, W10, DEC-390).
+    pub(crate) schema_only_invalid: Option<String>,
     /// Default output limit for list commands.
     /// `None` = use hardcoded default (50).
     /// `Some(0)` = unlimited.
@@ -600,6 +604,7 @@ impl ResolvedDefaults {
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             schema_invalid: None,
+            schema_only_invalid: None,
             default_limit: None,
             pi_session_summary: false,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
@@ -1155,9 +1160,14 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // L-5 (DEC-390): a severity the engine would read as warn is the same kind
     // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
     // `hyalo config` reports it, a plain write is unaffected.
-    let schema_invalid = match (schema_invalid, invalid_lint_severity(cfg.lint.as_ref())) {
+    let schema_only_invalid = schema_invalid;
+    let schema_invalid = match (
+        schema_only_invalid.as_deref(),
+        invalid_lint_severity(cfg.lint.as_ref()),
+    ) {
         (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
-        (schema, severity) => schema.or(severity),
+        (Some(schema), None) => Some(schema.to_owned()),
+        (None, severity) => severity,
     };
 
     // Parse [links] fields — borrow before moving.
@@ -1255,6 +1265,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         schema_invalid,
+        schema_only_invalid,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
         case_insensitive_resolve,
@@ -1867,6 +1878,31 @@ pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
              {dir} has no .hyalo.toml — running on built-in defaults"
         ),
     })
+}
+
+/// Why a run with the installed settings must not read the snapshot at `path`
+/// — `None` when it can, and also when its header cannot be read at all (that
+/// is a "could not use" the loader reports, not a settings mismatch). One
+/// answer for `--index` loading's hints, `hyalo config` and `types` (W9,
+/// iter-327).
+pub(crate) fn snapshot_refusal(
+    path: &Path,
+    frontmatter_link_props: Option<&[String]>,
+) -> Option<hyalo_core::index::SnapshotRefusal> {
+    let build = hyalo_core::index::peek_build(path)?;
+    let scan_include = hyalo_core::discovery::scan_include_patterns();
+    build.refusal(&hyalo_core::index::RunBuild {
+        skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
+        frontmatter_link_props,
+        scan_include: &scan_include,
+    })
+}
+
+/// Whether this run would read the snapshot at `path`: its header decodes and
+/// [`snapshot_refusal`] finds nothing against it.
+pub(crate) fn snapshot_usable(path: &Path, frontmatter_link_props: Option<&[String]>) -> bool {
+    hyalo_core::index::peek_build(path).is_some()
+        && snapshot_refusal(path, frontmatter_link_props).is_none()
 }
 
 #[cfg(test)]

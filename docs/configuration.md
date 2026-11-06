@@ -542,10 +542,14 @@ body = 1.0               # everything else
 - **`code_blocks`** (default `"index"`) — `"skip"` drops every line of a
   fenced code block from the corpus, section scores and snippets; inline code
   is always indexed.
-- **`[search.weights]`** — a term's frequency in each field is multiplied by
-  that field's weight before BM25 saturation, against one combined document
-  length. Tags enter the corpus here, so a term that appears only in `tags` or
-  `aliases` now matches the note.
+- **`[search.weights]`** — the title is scored apart: its term frequency is
+  length-normalised against the average title, saturates on its own and is
+  multiplied by `title`, so `title = 10` ranks harder than `title = 3` and a
+  title that is only the query beats a long one containing it (DEC-394).
+  Headings, tags and prose share one saturating pool, each frequency multiplied
+  by its weight, against one combined document length. Tags enter the corpus
+  here, so a term that appears only in `tags` or `aliases` matches the note.
+  Scores are larger than before; compare ranks.
 - **`proximity_bonus`** (default `0.5`) — with two or more required terms, the
   top 200 candidates are multiplied by `1 + bonus / (1 + w)`, where `w` is the
   number of extra words in the smallest window holding every term. Snippets
@@ -672,7 +676,15 @@ postings are patched. A file whose mtime is not safely older than the previous
 snapshot ("racily clean": a same-size rewrite in that second keeps its mtime) is
 always re-scanned. `--force` rebuilds from scratch. The JSON result reports
 `reused`, `refreshed`, `skipped`, `removed` and `rebuilt`. A snapshot written by an older
-binary (format < 4) is refused and must be rebuilt.
+binary — or a newer one — is refused and must be rebuilt (`hyalo config --jq
+.results.snapshot_format_version` names the format this binary reads and writes). A
+snapshot is also refused, with a `-q`-proof warning, when the config it was built under
+differs from this run's in `[search] code_blocks`, `[links] frontmatter` or `[scan]
+include`, or when an ignore file that governed its walk — `.gitignore`, `.ignore` or
+`.git/info/exclude` of the vault or an ancestor, git's global excludes, or a nested ignore
+file the walk met — changed or appeared since. The command then answers from disk. A
+nested ignore file created after the build, and an edit made within the second the
+snapshot was written, are not noticed.
 
 A read with `--index` against a snapshot that has drifted re-scans just the
 drifted files in memory and prints a `-q`-proof note naming how many (and up to

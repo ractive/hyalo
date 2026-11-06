@@ -125,7 +125,7 @@ pub fn create_index(
             // A-6: entries scanned under another `[links] frontmatter`
             // setting hold the wrong link set; re-scan them all.
             .filter(|prev| {
-                crate::run::same_link_props(
+                hyalo_core::index::same_link_props(
                     hyalo_core::index::VaultIndex::frontmatter_link_props(prev),
                     frontmatter_link_props,
                 )
@@ -261,6 +261,17 @@ pub fn create_index(
                 && prev.scan_excluded() == current_scan_excluded
                 && prev.scan_exclude() == current_scan_exclude
                 && prev.gitignore_dropped() == current_gitignore_dropped
+                // W2 (iter-327): the file set is what the `[scan] include`
+                // globs and the ignore files say, so a header written under
+                // others must be rewritten even when every entry matches.
+                && prev
+                    .build_info()
+                    .refusal(&hyalo_core::index::RunBuild {
+                        skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
+                        frontmatter_link_props,
+                        scan_include: &discovery::scan_include_patterns(),
+                    })
+                    .is_none()
                 // DEC-368: the shared rule, so a slow publish tail is not a
                 // moved tree on every later run.
                 && !hyalo_core::index::tree_moved(prev, dir)

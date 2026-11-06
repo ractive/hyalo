@@ -632,34 +632,25 @@ pub fn links_fix(
         // A fix is "applied" only if it was neither unapplied (stale text) nor
         // failed (write error). Both buckets exclude it from the applied set so
         // "Applied: yes" never over-reports a fix that did not land on disk.
-        let mut excluded_keys: std::collections::HashSet<(&str, usize, &str, &str)> =
-            unapplied_fixes
-                .iter()
-                .map(|f| {
-                    (
-                        f.source.as_str(),
-                        f.line,
-                        f.old_target.as_str(),
-                        f.new_target.as_str(),
-                    )
-                })
-                .collect();
-        for ff in &failed_fixes {
-            excluded_keys.insert((
-                ff.fix.source.as_str(),
-                ff.fix.line,
-                ff.fix.old_target.as_str(),
-                ff.fix.new_target.as_str(),
-            ));
-        }
-        // Guard-rejected fixes were never written either.
-        for rf in &rejected_fixes {
-            excluded_keys.insert((
-                rf.source.as_str(),
-                rf.line,
-                rf.old_target.as_str(),
-                rf.new_target.as_str(),
-            ));
+        // A counted multiset (W11, iter-327): two plans may share a key
+        // (`[[X]] [[X#S]]`), and one of them going unapplied must not take
+        // the other out of the applied list with it.
+        let mut excluded_keys: std::collections::HashMap<(&str, usize, &str, &str), usize> =
+            std::collections::HashMap::new();
+        for fix in unapplied_fixes
+            .iter()
+            .chain(failed_fixes.iter().map(|failed| &failed.fix))
+            // Guard-rejected fixes were never written either.
+            .chain(rejected_fixes.iter())
+        {
+            *excluded_keys
+                .entry((
+                    fix.source.as_str(),
+                    fix.line,
+                    fix.old_target.as_str(),
+                    fix.new_target.as_str(),
+                ))
+                .or_insert(0) += 1;
         }
         certain_fixes
             .iter()
@@ -670,12 +661,18 @@ pub fn links_fix(
             // so they belong in the applied set like every other certain fix.
             .chain(alias_fixes.iter())
             .filter(|f| {
-                !excluded_keys.contains(&(
+                match excluded_keys.get_mut(&(
                     f.source.as_str(),
                     f.line,
                     f.old_target.as_str(),
                     f.new_target.as_str(),
-                ))
+                )) {
+                    Some(left) if *left > 0 => {
+                        *left -= 1;
+                        false
+                    }
+                    _ => true,
+                }
             })
             .cloned()
             .collect()

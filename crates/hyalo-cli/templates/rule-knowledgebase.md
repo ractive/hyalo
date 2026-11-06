@@ -312,7 +312,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   notes, or an alias two notes claim, resolves to none of them; its `find --fields links` record
   carries `ambiguous: true` and `candidates` (sorted, vault-relative, identical on a disk scan
   and under `--index`), and neither key appears on any other link. Text mode prints
-  `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`. It is still **broken** — `path`
+  `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`. A partial path two notes end in
+  (`[[x/note]]` for `a/x/note.md` and `b/x/note.md`) is ambiguous the same way, in every command
+  (iter-327, DEC-399; an exact path that names a file wins first). It is still **broken** — `path`
   stays `null`, so `find --broken-links`, `summary.links.broken` and HYALO006 count it exactly as
   before — but the remedy is to write `[[sub/note]]`, not to create a note. `mv`'s
   `skipped_ambiguous`, HYALO006's "matches N candidates" and `links fix`'s `ambiguous_links` read
@@ -413,9 +415,14 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directory that coincides with the index file's mtime, re-stamped after the publishing
   rename, is excused — DEC-368) — leaves the snapshot file
   untouched and reports `written: false` (iter-313, amended in review). Current-format
-  (v9) snapshots only — an older one, or one built under a different `[search] code_blocks`
-  than the config (read from the header, never forcing BM25's lazy decode), is refused with
-  a `-q`-proof warning naming both values (DEC-360); `summary --index` reports
+  snapshots of the current format only (`hyalo config --jq .results.snapshot_format_version`
+  names it) — an older or newer one is refused with a `-q`-proof warning, and so is one built
+  under a different `[search] code_blocks`, `[links] frontmatter` or `[scan] include` than the
+  config, or whose ignore files (`.gitignore`, `.ignore`, `.git/info/exclude`, git's global
+  excludes, the nested ones the build met) changed or appeared since, all read from the header
+  (never forcing BM25's lazy decode) and answered from disk instead (DEC-360, DEC-389, DEC-399);
+  `hyalo config` and the hints refuse it for the same reasons. A nested ignore file created after
+  the build, and an edit within the build's own second, go unnoticed. `summary --index` reports
   `index_format_version`, `code_blocks` and `source` ("index" or "disk") even on a refused
   snapshot, rather than `index_format_version: null`.
 - **Result caps are visible in JSON, not just text** (UX-5, iter-313): any command whose

@@ -301,8 +301,7 @@ pub(crate) fn collect_config_report(
         dir_overridden,
         index_file: index_file
             .filter(|path| {
-                hyalo_core::index::peek_format_version(path)
-                    == Some(hyalo_core::index::SNAPSHOT_FORMAT_VERSION)
+                crate::config::snapshot_usable(path, resolved.frontmatter_link_props.as_deref())
             })
             .map(crate::hints::shorten_index_path_for_hint),
         format: resolved.format,
