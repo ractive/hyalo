@@ -403,10 +403,14 @@ fn config_hints_run_and_return_non_degraded_results() {
     for hint in json["hints"].as_array().cloned().unwrap_or_default() {
         let cmd = hint["cmd"].as_str().unwrap_or_default();
         let argv: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+        // B-17: the hint carries the `--format` it was printed under.
+        assert!(
+            argv.windows(2).any(|w| w == ["--format", "json"]),
+            "config hint `{cmd}` dropped --format"
+        );
         let run = hyalo()
             .current_dir(tmp.path())
             .args(&argv)
-            .args(["--format", "json"])
             .output()
             .unwrap();
         let result = envelope(&run.stdout, &run.stderr);

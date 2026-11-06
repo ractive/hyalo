@@ -23,6 +23,10 @@ use crate::workspace::workspace_root;
 /// listed here — only genuinely undocumentable commands belong.
 const REFERENCE_EXEMPT: &[&str] = &["help"];
 
+/// Commands that must appear in `hyalo --help`'s `Commands:` block; their absence
+/// means the listing could not be read, not that they were removed.
+const SENTINEL_COMMANDS: &[&str] = &["find", "lint", "links", "mv", "set", "task", "types"];
+
 /// Extract the clap-declared subcommand names from `hyalo --help` output.
 ///
 /// Reads the block introduced by a line equal to `Commands:` and ending at the
@@ -319,6 +323,16 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     let subcommands = extract_subcommands(&help);
     if subcommands.is_empty() {
         anyhow::bail!("could not parse any subcommands out of `hyalo --help`");
+    }
+    // A listing that lost its tail would otherwise pass with most commands unchecked.
+    if let Some(gone) = SENTINEL_COMMANDS
+        .iter()
+        .find(|name| !subcommands.iter().any(|s| s == *name))
+    {
+        anyhow::bail!(
+            "`hyalo --help` no longer lists `{gone}` ({} commands parsed); the Commands: parser or the help changed",
+            subcommands.len()
+        );
     }
     let Some(reference) = reference_section(&help) else {
         eprintln!("check-command-reference: `hyalo --help` has no COMMAND REFERENCE section.");

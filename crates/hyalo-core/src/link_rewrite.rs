@@ -867,9 +867,10 @@ impl PartialExecuteReport {
             .any(|o| !o.applied || o.error.is_some())
     }
 
+    #[cfg(test)]
     /// Vault-relative paths of the plans that were published.
     #[must_use]
-    pub fn applied_paths(&self) -> Vec<String> {
+    pub(crate) fn applied_paths(&self) -> Vec<String> {
         self.outcomes
             .iter()
             .filter(|o| o.applied)

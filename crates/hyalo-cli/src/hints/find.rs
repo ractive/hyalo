@@ -486,10 +486,14 @@ pub(super) fn hints_for_find(
                 build_command_no_glob(ctx, &["find", "--file", first_file, "--fields", "all"]),
             ));
         }
-        hints.push(Hint::new(
-            "See what links to this file",
-            build_command_with_file(ctx, &["backlinks"], first_file, &[]),
-        ));
+        // B-18: an orphan has no backlinks by definition, so that hint
+        // always printed an empty list.
+        if !ctx.orphan_filter {
+            hints.push(Hint::new(
+                "See what links to this file",
+                build_command_with_file(ctx, &["backlinks"], first_file, &[]),
+            ));
+        }
     }
 
     // iter-252: the default result shape carries file, modified, size, lines,
@@ -784,8 +788,9 @@ pub(super) fn hints_for_find(
     if broken_total > 0 && MAX_HINTS.saturating_sub(hints.len()) > 0 {
         if broken_site_absolute == broken_total {
             hints.push(Hint::without_cmd(format!(
-                "all {broken_total} broken link(s) are site-absolute — set `site_prefix` in \
-                 .hyalo.toml (or `--site-prefix`) rather than running `links fix`"
+                "all {broken_total} broken link(s) are site-absolute, which `links fix` cannot \
+                 repair — if the vault is served under a URL prefix, set `site_prefix` in \
+                 .hyalo.toml (or `--site-prefix`)"
             )));
         } else {
             hints.push(Hint::new(

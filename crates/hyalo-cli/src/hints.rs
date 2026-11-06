@@ -105,6 +105,16 @@ impl Hint {
     }
 }
 
+/// A `create-index` command for this run. When the run named an index it
+/// refused, the rebuild goes to that file (`--output`): rewriting the default
+/// snapshot would leave the refused one refused (R4).
+pub(super) fn create_index_command(ctx: &HintContext) -> String {
+    match &ctx.refused_index_path {
+        Some(path) => build_command_no_glob(ctx, &["create-index", "--output", path]),
+        None => build_command_no_glob(ctx, &["create-index"]),
+    }
+}
+
 /// Identifies which command produced the output.
 pub enum HintSource {
     Summary,
@@ -273,6 +283,13 @@ pub struct HintContext {
     /// wording only: never a correctness gate, and `--index` itself still
     /// runs DEC-302's authoritative check regardless of what this says.
     pub snapshot_stale: bool,
+    /// An index this run named (`--index-file X`) and refused: the path
+    /// `create-index --output` has to rebuild, so the hint does not rewrite the
+    /// healthy default snapshot and leave this one refused (R4).
+    pub refused_index_path: Option<String>,
+    /// `read`'s narrowing flags (`--section`, `--lines`, `--frontmatter`) with
+    /// their values, so a re-run asks the same question (R3).
+    pub read_flags: Vec<String>,
     /// Vault-relative path the `find` PATTERN itself names, when the pattern
     /// is a `.md` path that exists in the vault.
     ///
@@ -440,6 +457,8 @@ impl HintContext {
             has_index: false,
             snapshot_on_disk: false,
             snapshot_stale: false,
+            refused_index_path: None,
+            read_flags: Vec::new(),
             pattern_names_a_file: None,
             fields: vec![],
             sort: None,
@@ -639,7 +658,13 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     if !eligible {
         return None;
     }
-    if ctx.quiet || ctx.has_index {
+    // B-18: `lint --fix` has just rewritten the files an index would have
+    // cached, so "create an index for faster queries" is advice about the
+    // wrong moment.
+    if ctx.quiet
+        || ctx.has_index
+        || (matches!(ctx.source, HintSource::Lint) && ctx.lint_is_fix && !ctx.dry_run)
+    {
         return None;
     }
     let elapsed = ctx.elapsed_ms?;
@@ -652,22 +677,24 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     // `--dir` one the user is actually querying (BUG-7).
     // iter-267 (UX-18): when the vault already HAS a `.hyalo-index`, the
     // actionable advice is to USE it, not to rebuild what is already there.
-    // `find`, `lint` and `summary` get a runnable command with their scope
-    // preserved; the remaining eligible commands get advice only, because
-    // they take no `--index` flag of their own.
+    // Every eligible command re-runs with `--index` and its scope preserved;
+    // a `read`/`backlinks` run over several files gets advice only.
     if ctx.snapshot_on_disk && ctx.snapshot_stale {
         // iter-313: the cheap mtime probe thinks the on-disk snapshot is
         // behind the vault — pointing at `--index` here would serve a stale
         // answer with no warning until the authoritative per-entry check in
         // `run.rs` catches up. Point at refreshing it instead.
-        let description = format!(
-            "Command took {elapsed} ms — the on-disk `.hyalo-index` snapshot looks stale; \
-             refresh it"
-        );
-        return Some(Hint::new(
-            description,
-            build_command_no_glob(ctx, &["create-index"]),
-        ));
+        let description = match &ctx.refused_index_path {
+            Some(path) => format!(
+                "Command took {elapsed} ms — the index `{path}` was refused by this binary; \
+                 rebuild it"
+            ),
+            None => format!(
+                "Command took {elapsed} ms — the on-disk `.hyalo-index` snapshot looks stale; \
+                 refresh it"
+            ),
+        };
+        return Some(Hint::new(description, create_index_command(ctx)));
     }
     if ctx.snapshot_on_disk {
         let description = format!(
@@ -678,6 +705,27 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
             HintSource::Find => build_find_command_preserving_filters(ctx, &["--index"]),
             HintSource::Lint => build_command_with_glob_and_files(ctx, &["lint", "--index"]),
             HintSource::Summary => build_command_with_glob(ctx, &["summary", "--index"]),
+            HintSource::PropertiesSummary => {
+                build_command_with_glob(ctx, &["properties", "summary", "--index"])
+            }
+            HintSource::TagsSummary => {
+                build_command_with_glob(ctx, &["tags", "summary", "--index"])
+            }
+            HintSource::Backlinks | HintSource::Read => {
+                // These read one file; without it there is nothing to re-run.
+                let name = if matches!(ctx.source, HintSource::Read) {
+                    "read"
+                } else {
+                    "backlinks"
+                };
+                match ctx.file_targets.as_slice() {
+                    [file] => {
+                        let flags: Vec<&str> = ctx.read_flags.iter().map(String::as_str).collect();
+                        build_command_with_file(ctx, &[name, "--index"], file, &flags)
+                    }
+                    _ => String::new(),
+                }
+            }
             _ => String::new(),
         };
         return Some(Hint::new(description, cmd));

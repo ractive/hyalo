@@ -153,6 +153,18 @@ pub(super) fn splice_frontmatter(
     props: &IndexMap<String, Value>,
     compact_list_indent: bool,
 ) -> SpliceOutcome {
+    splice_frontmatter_noted(original_yaml, props, compact_list_indent, &mut Vec::new())
+}
+
+/// [`splice_frontmatter`], also collecting notes about what the minimal-diff
+/// result still lost (a comment that has nowhere to go), for the caller to
+/// print with the file's path.
+pub(super) fn splice_frontmatter_noted(
+    original_yaml: &str,
+    props: &IndexMap<String, Value>,
+    compact_list_indent: bool,
+    notes: &mut Vec<String>,
+) -> SpliceOutcome {
     // Normalize line endings to LF for the whole operation. A frontmatter
     // block is either LF or CRLF throughout (`find_body_offset` records
     // which); a stray lone `\r` means content the caller's CRLF re-expansion
@@ -211,7 +223,7 @@ pub(super) fn splice_frontmatter(
             // Changed: keep the key's comment block, re-serialize its value.
             Some(seg) => {
                 out.push_str(seg.pre_trivia);
-                match render_changed_segment(key, seg, new_value, compact_list_indent) {
+                match render_changed_segment(key, seg, new_value, compact_list_indent, notes) {
                     Ok(text) => out.push_str(&text),
                     Err(reason) => return SpliceOutcome::Fallback(reason),
                 }
@@ -447,6 +459,7 @@ fn render_changed_segment(
     seg: &Segment<'_>,
     new_value: &Value,
     compact_list_indent: bool,
+    notes: &mut Vec<String>,
 ) -> Result<String, FallbackReason> {
     if let (Value::Array(old_items), Value::Array(new_items)) = (&seg.value, new_value)
         && old_items.iter().all(is_inline_scalar)
@@ -471,6 +484,21 @@ fn render_changed_segment(
     {
         return Ok(text);
     }
+    // N2: a multi-line flow list (`tags: [a,\n  b] # note`) is re-serialized
+    // as a block list, which has nowhere to keep its comment. Say so instead
+    // of dropping it silently; the rest of the block is untouched.
+    if matches!(seg.value, Value::Array(_))
+        && seg.body.trim_end_matches('\n').lines().count() > 1
+        && seg
+            .body
+            .split_once(':')
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with('['))
+        && has_comment_outside_quotes(seg.body)
+    {
+        notes.push(format!(
+            "`{key}` was a multi-line flow list and is now a block list; its comment is lost"
+        ));
+    }
     let mut text = serialize_one(key, new_value, compact_list_indent)
         .ok_or(FallbackReason::SerializeFailed)?;
     // A-17: `status: single # keep` is still a commented line after the value
@@ -487,6 +515,36 @@ fn render_changed_segment(
         text.push('\n');
     }
     Ok(text)
+}
+
+/// Whether `text` holds a `#` comment (a `#` after whitespace) outside quotes.
+/// Quote state carries across lines, as it does inside a multi-line flow list.
+fn has_comment_outside_quotes(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match (quote, bytes[i]) {
+            (Some(b'"'), b'\\') => i += 1,
+            (Some(b'\''), b'\'') if bytes.get(i + 1) == Some(&b'\'') => i += 1,
+            (Some(q), b) if b == q => quote = None,
+            // A quote opens only where a scalar starts: an apostrophe inside
+            // a plain scalar (`it's`) is just a character.
+            (None, b'\'' | b'"')
+                if i == 0
+                    || matches!(
+                        bytes[i - 1],
+                        b' ' | b'\t' | b'\n' | b'[' | b',' | b'{' | b':'
+                    ) =>
+            {
+                quote = Some(bytes[i]);
+            }
+            (None, b'#') if i > 0 && bytes[i - 1].is_ascii_whitespace() => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// The ` # comment` suffix of `text[from..]` (the value part of a line), with
@@ -2107,5 +2165,18 @@ mod rename_tests {
             renamed(yaml, "desc", "description"),
             "description: |\n  line one\n  line two\nafter: x\n"
         );
+    }
+
+    #[test]
+    fn a_comment_outside_quotes_is_found_across_lines() {
+        assert!(has_comment_outside_quotes("tags: [a,\n  b] # n\n"));
+        assert!(!has_comment_outside_quotes("tags: [\"a #b\",\n  'c #d']\n"));
+        assert!(!has_comment_outside_quotes("tags: [a#b, c]\n"));
+    }
+
+    #[test]
+    fn an_apostrophe_in_a_plain_scalar_does_not_open_a_quote() {
+        assert!(has_comment_outside_quotes("tags: [it's,\n  a] # note\n"));
+        assert!(!has_comment_outside_quotes("tags: ['it #s',\n  a]\n"));
     }
 }

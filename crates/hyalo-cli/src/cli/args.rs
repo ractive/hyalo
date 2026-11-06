@@ -1184,8 +1184,11 @@ pub(crate) enum Commands {
             [search] code_blocks = \"skip\" drops fenced code blocks from the corpus, scores and \
             snippets (default \"index\"; inline code is always indexed).\n\
             RANKING: BM25F over four fields, [search.weights] title = 3, headings = 2, tags = 2 \
-            (frontmatter tags and aliases; a tag-only term matches), body = 1, with one combined \
-            document length. With two or more required terms, the top 200 candidates get \
+            (frontmatter tags and aliases; a tag-only term matches), body = 1. The prose, \
+            headings and tags saturate with the document length; the title saturates on its \
+            own (by its own length) and its weight multiplies it, so the page about a term \
+            outranks a long page that merely repeats it and `title = 10` ranks harder than \
+            `title = 3` (DEC-394). With two or more required terms, the top 200 candidates get \
             x(1 + bonus/(1 + w)), w = extra words in the smallest window holding every term; \
             [search] proximity_bonus = 0.5 (0 disables). Snippets prefer the line where the terms \
             are closest. Section scores use the heading and body fields, without the bonus.\n\n\
@@ -2115,7 +2118,11 @@ Repeatable (AND).\n\
             not outlive its session.\n\n\
             If --path is omitted, deletes .hyalo-index in --dir.\n\n\
             OUTPUT: JSON object with `deleted` path.\n\
-            SIDE EFFECTS: Deletes the index file from disk."
+            SIDE EFFECTS: Deletes the index file from disk.\n\n\
+            EXAMPLES:\n\
+            hyalo drop-index\n\
+            hyalo drop-index --path .hyalo-index-draft\n\
+            hyalo drop-index -p /tmp/my-index --allow-outside-vault"
     )]
     DropIndex {
         /// Path to the index file to delete (default: .hyalo-index in --dir).

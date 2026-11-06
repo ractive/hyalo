@@ -548,23 +548,17 @@ pub(crate) fn set_type(
     } else {
         Some(write_toml_doc(&toml_path, &mut doc)?)
     };
-    if effects
-        .as_ref()
-        .is_some_and(super::apply::ApplyReport::failed)
-    {
-        return Ok(CommandOutcome::success(serde_json::Value::Null)
-            .with_apply_report(effects.take().expect("checked report")));
+    if let Some(report) = effects.take_if(|report| report.failed()) {
+        return Ok(CommandOutcome::success(serde_json::Value::Null).with_apply_report(report));
     }
     let result = (|| -> Result<CommandOutcome> {
         // --- Side effects: --default auto-apply ---
         let mut defaults_applied: Vec<DefaultAppliedOwned> = Vec::new();
 
         if !defaults_map.is_empty() {
-            if !dry_run {
-                let note_report = default_changes
-                    .take()
-                    .expect("default plan prepared")
-                    .apply(journal, "types defaults");
+            // `default_changes` is prepared exactly when `defaults_map` is non-empty.
+            if !dry_run && let Some(changes) = default_changes.take() {
+                let note_report = changes.apply(journal, "types defaults");
                 if let Some(report) = &mut effects {
                     report.paths.extend(note_report.paths);
                     report.index = note_report.index;

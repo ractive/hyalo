@@ -260,10 +260,11 @@ use tokenizer::is_scriptio_continua;
 #[cfg(test)]
 mod v4_tests;
 
+#[cfg(test)]
+pub(crate) use tokenizer::heading_body_lines;
 pub use tokenizer::{
     DEFAULT_PROXIMITY_BONUS, DocTokenBuilder, DocTokens, FieldWeights, SearchSettings,
-    TOKENIZER_VERSION, heading_body_lines, search_settings, set_search_settings, tokenize,
-    tokenize_document_text,
+    TOKENIZER_VERSION, search_settings, set_search_settings, tokenize, tokenize_document_text,
 };
 
 pub use query::{
@@ -501,16 +502,20 @@ pub(crate) struct Posting {
 }
 
 impl Posting {
-    /// BM25F weighted term frequency: `Σ weight_f × tf_f`.
-    pub(crate) fn weighted_tf(&self, weights: &FieldWeights) -> f64 {
+    /// The weighted term frequency of the prose, headings and tags (one
+    /// pool, saturating with the document length) and the length-normalised
+    /// title count, which saturates on its own (B-7).
+    pub(crate) fn weighted_tfs(&self, weights: &FieldWeights, title_norm: f64) -> (f64, f64) {
         let body = self
             .term_freq
             .saturating_sub(self.title_tf)
             .saturating_sub(self.heading_tf);
-        weights.title * f64::from(self.title_tf)
-            + weights.headings * f64::from(self.heading_tf)
-            + weights.tags * f64::from(self.tag_tf)
-            + weights.body * f64::from(body)
+        (
+            weights.body * f64::from(body)
+                + weights.headings * f64::from(self.heading_tf)
+                + weights.tags * f64::from(self.tag_tf),
+            f64::from(self.title_tf) / title_norm,
+        )
     }
 }
 
@@ -540,17 +545,24 @@ pub(crate) struct DocMarks {
 /// invocations — avoiding the O(N·doc) corpus rebuild on every query.
 /// [`Bm25InvertedIndex::apply_updates`] replaces documents in place (DEC-339).
 ///
-/// ## BM25F scoring formula (DEC-337)
+/// ## BM25F scoring formula (DEC-337, amended by DEC-394)
 ///
 /// ```text
-/// tf_w(t,d)   = Σ_f weight_f × tf_f(t,d)        f ∈ {title, headings, tags, body}
-/// score(q, d) = Σ IDF(t) × (tf_w × (k1 + 1)) / (tf_w + k1 × (1 - b + b × |d|/avgdl))
+/// pool(t,d)    = weight_body × tf_body + weight_headings × tf_headings + weight_tags × tf_tags
+/// title(t,d)   = tf_title(t,d) / (1 - b + b × |title|/avg_title)
+/// sat(x, norm) = x × (k1 + 1) / (x + k1 × norm)
+/// score(q, d)  = Σ IDF(t) × ( sat(pool, 1 - b + b × |d|/avgdl) + weight_title × sat(title, 1) )
 ///
 /// where:
 ///   |d|    = all title, body and tag tokens of d (one combined length)
 ///   IDF(t) = ln(1 + (N - n(t) + 0.5) / (n(t) + 0.5))
 ///   k1 = 1.2, b = 0.75
 /// ```
+///
+/// The title saturates on its own and its weight multiplies the result. One
+/// curve over title and prose let a term repeated in a long page reach the
+/// ceiling of a title hit, so a whole band of pages scored within 0.2 and no
+/// title weight could lift the canonical one out of it (B-7).
 ///
 /// ## Query syntax
 ///
@@ -685,6 +697,28 @@ impl Bm25InvertedIndex {
                 .doc_marks
                 .get(doc_id)
                 .map_or(0, |m| u64::from(m.tag_len))
+    }
+
+    /// Mean token count of the non-empty titles; `1.0` without any.
+    fn avg_title_len(&self) -> f64 {
+        let (sum, n) = self
+            .doc_marks
+            .iter()
+            .filter(|m| m.title_len > 0)
+            .fold((0_u64, 0_u64), |(sum, n), m| {
+                (sum + u64::from(m.title_len), n + 1)
+            });
+        #[allow(clippy::cast_precision_loss)]
+        if n == 0 { 1.0 } else { sum as f64 / n as f64 }
+    }
+
+    /// Length normaliser of a document's title: `1 - b + b × len / avg`.
+    fn title_norm(&self, doc_id: usize, avg: f64) -> f64 {
+        let len = self.doc_marks.get(doc_id).map_or(0, |m| m.title_len);
+        if len == 0 {
+            return 1.0;
+        }
+        1.0 - Self::B + Self::B * f64::from(len) / avg
     }
 
     fn total_length(&self) -> Option<u64> {

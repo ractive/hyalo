@@ -58,23 +58,11 @@ pub struct FrontmatterFrame {
 }
 
 impl FrontmatterFrame {
-    /// Opening delimiter line, including its line ending when present.
-    #[must_use]
-    pub fn opening_span(&self) -> Range<usize> {
-        self.opening.clone()
-    }
-
     /// YAML content between the delimiter lines, including authored line
     /// endings and excluding both delimiters.
     #[must_use]
     pub fn content_span(&self) -> Range<usize> {
         self.content.clone()
-    }
-
-    /// Closing delimiter line, including its line ending when present.
-    #[must_use]
-    pub fn closing_span(&self) -> Range<usize> {
-        self.closing.clone()
     }
 
     /// Whitespace authored after the opening `---`.

@@ -26,6 +26,13 @@ and this project adheres to
 
 ### Changed
 
+- Breaking, `hyalo-core` (0.x): removed `CaseInsensitiveIndex::alias_count`,
+  `FilenameTemplate::matches_path` and
+  `discovery::reset_scan_excluded_count`/`reset_gitignore_dropped_count`; made
+  crate-private `ExplicitAnchorScanner` (with `explicit_anchor_ids_in_line` and
+  `fragment_matches_explicit_anchor`), `ambiguous_stem_key`, `is_scan_excluded`,
+  `scan_exclude_glob`, `resolve_attachment_from_source` and `SchemaBind::type_for`
+  (DEC-397).
 - On Unix, a dot-prefixed name that merely ends in a dot (`.drafts./`) is now
   hidden, as every other dot-prefixed name already was (`ignore` 0.4.34).
   Before, `find` and `lint` listed the notes inside it while `summary` and
@@ -101,6 +108,34 @@ and this project adheres to
 - `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
 
 ### Fixed
+
+- A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`
+  lists it (`respons`, `promis`, `databas`) matches that dictionary term when its stem
+  does not occur, so `find responce` -> `-- respons` returns the 1,365 documents `terms`
+  counts, inside quotes too (DEC-393). When the typed word's own stem occurs, only that
+  stem is searched.
+- Search ranks the page about a term above a long page that merely repeats it: the
+  title saturates on its own, is length-normalised and is multiplied by its
+  `[search.weights] title`, which now changes the order (`title = 10` ranks harder than
+  `title = 3`). On MDN `addEventListener` moves from 43rd to 1st and an exact-title
+  search finds its page first 106 times in 120 (was 69); GitHub Docs 103 (was 81).
+  Scores are larger than before; compare ranks (DEC-394).
+- Hints: an advice-only hint prints as `note:`, never `->`; `config`, `types`, `views`
+  and `lint-rules` thread `--format` and `--index-file`; the slow-query hint re-runs
+  `properties`, `tags`, `backlinks` and `read` with `--index`, and a snapshot of
+  another format is hinted as stale; `find --orphan` no longer offers `backlinks`; a
+  failed `"a b"~5` offers both orders as one `OR` query; `lint --fix` no longer says
+  "create an index"; `Apply 1 fix`; `set`/`remove`/`append` without a target name the
+  positional form (DEC-395).
+- The shipped `--jq` recipe for missing images printed `null` for the line.
+- `lint-rules set` over an unusable stored override no longer prints `(no change)` next
+  to a write; a comment on a multi-line flow list that `tags rename` rewrites as a block
+  list is warned about; `read --section` drops a leading BOM from the excerpt (DEC-397).
+- Gates: `xtask` fails outside a workspace, `check-pi-runtime` refuses a symlinked or
+  stale `node_modules`, `check-mutation-journal` classifies every command module and
+  reads code, not comments, `check-jq-recipes` runs only read-only recipes or ones with
+  `--dry-run`, and `check-help-drift` walks every nested subcommand and fails on a
+  page it cannot render. `drop-index --help` gained examples (DEC-396).
 
 - `links fix` and `find --broken-links` name the same heading for a broken anchor (the numbered-heading repair `--apply` writes wins over a prefix match), and the text `Fixable:` line spells out its split, `Fixable: 5 (0 links + 5 anchor repairs)`, beside the unchanged JSON `fixable` and `anchor_fixable` (DEC-376).
 - `mv` no longer rewrites a bare `[[Café]]` to the decomposed bytes of the file it names; HYALO006 no longer counts links that walk above the vault root; `lint --rule X -q` no longer prints unknown-markdownlint-rule warnings for other directives; `read --frontmatter` on a note without frontmatter and `types list`/`types show` under an unusable `[schema]` say so; `init` reports `unchanged` for identical files and warns when it replaces a hand-edited managed section; the unreadable `--index-file` hint names `--allow-outside-vault` outside the vault; the in-memory index repair note counts modified, added and deleted files; `new --dry-run` hints the real `hyalo new` (DEC-380).

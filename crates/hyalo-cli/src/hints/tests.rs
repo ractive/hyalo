@@ -1605,6 +1605,46 @@ fn slow_query_hint_fires_for_slow_find() {
     assert!(h.description.contains("ms"), "desc: {}", h.description);
 }
 
+/// R3: the `--index` re-run keeps the scope of the slow command.
+#[test]
+fn slow_query_hint_keeps_glob_and_read_narrowing() {
+    let mut c = ctx(HintSource::TagsSummary);
+    c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+    c.snapshot_on_disk = true;
+    c.glob = vec!["{a,b}/**".to_owned()];
+    let cmd = slow_query_hint(&c).unwrap().cmd;
+    assert!(
+        cmd.contains("tags summary") && cmd.contains("--index"),
+        "{cmd}"
+    );
+    assert!(cmd.contains("--glob") && cmd.contains("{a,b}/**"), "{cmd}");
+
+    let mut c = ctx(HintSource::Read);
+    c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+    c.snapshot_on_disk = true;
+    c.file_targets = vec!["note.md".to_owned()];
+    c.read_flags = vec!["--section".to_owned(), "Tasks".to_owned()];
+    let cmd = slow_query_hint(&c).unwrap().cmd;
+    assert!(cmd.contains("--section") && cmd.contains("Tasks"), "{cmd}");
+}
+
+/// R4: a refused named index is rebuilt where it lives, not the default one.
+#[test]
+fn slow_query_hint_rebuilds_the_refused_index_file() {
+    let mut c = ctx(HintSource::Find);
+    c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+    c.snapshot_on_disk = true;
+    c.snapshot_stale = true;
+    c.refused_index_path = Some("custom.idx".to_owned());
+    let h = slow_query_hint(&c).unwrap();
+    assert!(
+        h.cmd.contains("create-index") && h.cmd.contains("--output custom.idx"),
+        "{}",
+        h.cmd
+    );
+    assert!(h.description.contains("custom.idx"), "{}", h.description);
+}
+
 /// Exactly at the threshold (not strictly greater) should NOT fire.
 #[test]
 fn slow_query_hint_does_not_fire_at_threshold() {

@@ -22,7 +22,7 @@ impl FrontmatterCollector {
 
     /// Consume the collector and return the parsed properties.
     #[must_use]
-    pub fn into_props(self) -> IndexMap<String, Value> {
+    pub(crate) fn into_props(self) -> IndexMap<String, Value> {
         self.props
     }
 }

@@ -600,17 +600,22 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         .and_then(slop_phrase_parts);
     if let (Some((words, slop)), Some(pattern)) = (&slop_rewrites, &ctx.body_pattern) {
         let and_form = words.join(" ");
+        // B-18: "either order" as one query. Offering just the reversed phrase
+        // sent a reader to a query whose own zero-result hint offered the
+        // original back; the OR form is not a whole-query phrase, so it
+        // starts no such loop.
         let reversed: Vec<&str> = words.iter().rev().map(String::as_str).collect();
-        let reversed = format!("\"{}\"~{slop}", reversed.join(" "));
+        let either = format!(
+            "\"{}\"~{slop} OR \"{}\"~{slop}",
+            words.join(" "),
+            reversed.join(" ")
+        );
         for (description, replacement) in [
             (
                 "Drop the order and distance -- match the words anywhere",
                 and_form,
             ),
-            (
-                "The slop is ordered -- try the words in reverse order",
-                reversed,
-            ),
+            ("The slop is ordered -- match either order", either),
         ] {
             let command = rebuild_find_with(ctx, &filters, None, |token| {
                 if token == pattern {

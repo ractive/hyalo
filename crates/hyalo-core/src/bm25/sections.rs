@@ -198,6 +198,15 @@ impl Pruner<'_> {
                     .collect();
                 Some(PrunedNode::Terms(ids))
             }
+            query::Node::Word(stems, literal) => {
+                let ids = self
+                    .corpus
+                    .word_terms(stems, literal)
+                    .into_iter()
+                    .map(|s| intern(&mut self.term_index, s))
+                    .collect();
+                Some(PrunedNode::Terms(ids))
+            }
             query::Node::Prefix(candidates) => {
                 // A prefix that expands to no dictionary term stays an
                 // always-false `Terms([])` leaf rather than relaxing an AND.

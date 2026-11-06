@@ -9,44 +9,78 @@
 //!    files — a direct `SnapshotIndex::save_to` call, or a reference to the
 //!    deleted `mutation::{update_index_entry, add_index_entry,
 //!    rename_index_entry, save_index_if_dirty}` /
-//!    `patch_index_for_modified_files` helpers; or
-//! 2. a mutating command module (the fixed list below) stops referencing
-//!    `MutationJournal`, i.e. someone adds/rewrites a write path that
-//!    bypasses the journal.
+//!    `patch_index_for_modified_files` helpers;
+//! 2. a command module classified as mutating stops naming `MutationJournal`
+//!    in its production code (a comment or a test does not count), i.e.
+//!    someone adds/rewrites a write path that bypasses the journal; or
+//! 3. a module under `commands/` is in no class at all (L-10): every module
+//!    must say whether it writes notes, so a new writer cannot start life
+//!    outside the guard, and a class entry naming a vanished module is stale.
 //!
 //! The sanctioned set for direct persistence is: the journal itself,
-//! `create_index` / `drop_index` (whole-index build/drop commands), and
-//! `run.rs` (initial snapshot load/save plumbing outside command dispatch).
+//! `create_index` / `drop_index` (whole-index build/drop commands). `run.rs` is
+//! not listed: it holds no forbidden token, and an exemption that matches
+//! nothing today would silently excuse a future bypass.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use syn::visit::{self, Visit};
 
 use crate::workspace::workspace_root;
 
-/// Command modules that mutate files and therefore must go through the
-/// journal. New mutating commands: add the module here — the gate then
-/// enforces the journal reference.
+/// Command modules that write notes and therefore must go through the
+/// journal.
 const MUTATING_MODULES: &[&str] = &[
-    "commands/set.rs",
-    "commands/remove.rs",
-    "commands/append.rs",
-    "commands/new.rs",
-    "commands/mv.rs",
-    "commands/tasks.rs",
-    "commands/properties.rs",
-    "commands/tags.rs",
-    "commands/links.rs",
-    "commands/lint.rs",
+    "append",
+    "apply",
+    "changelog",
+    "links",
+    "lint",
+    "madr",
+    "managed_region",
+    "mv",
+    "new",
+    "okf",
+    "properties",
+    "remove",
+    "set",
+    "tags",
+    "tasks",
+    "types",
+];
+
+/// Modules that never write a note: queries, output-shaping helpers
+/// (`mutation` names the journal only in a doc link), and commands that only
+/// touch `.hyalo.toml` or scaffold files outside the index (no entry to
+/// maintain).
+const NON_MUTATING_MODULES: &[&str] = &[
+    "backlinks",
+    "config",
+    "config_write",
+    "files_from",
+    "find",
+    "init",
+    "inputs",
+    "lint_rules",
+    "mutation",
+    "profiles",
+    "read",
+    "summary",
+    "terms",
+    "views",
 ];
 
 /// Files allowed to persist the snapshot index directly (or wrap the
-/// journal's flush for legacy call shapes).
+/// journal's flush for legacy call shapes), relative to `crates/hyalo-cli/src`.
 const SANCTIONED: &[&str] = &[
     "commands/journal.rs",
     "commands/create_index.rs",
     "commands/drop_index.rs",
-    "src/run.rs",
 ];
+
+/// Modules that persist the index themselves and are checked by the token scan
+/// rather than the journal reference.
+const PERSISTENCE_MODULES: &[&str] = &["create_index", "drop_index", "journal"];
 
 /// Pre-journal helper names whose reappearance outside `mutation.rs`
 /// (post-deletion: anywhere) signals a bypass of the journal.
@@ -106,47 +140,35 @@ pub fn run() -> Result<bool> {
         }
     }
 
-    // 2. Mutating modules must reference the journal.
+    // 2. Every module under `commands/` is classified, and a mutating one
+    //    names the journal in production code.
     //
-    // A module is its file *plus* any same-named submodule directory: iteration
-    // 247 split `commands/lint.rs` into `commands/lint.rs` + `commands/lint/`,
-    // which moved the journal reference out of the file this gate was reading
-    // and made a passing gate fail on a pure file move. Reading the whole
-    // module keeps the guard about the module's behaviour rather than about
-    // which file inside it happens to hold the call.
+    // A module is its file *plus* every file of a same-named submodule
+    // directory: iteration 247 split `commands/lint.rs` into `commands/lint.rs`
+    // + `commands/lint/`, which moved the journal reference out of the file this
+    // gate was reading. Reading the whole module keeps the guard about the
+    // module's behaviour rather than about which file inside it holds the call.
+    let commands = cli_src.join("commands");
+    let present = module_names(&commands)?;
+    check_classification(&present, &mut failures);
     for module in MUTATING_MODULES {
-        let path = cli_src.join(module);
-        let mut content = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let submodule_dir = path.with_extension("");
-        if submodule_dir.is_dir() {
-            let mut entries: Vec<_> = std::fs::read_dir(&submodule_dir)
-                .with_context(|| format!("reading {}", submodule_dir.display()))?
-                .filter_map(std::result::Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "rs"))
-                .collect();
-            entries.sort();
-            for entry in entries {
-                content.push_str(
-                    &std::fs::read_to_string(&entry)
-                        .with_context(|| format!("reading {}", entry.display()))?,
-                );
-            }
+        if !present.iter().any(|name| name == module) {
+            continue;
         }
-        if !content.contains("MutationJournal") {
+        if !module_names_journal(&commands, module)? {
             failures.push(format!(
-                "{module}: mutating command does not reference MutationJournal \
-                 — every file/link write must record its index maintenance \
-                 through the journal"
+                "commands/{module}: mutating command does not reference MutationJournal \
+                 in production code — every file/link write must record its index \
+                 maintenance through the journal"
             ));
         }
     }
 
     if failures.is_empty() {
         println!(
-            "mutation-journal guard: OK ({} mutating modules checked)",
-            MUTATING_MODULES.len()
+            "mutation-journal guard: OK ({} mutating modules checked, {} modules classified)",
+            MUTATING_MODULES.len(),
+            present.len()
         );
         Ok(true)
     } else {
@@ -159,5 +181,186 @@ pub fn run() -> Result<bool> {
             failures.len()
         );
         Ok(false)
+    }
+}
+
+/// Module names under `commands/`: each `*.rs` file stem and each directory,
+/// once (`lint.rs` and `lint/` are the one module `lint`).
+fn module_names(commands: &Path) -> Result<Vec<String>> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in
+        std::fs::read_dir(commands).with_context(|| format!("reading {}", commands.display()))?
+    {
+        let path = entry?.path();
+        let name = if path.is_dir() {
+            path.file_name()
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            path.file_stem()
+        } else {
+            None
+        };
+        if let Some(name) = name.and_then(|n| n.to_str())
+            && name != "mod"
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Failures for modules in no class, in two classes, or classified but gone.
+fn check_classification(present: &[String], failures: &mut Vec<String>) {
+    let classes = [MUTATING_MODULES, NON_MUTATING_MODULES, PERSISTENCE_MODULES];
+    for name in present {
+        let count = classes
+            .iter()
+            .filter(|c| c.contains(&name.as_str()))
+            .count();
+        if count == 0 {
+            failures.push(format!(
+                "commands/{name}: not classified — add it to MUTATING_MODULES (writes notes) \
+                 or NON_MUTATING_MODULES in crates/xtask/src/mutation_journal.rs"
+            ));
+        } else if count > 1 {
+            failures.push(format!("commands/{name}: listed in more than one class"));
+        }
+    }
+    for class in classes {
+        for name in class {
+            if !present.iter().any(|p| p == name) {
+                failures.push(format!(
+                    "commands/{name}: classified in mutation_journal.rs but no such module"
+                ));
+            }
+        }
+    }
+}
+
+/// Whether the production code of module `name` (its file and, recursively,
+/// its same-named directory) names `MutationJournal`.
+fn module_names_journal(commands: &Path, name: &str) -> Result<bool> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let file = commands.join(format!("{name}.rs"));
+    if file.is_file() {
+        files.push(file);
+    }
+    let dir = commands.join(name);
+    if dir.is_dir() {
+        let mut stack = vec![dir];
+        while let Some(dir) = stack.pop() {
+            for entry in
+                std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
+            {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    for path in files {
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if source_names_journal(&source).with_context(|| format!("parsing {}", path.display()))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `true` when non-test code names the identifier `MutationJournal`.
+fn source_names_journal(source: &str) -> Result<bool> {
+    struct Finder(bool);
+    impl<'ast> Visit<'ast> for Finder {
+        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+            if !crate::typed_output::test_only(&item.attrs) {
+                visit::visit_item_mod(self, item);
+            }
+        }
+        fn visit_item(&mut self, item: &'ast syn::Item) {
+            let attrs = match item {
+                syn::Item::Use(v) => &v.attrs,
+                syn::Item::Impl(v) => &v.attrs,
+                syn::Item::Const(v) => &v.attrs,
+                syn::Item::Static(v) => &v.attrs,
+                syn::Item::Struct(v) => &v.attrs,
+                syn::Item::Trait(v) => &v.attrs,
+                syn::Item::Type(v) => &v.attrs,
+                _ => return visit::visit_item(self, item),
+            };
+            if !crate::typed_output::test_only(attrs) {
+                visit::visit_item(self, item);
+            }
+        }
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            if !crate::typed_output::test_only(&item.attrs) {
+                visit::visit_impl_item_fn(self, item);
+            }
+        }
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            if !crate::typed_output::test_only(&item.attrs) {
+                visit::visit_item_fn(self, item);
+            }
+        }
+        fn visit_ident(&mut self, ident: &'ast proc_macro2::Ident) {
+            if ident == "MutationJournal" {
+                self.0 = true;
+            }
+        }
+    }
+    let file = syn::parse_file(source)?;
+    let mut finder = Finder(false);
+    finder.visit_file(&file);
+    Ok(finder.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_comment_or_a_test_does_not_count_as_a_journal_reference() {
+        assert!(!source_names_journal("// MutationJournal\nfn f() {}").unwrap());
+        assert!(!source_names_journal("/// MutationJournal\nfn f() {}").unwrap());
+        assert!(!source_names_journal("#[cfg(test)]\nmod t { use x::MutationJournal; }").unwrap());
+        assert!(!source_names_journal("#[cfg(test)]\nuse x::MutationJournal;\nfn f() {}").unwrap());
+        assert!(
+            !source_names_journal(
+                "struct S;\nimpl S {\n#[cfg(test)]\nfn t(j: &MutationJournal) {}\n}"
+            )
+            .unwrap()
+        );
+        assert!(
+            !source_names_journal("#[cfg(test)]\nimpl S { fn t(j: &MutationJournal) {} }").unwrap()
+        );
+        assert!(source_names_journal("use x::MutationJournal;\nfn f() {}").unwrap());
+        assert!(source_names_journal("fn f(j: &mut MutationJournal) {}").unwrap());
+    }
+
+    #[test]
+    fn unclassified_doubly_classified_and_vanished_modules_fail() {
+        let mut failures = Vec::new();
+        let present: Vec<String> = MUTATING_MODULES
+            .iter()
+            .chain(NON_MUTATING_MODULES)
+            .chain(PERSISTENCE_MODULES)
+            .map(|s| (*s).to_owned())
+            .collect();
+        check_classification(&present, &mut failures);
+        assert!(failures.is_empty(), "{failures:?}");
+
+        let mut with_new = present.clone();
+        with_new.push("brand_new".to_owned());
+        check_classification(&with_new, &mut failures);
+        assert_eq!(failures.len(), 1);
+
+        failures.clear();
+        let without_set: Vec<String> = present.into_iter().filter(|n| n != "set").collect();
+        check_classification(&without_set, &mut failures);
+        assert_eq!(failures.len(), 1);
     }
 }

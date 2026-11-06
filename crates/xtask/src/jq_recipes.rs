@@ -27,18 +27,64 @@ use std::process::Command;
 use crate::artifact::{ArtifactArgs, build_hyalo};
 use crate::workspace::workspace_root;
 
-/// Subcommands that write. A recipe naming one is run with `--dry-run`.
-const MUTATING_SUBCOMMANDS: &[&str] = &[
-    "set",
-    "remove",
-    "append",
-    "mv",
-    "new",
-    "init",
-    "deinit",
-    "create-index",
-    "drop-index",
-];
+/// Global flags that consume the next argument, so the subcommand can be
+/// found after them (`hyalo --dir kb set …`).
+const GLOBAL_VALUE_FLAGS: &[&str] = &["--dir", "--format", "--index-file", "--jq", "--site-prefix"];
+
+/// What running a documented recipe against the repository can do (L-17).
+#[derive(Debug, PartialEq, Eq)]
+enum Safety {
+    /// Reads only, whatever its flags.
+    ReadOnly,
+    /// May write, but carries `--dry-run`, so running it previews.
+    DryRun,
+    /// Anything else: an unknown or writing subcommand without `--dry-run`.
+    /// Paste-and-run would modify the vault, and so would this gate.
+    Unsafe,
+}
+
+/// Classify a recipe by allow-list: a recipe is run only when its subcommand
+/// is known to read, or it carries `--dry-run`. The old deny-list (`set`,
+/// `mv`, …) missed `tags rename`, `properties rename`, `task toggle`,
+/// `types set`, `views set`, `lint-rules set` and `lint --fix`, and gave up
+/// when a global flag preceded the subcommand.
+fn recipe_safety(argv: &[String]) -> Safety {
+    if argv.iter().any(|a| a == "--dry-run") {
+        return Safety::DryRun;
+    }
+    let mut positional = Vec::new();
+    let mut tokens = argv.iter().skip(1);
+    while let Some(token) = tokens.next() {
+        if GLOBAL_VALUE_FLAGS.contains(&token.as_str()) {
+            tokens.next();
+        } else if !token.starts_with('-') {
+            positional.push(token.as_str());
+        }
+    }
+    let flag = |name: &str| argv.iter().any(|a| a == name);
+    let reads = match positional.as_slice() {
+        [
+            "find" | "summary" | "backlinks" | "read" | "config" | "terms",
+            ..,
+        ] => true,
+        ["properties" | "tags"] | ["properties" | "tags", "summary"] => true,
+        ["lint"] | ["lint", _] => !flag("--fix"),
+        ["types" | "views" | "lint-rules", "list" | "show" | "run"] => true,
+        ["types" | "views" | "lint-rules", "list" | "show" | "run", _] => true,
+        ["task", "read", ..] => true,
+        // Preview unless `--apply`, which fails the gate outright.
+        ["links", "fix" | "auto"]
+        | ["okf", "index"]
+        | ["madr", "toc"]
+        | ["changelog", "release" | "add"] => true,
+        _ => false,
+    };
+    if reads && !flag("--fix") && !flag("--apply") {
+        Safety::ReadOnly
+    } else {
+        Safety::Unsafe
+    }
+}
 
 /// Push every `*.md` file directly inside `dir` (not recursive).
 fn push_markdown_in(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -290,14 +336,6 @@ fn reads_hints_under_jq(argv: &[String]) -> Option<&str> {
     reads_key.then_some(filter)
 }
 
-/// The first token after `hyalo` that is not a flag or a flag value — the
-/// subcommand the recipe invokes.
-fn subcommand_of(argv: &[String]) -> Option<&str> {
-    argv.get(1)
-        .map(String::as_str)
-        .filter(|t| !t.starts_with('-'))
-}
-
 pub fn run(args: &ArtifactArgs) -> Result<bool> {
     let root = workspace_root()?;
     let artifact = build_hyalo(&root, args, true)?;
@@ -351,13 +389,12 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
                 continue;
             }
             let args: Vec<String> = argv[1..].to_vec();
-            if subcommand_of(&argv).is_some_and(|s| MUTATING_SUBCOMMANDS.contains(&s))
-                && !args.iter().any(|a| a == "--dry-run")
-            {
+            if recipe_safety(&argv) == Safety::Unsafe {
                 failures.push(format!(
-                    "{label}: a documented `{}` recipe has no --dry-run — a reader who pastes it \
-                     writes to their vault. Put --dry-run in the shipped text:\n    {recipe}",
-                    subcommand_of(&argv).unwrap_or("?")
+                    "{label}: a documented recipe is not known to be read-only and has no \
+                     --dry-run — a reader who pastes it may write to their vault. Put \
+                     --dry-run in the shipped text, or add its read-only subcommand to \
+                     recipe_safety in crates/xtask/src/jq_recipes.rs:\n    {recipe}"
                 ));
                 continue;
             }
@@ -831,12 +868,40 @@ mod tests {
     }
 
     #[test]
-    fn subcommand_skips_leading_flags() {
+    fn recipes_are_classified_by_allow_list() {
+        let safety = |cmd: &str| recipe_safety(&split_argv(cmd));
+        for read in [
+            "hyalo find --jq '.'",
+            "hyalo --dir kb find --jq '.'",
+            "hyalo --format json --dir kb summary",
+            "hyalo tags --jq '.'",
+            "hyalo lint --jq '.'",
+            "hyalo types list --jq '.'",
+            "hyalo task read a.md --jq '.'",
+            "hyalo okf index --format json --jq '.results.changed'",
+            "hyalo madr toc --jq '.results.dry_run'",
+            "hyalo links fix --jq '.'",
+        ] {
+            assert_eq!(safety(read), Safety::ReadOnly, "{read}");
+        }
+        for write in [
+            "hyalo set a.md --property k=1 --jq '.'",
+            "hyalo --dir kb set a.md --property k=1 --jq '.'",
+            "hyalo tags rename a b --jq '.'",
+            "hyalo properties rename --from a --to b",
+            "hyalo task toggle a.md --all",
+            "hyalo types set t --required title",
+            "hyalo views set v --property a=b",
+            "hyalo lint-rules set MD013 --enabled false",
+            "hyalo lint --fix --jq '.'",
+            "hyalo frobnicate --jq '.'",
+        ] {
+            assert_eq!(safety(write), Safety::Unsafe, "{write}");
+        }
         assert_eq!(
-            subcommand_of(&split_argv("hyalo set a.md --jq '.'")),
-            Some("set")
+            safety("hyalo tags rename a b --dry-run --jq '.'"),
+            Safety::DryRun
         );
-        assert_eq!(subcommand_of(&split_argv("hyalo --dir kb find")), None);
     }
 
     #[test]

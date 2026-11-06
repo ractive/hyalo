@@ -320,7 +320,9 @@ pub fn lint_file_with_fix(
         let mut mutable = properties.clone();
         let actions = apply_fixes(rel_path, &mut mutable, schema);
         if matches!(fix, FixMode::Apply) && !actions.is_empty() {
-            let source = captured.take().expect("apply captured source");
+            let source = captured
+                .take()
+                .context("apply mode captures its source before parsing")?;
             let replacement = render_frontmatter(&mut source.reader()?, full_path, &mutable)?;
             let mut session = WriteSession::new(Durability::PerFile);
             source

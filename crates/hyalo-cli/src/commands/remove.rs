@@ -367,8 +367,7 @@ pub fn remove(
             scanned,
             dry_run,
         };
-        results
-            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+        results.push(mutation::result_value(&result)?);
     }
 
     // Build tag results
@@ -388,8 +387,7 @@ pub fn remove(
             scanned,
             dry_run,
         };
-        results
-            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+        results.push(mutation::result_value(&result)?);
     }
 
     let output = mutation::unwrap_single_result(results);

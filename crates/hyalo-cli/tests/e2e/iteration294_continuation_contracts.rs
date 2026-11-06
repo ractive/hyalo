@@ -288,7 +288,7 @@ fn links_fix_shell_hints_preserve_ordinary_and_fuzzy_scope() {
         ],
     );
     let json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
-    let apply = hint_command(&json, "Apply 1 fixes");
+    let apply = hint_command(&json, "Apply 1 fix");
     assert!(apply.contains("links fix --apply"), "{apply}");
     assert!(!apply.contains("--apply-fuzzy"), "{apply}");
     assert!(apply.contains("--expand-short-form"), "{apply}");

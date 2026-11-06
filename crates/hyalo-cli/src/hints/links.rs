@@ -60,7 +60,10 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
     if is_dry_run && applicable > 0 {
         hints.push(links_fix_apply_hint(
             ctx,
-            format!("Apply {applicable} fixes"),
+            format!(
+                "Apply {applicable} fix{}",
+                if applicable == 1 { "" } else { "es" }
+            ),
             None,
         ));
     }
@@ -238,7 +241,10 @@ pub(super) fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) 
     if is_dry_run && total > 0 {
         if let Some(super::spec::ResolvedHintSpec::LinksAuto(spec)) = &ctx.resolved {
             hints.push(Hint::from_builder(
-                format!("Apply {total} auto-links"),
+                format!(
+                    "Apply {total} auto-link{}",
+                    if total == 1 { "" } else { "s" }
+                ),
                 spec.apply(ctx),
             ));
         } else {
@@ -262,7 +268,10 @@ pub(super) fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) 
                 parts.push(format!("--exclude-title {}", shell_quote(et)));
             }
             hints.push(Hint::new(
-                format!("Apply {total} auto-links"),
+                format!(
+                    "Apply {total} auto-link{}",
+                    if total == 1 { "" } else { "s" }
+                ),
                 parts.join(" "),
             ));
         }

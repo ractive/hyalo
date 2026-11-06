@@ -499,10 +499,11 @@ pub fn tokenize_document_text<'t>(
     builder.finish(tags)
 }
 
+#[cfg(test)]
 /// Body-relative (0-based) line indices of an outline's headings, given the
 /// file line (1-based) of the first body line.
 #[must_use]
-pub fn heading_body_lines(
+pub(crate) fn heading_body_lines(
     sections: &[crate::types::OutlineSection],
     first_body_line: usize,
 ) -> Vec<usize> {

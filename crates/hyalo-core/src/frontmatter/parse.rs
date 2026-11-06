@@ -9,7 +9,10 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::splice::{FallbackReason, SpliceOutcome, rename_key_in_place, splice_frontmatter};
+use super::splice::{
+    FallbackReason, SpliceOutcome, rename_key_in_place, splice_frontmatter,
+    splice_frontmatter_noted,
+};
 use super::{FrontmatterError, MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
 /// Convenience macro: return a [`FrontmatterError`] wrapped in `anyhow::Error`.
@@ -1117,17 +1120,17 @@ impl Document {
 
     /// Get a property value by name.
     #[must_use]
-    pub fn get_property(&self, name: &str) -> Option<&Value> {
+    pub(crate) fn get_property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
     }
 
     /// Set a property value.
-    pub fn set_property(&mut self, name: String, value: Value) {
+    pub(crate) fn set_property(&mut self, name: String, value: Value) {
         self.properties.insert(name, value);
     }
 
     /// Remove a property, returning the old value if it existed.
-    pub fn remove_property(&mut self, name: &str) -> Option<Value> {
+    pub(crate) fn remove_property(&mut self, name: &str) -> Option<Value> {
         self.properties.shift_remove(name)
     }
 }
@@ -1498,6 +1501,7 @@ fn render_frontmatter_impl(
     // The YAML block to write, or `None` when the file must end up with no
     // frontmatter at all (an empty property map).
     let mut fallback_warning = None;
+    let mut splice_notes: Vec<String> = Vec::new();
     let yaml_out: Option<String> = match op {
         // A-8: removing the last key leaves the block's own comments behind;
         // delete the frontmatter only when nothing but blank lines is left.
@@ -1514,10 +1518,9 @@ fn render_frontmatter_impl(
             // not change byte-for-byte and serialize only what actually
             // changed. Falls back to a full re-serialization — with a warning —
             // when the original block cannot be mapped to per-key line spans.
-            let spliced = match original_yaml
-                .as_deref()
-                .map(|orig| splice_frontmatter(orig, props, compact_list_indent))
-            {
+            let spliced = match original_yaml.as_deref().map(|orig| {
+                splice_frontmatter_noted(orig, props, compact_list_indent, &mut splice_notes)
+            }) {
                 Some(SpliceOutcome::Spliced(yaml)) => Some(yaml),
                 Some(SpliceOutcome::Fallback(reason)) => {
                     fallback_warning = Some(reason);
@@ -1614,6 +1617,9 @@ fn render_frontmatter_impl(
         .with_context(|| format!("rendered document {} is invalid", path.display()))?;
     if let Some(reason) = fallback_warning {
         warn_full_frontmatter_rewrite(path, reason);
+    }
+    for note in &splice_notes {
+        crate::warn::warn(format!("{}: {note}", path.display()));
     }
 
     Ok(Some(out))

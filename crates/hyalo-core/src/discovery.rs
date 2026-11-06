@@ -127,7 +127,7 @@ pub fn scan_exclude() -> Option<&'static ScanExclude> {
 
 /// Whether the vault-relative path `rel` is dropped by `[scan] exclude`.
 #[must_use]
-pub fn is_scan_excluded(rel: &str) -> bool {
+pub(crate) fn is_scan_excluded(rel: &str) -> bool {
     scan_exclude().is_some_and(|exc| exc.is_excluded(rel))
 }
 
@@ -144,7 +144,7 @@ pub fn scan_exclude_patterns() -> &'static [String] {
 
 /// The `[scan] exclude` glob that drops `rel`, if any.
 #[must_use]
-pub fn scan_exclude_glob(rel: &str) -> Option<&'static str> {
+pub(crate) fn scan_exclude_glob(rel: &str) -> Option<&'static str> {
     scan_exclude().and_then(|exc| exc.matching_glob(rel))
 }
 
@@ -166,11 +166,6 @@ pub fn scan_excluded_count() -> usize {
 /// happened".
 pub fn note_scan_excluded(dropped: usize) {
     EXCLUDED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Reset the excluded counter. **Tests only.**
-pub fn reset_scan_excluded_count() {
-    EXCLUDED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// How many `.md` files the last completed vault walk dropped because of
@@ -200,11 +195,6 @@ pub fn gitignore_dropped_count() -> usize {
 /// "how many drops happened".
 pub fn note_gitignore_dropped(dropped: usize) {
     GITIGNORE_DROPPED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Reset the gitignore-dropped counter. **Tests only.**
-pub fn reset_gitignore_dropped_count() {
-    GITIGNORE_DROPPED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Whether `[scan] include` opens the hidden vault-relative directory `rel`
@@ -1052,7 +1042,7 @@ pub fn discover_attachments(dir: &Path) -> Result<Vec<String>> {
 /// Returns `None` for any target without a non-`.md` extension, so callers can
 /// use it as a pure fallback after their normal resolution attempt.
 #[must_use]
-pub fn resolve_attachment_from_source(
+pub(crate) fn resolve_attachment_from_source(
     canonical_dir: &Path,
     source_rel: &str,
     kind: crate::links::LinkKind,
