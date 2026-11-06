@@ -11,8 +11,9 @@ related: ["[[backlog/done/serde-saphyr-2-1-0-is-yanked]]", "[[decision-log]]"]
 
 # Iteration 325: move to serde-saphyr 2.1.1
 
-2.1.0 was yanked upstream on 2026-11-05, so a fresh resolve fails and `cargo install
-hyalo-cli` without `--locked` breaks. 2.1.1 is on crates.io and not yanked. See
+2.1.0 was yanked upstream on 2026-11-05. While it was the newest version, a fresh resolve of
+unreleased main failed (from the yank until 2.1.1 appeared), which would have blocked the
+next release. Published versions were never affected. 2.1.1 is on crates.io and not yanked. See
 [[backlog/done/serde-saphyr-2-1-0-is-yanked]], DEC-350, DEC-364 and DEC-375.
 
 ## Tasks

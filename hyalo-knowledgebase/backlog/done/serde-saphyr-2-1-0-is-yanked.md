@@ -15,9 +15,10 @@ Upstream yanked serde-saphyr 2.1.0 on 2026-11-05 for an empty-document regressio
 ends at the yanked 2.1.0. Downgrading to 2.0.0 is not an option: it fails the
 `iteration310_yaml_parser` and `index_incremental` e2e tests (`nuLL` and `tRUE` spellings).
 
-This is a **release blocker**. A fresh resolve of `serde-saphyr = "^2.1.0"` fails, so
-`cargo install hyalo-cli` without `--locked` fails until 2.1.1 reaches crates.io. The
-workspace builds today only because `Cargo.lock` and `fuzz/Cargo.lock` still pin 2.1.0.
+This was a release blocker for unreleased main. While 2.1.0 was the newest version, a fresh
+resolve of `serde-saphyr = "^2.1.0"` failed, from the yank until 2.1.1 appeared, and would have
+blocked the next release. Published versions were never affected. The workspace built only
+because `Cargo.lock` and `fuzz/Cargo.lock` still pinned 2.1.0.
 
 ## Plan
 

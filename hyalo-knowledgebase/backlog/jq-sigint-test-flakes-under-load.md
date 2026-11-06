@@ -9,16 +9,21 @@ origin: "iter-324 gate runs, 2026-11-05"
 
 ## Problem
 
-`jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects` expects
-"cancelled" on stderr after a fixed delay between spawning the worker and sending
-SIGINT/SIGTERM. Under load the signal can arrive before the handler is installed, or
-after the append already finished, so the message never appears and the test fails.
+`jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects` failed in loaded local
+gate runs during iterations 324 and 325 ("cancelled" missing from stderr) and passed when run
+alone. The failing stderr was not captured, so the cause is not established.
 
-It failed in three loaded local gate runs during iteration 324, and passed when run alone
-and on an otherwise idle machine. CI has not shown it.
+Two leads, from reading the code and from a reviewer's run on `target/release/hyalo`:
+
+- "cancelled" went missing when the signal arrived after the 3 s limit.
+- "cancelled" went missing when SIGINT was inherited as ignored (exit 2, SIGXCPU cause). A
+  background or `nohup` gate run inherits an ignored SIGINT, and DEC-369 runs the filter without
+  its handler in that case, so the trigger may be how the gates were launched rather than load.
+
+Both are untested against the real failures.
 
 ## Plan
 
-- [ ] Replace the fixed delay with a readiness signal (the handler installed, or the worker blocked on a known point) before the signal is sent
-- [ ] Make the test independent of whether the append finished before the signal arrived, or hold the append open until the signal has been delivered
-- [ ] Run the test in a loop under CPU load to confirm it no longer flakes
+- [ ] Capture the failing stderr first
+- [ ] Check whether the failures came from runs with SIGINT ignored
+- [ ] Make the test reset an inherited ignored SIGINT and keep the signal inside the 3 s limit, as the evidence supports
