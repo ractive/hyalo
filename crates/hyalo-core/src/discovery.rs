@@ -3282,6 +3282,12 @@ impl crate::scanner::FileVisitor for AliasVisitor {
         // Nothing below the frontmatter matters, so the body is never read.
         crate::scanner::ScanAction::Stop
     }
+
+    fn needs_body(&self) -> bool {
+        // Without this the scanner reads the whole file up front and only
+        // then lets `Stop` ignore it.
+        false
+    }
 }
 
 /// Read one file's declared frontmatter `aliases:` without reading its body.
@@ -6277,5 +6283,41 @@ mod tests {
         assert!(is_case_only_variant("SUB/note?x=1#H", "sub/Note.md"));
         assert!(is_case_only_variant("Sub/My%20Note", "sub/my note.md"));
         assert!(!is_case_only_variant("note?x=1", "sub/note.md"));
+    }
+
+    #[test]
+    fn read_aliases_reads_the_frontmatter_alone() {
+        let long_value = "x".repeat(40 * 1024);
+        let big_frontmatter = format!("---\nnotes: {long_value}\naliases: [Far]\n---\nbody\n");
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("no frontmatter", "# T\nbody\n", &[]),
+            ("a list", "---\naliases: [A, B]\n---\nbody\n", &["A", "B"]),
+            ("a scalar", "---\naliases: Solo\n---\nbody\n", &["Solo"]),
+            (
+                "a block list",
+                "---\naliases:\n  - One\n  - Two\n---\n",
+                &["One", "Two"],
+            ),
+            ("CRLF", "---\r\naliases: [C]\r\n---\r\nbody\r\n", &["C"]),
+            (
+                "a BOM",
+                "\u{feff}---\naliases: [Bom]\n---\nbody\n",
+                &["Bom"],
+            ),
+            (
+                "a body mentioning it",
+                "---\ntitle: t\n---\naliases: [Body]\n",
+                &[],
+            ),
+            ("a thematic break", "text\n---\naliases: [Late]\n---\n", &[]),
+            ("an unclosed block", "---\naliases: [Open]\nbody\n", &[]),
+            ("a block past 16 KiB", big_frontmatter.as_str(), &["Far"]),
+        ];
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, content, expected) in cases {
+            let path = tmp.path().join("n.md");
+            std::fs::write(&path, content).unwrap();
+            assert_eq!(read_aliases(&path), *expected, "{name}");
+        }
     }
 }

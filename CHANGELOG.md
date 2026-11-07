@@ -193,6 +193,7 @@ and this project adheres to
   (DEC-381).
 - `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
 - Move to serde-saphyr 2.1.1; main moves off the yanked 2.1.0 (published releases were never affected). Parsed frontmatter and the write path are byte-identical to 2.1.0 on every corpus and edge case checked, so the snapshot format is unchanged. `cargo deny` now fails on a yanked crate.
+- Faster, with identical answers: `--index` resolves the link graph on first read instead of twice per load, and a named read (`backlinks`, `read`, `find --file`, `lint FILE`) leaves the entry, the graph and the search postings alone when the note has not changed (`tags --index` on MDN 3.11M to 0.95M allocations, `backlinks --index` 6.81M to 2.02M, DEC-406). `lint` parses markdown once per note instead of once per rule and hands MD034 only the lines that hold a URL scheme (MDN 331.89M to 34.40M allocations, DEC-407). The alias pre-pass no longer reads note bodies, and `create-index` and disk search allocate 2.3M fewer terms. No format change.
 
 ### Fixed
 

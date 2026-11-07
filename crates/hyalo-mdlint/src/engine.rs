@@ -786,12 +786,26 @@ impl HyaloLintEngine {
             let doc = Document::new(body_content.to_string(), PathBuf::from(rel_path))
                 .with_context(|| format!("creating Document for {rel_path}"))?;
 
+            // `Rule::check` re-parses comrak per AST rule; parse once and hand
+            // every rule the same tree (as upstream's registry does). Rules only
+            // read it. A single enabled rule parses for itself, so a one-rule
+            // run never pays for a tree a non-AST rule would ignore.
+            let arena = comrak::Arena::new();
+            let ast = (enabled_stock_ids.len() > 1).then(|| doc.parse_ast(&arena));
+
             for rule_id in &enabled_stock_ids {
                 let Some(rule) = self.inner.registry().get_rule(rule_id) else {
                     continue;
                 };
+                let pruned;
+                let rule_doc = if *rule_id == "MD034" {
+                    pruned = md034_view(&doc);
+                    &pruned
+                } else {
+                    &doc
+                };
                 let violations = rule
-                    .check(&doc)
+                    .check_with_ast(rule_doc, ast)
                     .with_context(|| format!("running {rule_id} on {rel_path}"))?;
 
                 let sev = effective_severity(rule_id);
@@ -1241,6 +1255,35 @@ fn is_call_or_index_false_positive(message: &str, line: Option<&String>, column:
 /// pre-conversion assumption for MD010 so a silent upstream fix breaks the
 /// test instead of double-converting unnoticed.
 const BYTE_COLUMN_RULE_IDS: &[&str] = &["MD010", "MD042", "MD052"];
+
+/// URL schemes upstream MD034 recognises, matched byte for byte.
+const MD034_SCHEMES: [&str; 4] = ["http://", "https://", "ftp://", "mailto:"];
+
+/// `doc` with every line MD034 cannot report on emptied.
+///
+/// MD034 only reports where one of [`MD034_SCHEMES`] starts, and it reads each
+/// line on its own (the code-block ranges come from the AST, not the lines), so
+/// a line holding none of them can never yield a violation. Emptying such a
+/// line keeps every line number and column on the others, and spares upstream
+/// the `Vec<char>` it builds per character of a line it will then skip.
+fn md034_view(doc: &Document) -> Document {
+    Document {
+        content: doc.content.clone(),
+        path: doc.path.clone(),
+        lines: doc
+            .lines
+            .iter()
+            .map(|line| {
+                if MD034_SCHEMES.iter().any(|scheme| line.contains(scheme)) {
+                    line.clone()
+                } else {
+                    String::new()
+                }
+            })
+            .collect(),
+        book_src_dir: doc.book_src_dir.clone(),
+    }
+}
 
 /// Convert a rule's 1-based **byte** column to a 1-based Unicode-scalar
 /// column, matching `lint`'s DEC-073 convention.
@@ -2569,5 +2612,100 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert!(lint_rule("a.getGamepads()[0]\n", "MD011").is_empty());
+    }
+
+    /// Bodies that exercise the default stock rules, the bare-URL rule most of all.
+    const SHARED_AST_BODIES: &[&str] = &[
+        "",
+        "# Title\n\nplain text without links\n",
+        "#Bad heading\n\n##  Two spaces\n\n### Skipped\n#### Level\n",
+        "# T\n\n* a\n+ b\n- c\n\n1. one\n3. three\n\n   * nested\n",
+        "# T\n\nbare https://example.com/a?b=c, then ftp://host/x and mailto:me@example.org.\n",
+        "# T\n\n<https://wrapped.example> [text](https://x.example) `https://code.example`\n",
+        "# T\n\n```\nhttps://in.fence.example\n```\n\nafter https://out.example\n",
+        "# T\n\n[ref]: https://ref.example\n\n[other]:http://other.example\n",
+        "# T\n\nHTTPS://UPPER.example http:/near.miss https:// httpss://x\n",
+        "# T\n\nàéî https://üñí.example/ü done\n\ttabbed line  \nlong https://a.example/{{ tpl }} end\n",
+        "# T\n\n| a | b |\n|---|---|\n| https://t.example | x |\n\n> quote https://q.example\n",
+        "Setext\n======\n\n<div>https://html.example</div>\n\n![img](a.png) *em* __strong__ _ x _\n",
+        "# T\n\nline with trailing spaces   \n\n\n\nthree blanks above\n```rust\nfn main() {}\n```\nno newline at end",
+    ];
+
+    #[test]
+    fn shared_ast_matches_a_fresh_parse_for_every_default_stock_rule() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let mut compared = 0;
+        for body in SHARED_AST_BODIES {
+            let doc = Document::new((*body).to_owned(), PathBuf::from("t.md")).unwrap();
+            let arena = comrak::Arena::new();
+            let ast = doc.parse_ast(&arena);
+            for entry in engine
+                .available_rules()
+                .iter()
+                .filter(|e| e.source != "hyalo-mdlint" && e.default_enabled)
+            {
+                let Some(rule) = engine.inner.registry().get_rule(&entry.id) else {
+                    continue;
+                };
+                compared += 1;
+                assert_eq!(
+                    rule.check_with_ast(&doc, Some(ast)).unwrap(),
+                    rule.check(&doc).unwrap(),
+                    "{} on {body:?}",
+                    entry.id
+                );
+            }
+        }
+        assert!(compared > 100, "only {compared} rule runs compared");
+    }
+
+    #[test]
+    fn md034_view_reports_exactly_what_the_full_document_does() {
+        use mdbook_lint_core::rule::Rule as _;
+        use mdbook_lint_rulesets::standard::md034::MD034;
+        for body in SHARED_AST_BODIES {
+            let doc = Document::new((*body).to_owned(), PathBuf::from("t.md")).unwrap();
+            let view = md034_view(&doc);
+            assert_eq!(view.lines.len(), doc.lines.len(), "{body:?}");
+            assert_eq!(
+                MD034.check(&view).unwrap(),
+                MD034.check(&doc).unwrap(),
+                "{body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lint_body_with_every_rule_equals_one_rule_at_a_time() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let config = LintConfig::default();
+        for body in SHARED_AST_BODIES {
+            let all = engine
+                .lint_body(body, "t.md", None, false, &config, &[])
+                .unwrap();
+            for entry in engine
+                .available_rules()
+                .iter()
+                .filter(|e| e.source != "hyalo-mdlint" && e.default_enabled)
+            {
+                let alone = engine
+                    .lint_body(
+                        body,
+                        "t.md",
+                        None,
+                        false,
+                        &config,
+                        std::slice::from_ref(&entry.id),
+                    )
+                    .unwrap();
+                let from_all: Vec<_> = all.iter().filter(|d| d.rule_id == entry.id).collect();
+                assert_eq!(
+                    format!("{from_all:?}"),
+                    format!("{:?}", alone.iter().collect::<Vec<_>>()),
+                    "{} on {body:?}",
+                    entry.id
+                );
+            }
+        }
     }
 }
