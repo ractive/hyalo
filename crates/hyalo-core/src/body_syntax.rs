@@ -42,6 +42,9 @@ pub struct BodySyntax {
     line_starts: Vec<usize>,
     html_comments: Vec<HtmlCommentSpan>,
     visible: String,
+    /// `visible` with the regions the reader does not parse blanked as well;
+    /// only built by [`BodySyntax::for_reader`].
+    reader: Option<String>,
     /// Per line: sits inside a block quote.
     quoted: Vec<bool>,
     /// Per line: how many list items enclose it.
@@ -82,7 +85,7 @@ impl BodySyntax {
     /// caller will rewrite or flag prose.
     #[must_use]
     pub fn new(body: &str) -> Self {
-        Self::build(body, false)
+        Self::build(body, false, false)
     }
 
     /// [`Self::new`] plus the [`ProtectedRegions`] of the body: raw HTML,
@@ -91,11 +94,38 @@ impl BodySyntax {
     /// `links auto` share (DEC-381).
     #[must_use]
     pub fn with_protected(body: &str) -> Self {
-        Self::build(body, true)
+        Self::build(body, true, false)
+    }
+
+    /// [`Self::new`] plus the reader view ([`Self::reader_line`]): the body
+    /// with the regions the reader does not parse blanked as well — raw HTML
+    /// blocks, `$$` math, HTML tags and the content of `<code>`, `<pre>` and
+    /// the other raw-text elements (DEC-402). It is the one view the link
+    /// inventory, `links fix`, `mv`, the heading outline, title promotion and
+    /// task scanning share, so a link the reader counts is exactly a link
+    /// the writers rewrite. [`Self::visible_line`] keeps the HTML, which the
+    /// explicit-anchor scan needs (DEC-353).
+    #[must_use]
+    pub fn for_reader(body: &str) -> Self {
+        let mut syntax = Self::build(body, true, true);
+        if let Some(protected) = syntax.protected.take() {
+            let mut bytes = syntax.visible.clone().into_bytes();
+            for range in protected.opaque_ranges() {
+                let end = range.end.min(bytes.len());
+                if let Some(span) = bytes.get_mut(range.start.min(end)..end) {
+                    for b in span.iter_mut().filter(|b| !matches!(**b, b'\n' | b'\r')) {
+                        *b = b' ';
+                    }
+                }
+            }
+            syntax.reader = Some(String::from_utf8(bytes).expect("masking preserves UTF-8"));
+            syntax.protected = Some(protected);
+        }
+        syntax
     }
 
     #[allow(clippy::too_many_lines)]
-    fn build(body: &str, protect: bool) -> Self {
+    fn build(body: &str, protect: bool, reader: bool) -> Self {
         let lines = physical_lines(body);
         let n = lines.len();
         let line_starts = lines.iter().map(|line| line.start).collect();
@@ -111,6 +141,7 @@ impl BodySyntax {
             line_starts,
             html_comments: Vec::new(),
             visible: body.to_owned(),
+            reader: None,
             quoted: vec![false; n],
             list_depth: vec![0; n],
             protected: None,
@@ -230,7 +261,12 @@ impl BodySyntax {
             }
             {
                 let fence_allowance = list_content_columns.last().map_or(3, |column| column + 3);
-                if let Some(fence) = fence_open_within(line, fence_allowance) {
+                // CommonMark: inside a raw HTML block a fence marker is HTML
+                // text. Only the reader honours that; lint keeps the overlay
+                // contract (`new` and `with_protected` agree on fences).
+                if !(reader && consumed)
+                    && let Some(fence) = fence_open_within(line, fence_allowance)
+                {
                     open_fence = Some((fence, i, fence_allowance));
                     if let Some(p) = prot.as_mut() {
                         p.end_block();
@@ -371,20 +407,29 @@ impl BodySyntax {
     }
     #[must_use]
     pub fn visible_line(&self, line: usize) -> Option<&str> {
+        self.line_of(&self.visible, line)
+    }
+    /// The line the reader parses: [`Self::visible_line`] with raw HTML and
+    /// `$$` math blanked when built by [`Self::for_reader`].
+    #[must_use]
+    pub fn reader_line(&self, line: usize) -> Option<&str> {
+        self.line_of(self.reader.as_deref().unwrap_or(&self.visible), line)
+    }
+    fn line_of<'a>(&self, text: &'a str, line: usize) -> Option<&'a str> {
         let index = line.checked_sub(1)?;
         let start = *self.line_starts.get(index)?;
         let mut end = self
             .line_starts
             .get(index + 1)
             .copied()
-            .unwrap_or(self.visible.len());
-        if self.visible.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\n') {
+            .unwrap_or(text.len());
+        if text.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\n') {
             end -= 1;
         }
-        if self.visible.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\r') {
+        if text.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\r') {
             end -= 1;
         }
-        self.visible.get(start..end)
+        text.get(start..end)
     }
     /// Whether a half-open body-byte range touches code or a wholly commented
     /// line. Autofix adapters use this after converting a rule's source span:
@@ -976,5 +1021,50 @@ x
         assert!(syntax.line_is_code(3));
         assert!(syntax.line_is_fence_delimiter(4));
         assert!(!syntax.line_is_code(5));
+    }
+
+    fn reader_lines(body: &str) -> Vec<String> {
+        let syntax = BodySyntax::for_reader(body);
+        (1..=body.lines().count())
+            .map(|n| syntax.reader_line(n).unwrap_or("").to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_reader_view_blanks_raw_html_blocks_and_math_and_keeps_the_rest() {
+        let body =
+            "<pre>\n# h [[a]]\n</pre>\n\n$$\n[[b]]\n$$\n\nx <code>[[c]]</code> y [[d]] $$[[e]]$$\n";
+        let lines = reader_lines(body);
+        assert!(lines[..3].iter().all(|l| l.trim().is_empty()), "{lines:?}");
+        assert!(lines[4..7].iter().all(|l| l.trim().is_empty()), "{lines:?}");
+        assert_eq!(lines[8].len(), body.lines().nth(8).unwrap().len());
+        assert!(lines[8].contains("[[d]]"));
+        assert!(!lines[8].contains("[[c]]") && !lines[8].contains("[[e]]"));
+    }
+
+    #[test]
+    fn a_div_ends_at_a_blank_line_but_a_pre_runs_to_its_closing_tag() {
+        let div = reader_lines("<div>\n[[a]]\n\n[[b]]\n\n</div>\n");
+        assert!(
+            div[1].trim().is_empty() && div[3].contains("[[b]]"),
+            "{div:?}"
+        );
+        let pre = reader_lines("<pre>\n[[a]]\n\n[[b]]\n</pre>\n");
+        assert!(pre.iter().all(|l| l.trim().is_empty()), "{pre:?}");
+    }
+
+    #[test]
+    fn the_reader_view_keeps_link_text_and_anchor_content_readable() {
+        let lines = reader_lines("<a href=\"u\">[[a]]</a> <span>[[b]]</span> $5 [[c]] $6\n");
+        assert!(
+            lines[0].contains("[[a]]") && lines[0].contains("[[b]]") && lines[0].contains("[[c]]")
+        );
+    }
+
+    #[test]
+    fn the_markup_view_keeps_the_html_the_reader_blanks() {
+        let syntax = BodySyntax::for_reader("<h2 id=\"x\">T</h2>\n");
+        assert!(syntax.visible_line(1).unwrap().contains("id=\"x\""));
+        assert_eq!(syntax.reader_line(1).unwrap().trim(), "");
     }
 }

@@ -921,11 +921,7 @@ struct PlanWriteResult {
 
 fn rewrite_durability(plan_count: usize) -> crate::rooted::Durability {
     // DEC-317/323: count rewrite plans, not the number of moved source notes.
-    if plan_count > 8 {
-        crate::rooted::Durability::BulkRewrite
-    } else {
-        crate::rooted::Durability::PerFile
-    }
+    crate::rooted::Durability::for_rewrites(plan_count)
 }
 
 fn write_plans_in_parallel(

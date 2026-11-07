@@ -408,7 +408,7 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
     // --- Phase 2: Body ---
     let mut body = BodyState::default();
 
-    let body_syntax = crate::body_syntax::BodySyntax::new(&text[frame.body_offset()..]);
+    let body_syntax = crate::body_syntax::BodySyntax::for_reader(&text[frame.body_offset()..]);
     if fm_lines > 0 {
         line_num = fm_lines;
     } else {
@@ -672,7 +672,8 @@ fn dispatch_body_line(
         }
         return;
     }
-    let cleaned = syntax.visible_line(syntax_line_number).unwrap_or(line);
+    let cleaned = syntax.reader_line(syntax_line_number).unwrap_or(line);
+    let markup = syntax.visible_line(syntax_line_number).unwrap_or(line);
     // C-5: line 1 of a note without frontmatter may open with a BOM, which is
     // not part of a `# Title` heading.
     let (line, cleaned) = if line_num == 1 {
@@ -683,6 +684,16 @@ fn dispatch_body_line(
     } else {
         (line, cleaned)
     };
+    let markup = if line_num == 1 {
+        markup.strip_prefix('\u{feff}').unwrap_or(markup)
+    } else {
+        markup
+    };
+    for (i, visitor) in visitors.iter_mut().enumerate() {
+        if active[i] && visitor.on_markup_line(markup, line_num) == ScanAction::Stop {
+            active[i] = false;
+        }
+    }
     for (i, visitor) in visitors.iter_mut().enumerate() {
         if active[i] && visitor.on_body_line(line, cleaned, line_num) == ScanAction::Stop {
             active[i] = false;

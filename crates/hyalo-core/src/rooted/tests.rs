@@ -47,6 +47,26 @@ fn prepare_and_persist_failures_keep_original_and_finalize_retains_effect() {
 }
 
 #[test]
+fn a_bulk_rewrite_phase_skips_the_per_file_flush_and_a_small_one_keeps_it() {
+    assert_eq!(Durability::for_rewrites(8), Durability::PerFile);
+    assert_eq!(Durability::for_rewrites(9), Durability::BulkRewrite);
+    // A `SyncFile` fault fires only where the temp file is flushed.
+    let dir = tempfile::tempdir().unwrap();
+    for (count, flushes) in [(8, true), (9, false)] {
+        let path = dir.path().join(format!("n{count}.md"));
+        std::fs::write(&path, b"old").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let captured = root
+            .capture(&RelativeName::new(format!("n{count}.md")).unwrap())
+            .unwrap();
+        let mut session =
+            WriteSession::with_fault(Durability::for_rewrites(count), FaultPoint::SyncFile);
+        let result = captured.replace_immediate(b"new", &mut session);
+        assert_eq!(result.is_err(), flushes, "count {count}");
+    }
+}
+
+#[test]
 fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
     for durability in [
         Durability::PerFile,

@@ -652,6 +652,26 @@ pub enum Durability {
     BulkRewrite,
 }
 
+impl Durability {
+    /// More rewrites than this are a bulk phase (DEC-317).
+    const BULK_REWRITE_MAX: usize = 8;
+
+    /// The policy for a phase that rewrites `count` existing notes: past
+    /// [`Self::BULK_REWRITE_MAX`] the per-file content flush is dropped for
+    /// one fence per directory ([`Durability::BulkRewrite`]); at or below it
+    /// the full per-file guarantee stays. `PerDirectory` is not that policy:
+    /// it still flushes every file, which is what made `lint --fix` over the
+    /// Obsidian Hub take 39 s instead of 2.35 s (iteration 329).
+    #[must_use]
+    pub const fn for_rewrites(count: usize) -> Self {
+        if count > Self::BULK_REWRITE_MAX {
+            Self::BulkRewrite
+        } else {
+            Self::PerFile
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultPoint {
     Prepare,
@@ -686,6 +706,11 @@ impl WriteSession {
             directories: BTreeSet::new(),
             fault: Some(fault),
         }
+    }
+    /// The durability policy this session was created with.
+    #[must_use]
+    pub fn durability(&self) -> Durability {
+        self.durability
     }
     /// A parallel worker inherits policy, but owns its pending directories.
     ///

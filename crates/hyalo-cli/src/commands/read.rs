@@ -125,11 +125,11 @@ fn section_range_overlap<'a>(
 fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<(usize, Vec<String>)> {
     let mut sections: Vec<(usize, Vec<String>)> = Vec::new();
     let mut current_section: Option<(u8, usize, Vec<String>)> = None;
-    let syntax = BodySyntax::new(&body_lines.join("\n"));
+    let syntax = BodySyntax::for_reader(&body_lines.join("\n"));
 
     for (index, line) in body_lines.iter().enumerate() {
         // R12: a BOM in front of `# Title` is not part of the heading.
-        let visible = without_bom(index, syntax.visible_line(index + 1).unwrap_or(line));
+        let visible = without_bom(index, syntax.reader_line(index + 1).unwrap_or(line));
 
         if let Some((level, _)) = parse_atx_heading(visible) {
             let text = parse_atx_heading(without_bom(index, line)).map_or("", |(_, text)| text);
@@ -175,10 +175,10 @@ fn without_bom(index: usize, line: &str) -> &str {
 
 /// Collect all heading texts from body lines (for error messages).
 fn collect_headings(body_lines: &[String]) -> Vec<String> {
-    let syntax = BodySyntax::new(&body_lines.join("\n"));
+    let syntax = BodySyntax::for_reader(&body_lines.join("\n"));
     let mut headings = Vec::new();
     for (index, line) in body_lines.iter().enumerate() {
-        let visible = without_bom(index, syntax.visible_line(index + 1).unwrap_or(line));
+        let visible = without_bom(index, syntax.reader_line(index + 1).unwrap_or(line));
         if let Some((level, _)) = parse_atx_heading(visible) {
             let text = parse_atx_heading(without_bom(index, line)).map_or("", |(_, text)| text);
             let hashes = "#".repeat(level as usize);

@@ -1581,10 +1581,10 @@ fn group_severity_empty_defaults_to_warn() {
     assert_eq!(group_severity(&[]), "warn");
 }
 
-// --- DEC-317 batching: one shared PerDirectory session, not one per file ---
+// --- DEC-317 batching: one shared BulkRewrite session, not one per file ---
 
 /// PR #369 review item 5: proves `lint --fix` over more than 8 files shares
-/// one `Durability::PerDirectory` session across the whole parallel pass
+/// one `Durability::BulkRewrite` session across the whole parallel pass
 /// instead of each file committing (and fsyncing) through its own —
 /// `lint_files_extended_observed`'s test-only seam reports the shared
 /// session's queued-directory count right before the single `finish()` call
@@ -1630,13 +1630,17 @@ fn lint_fix_batches_more_than_eight_files_into_one_shared_per_directory_session(
     };
 
     let pending = std::cell::Cell::new(None);
+    let durability = std::cell::Cell::new(None);
     let (outcome, _counts) = lint_files_extended_observed(
         &files,
         &schema,
         &engine,
         &md_config,
         &mut opts,
-        |pending_directories| pending.set(Some(pending_directories)),
+        |pending_directories, policy| {
+            pending.set(Some(pending_directories));
+            durability.set(Some(policy));
+        },
     )
     .unwrap();
     let crate::output::CommandOutcome::Success { output, .. } = outcome else {
@@ -1645,6 +1649,12 @@ fn lint_fix_batches_more_than_eight_files_into_one_shared_per_directory_session(
     assert_eq!(
         output["total_fixed"], 10,
         "every one of the 10 files needed the MD047 fix: {output}"
+    );
+    assert_eq!(
+        durability.get(),
+        Some(hyalo_core::rooted::Durability::BulkRewrite),
+        "a bulk `--fix` must not flush every file: `PerDirectory` did, and \
+         took the Obsidian Hub from 2.35 s to 39 s"
     );
     assert_eq!(
         pending.get(),

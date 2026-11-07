@@ -508,7 +508,14 @@ impl VaultIndex for ScannedIndex {
 /// |    |           | so a snapshot is refused once the file set a disk scan
 /// |    |           | would return has moved. The compatibility fields now sit
 /// |    |           | before `attachments`, within the header peek |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 11;
+/// | 12 | iter-329  | no new field (DEC-402) — the reader skips raw HTML
+/// |    |           | blocks, `$$` math, HTML tags and the content of `<code>`
+/// |    |           | and `<pre>`, and a heading's `{#custom-id}` is an explicit
+/// |    |           | anchor, so the links, headings, tasks and anchors a body
+/// |    |           | yields change; an entry reused by an incremental
+/// |    |           | `create-index` would keep the old ones, so a v11 snapshot
+/// |    |           | must be rebuilt |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 12;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]

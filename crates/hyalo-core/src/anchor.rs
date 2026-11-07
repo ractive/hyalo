@@ -104,6 +104,30 @@ pub(crate) fn explicit_anchor_ids_in_line(line: &str) -> impl Iterator<Item = &s
         .filter_map(|c| c.get(1).or_else(|| c.get(2)).map(|m| m.as_str()))
 }
 
+/// The explicit id a heading line declares with a trailing `{#custom-id}`
+/// (kramdown, Pandoc, GitHub Docs: `## Title {#custom-id}`), or `None`.
+///
+/// Additive to the heading (DEC-403): the outline keeps the heading text
+/// exactly as written, braces included, because Obsidian shows them
+/// literally and a wikilink fragment matches heading text; the id is only
+/// one more explicit anchor, matched byte-for-byte like an HTML `id`.
+pub(crate) fn heading_custom_id(line: &str) -> Option<&str> {
+    let trimmed = line.trim_end();
+    let rest = trimmed.trim_start_matches(' ');
+    if trimmed.len() - rest.len() > 3 {
+        return None;
+    }
+    let hashes = rest.bytes().take_while(|b| *b == b'#').count();
+    if !(1..=6).contains(&hashes) || !rest[hashes..].starts_with([' ', '\t']) {
+        return None;
+    }
+    let body = rest[hashes..].strip_suffix('}')?;
+    let open = body.rfind("{#")?;
+    let id = &body[open + 2..];
+    (!id.is_empty() && !id.contains(|c: char| c.is_whitespace() || c == '{' || c == '}'))
+        .then_some(id)
+}
+
 /// Whether `fragment` names one of a target file's explicit HTML anchors
 /// (DEC-353). Compared byte-for-byte against the raw `id`/`name` attribute
 /// value stored in the index — no percent-decoding, no case fold, matching
@@ -161,14 +185,25 @@ impl crate::scanner::FileVisitor for ExplicitAnchorScanner {
         cleaned: &str,
         _line_num: usize,
     ) -> crate::scanner::ScanAction {
-        // Review follow-up (iteration 311): scan `cleaned`, not `raw` -- the
-        // shared scanner has already blanked inline code spans and both
+        // The reader view: a `# x {#id}` shown inside a raw HTML block or
+        // `<pre>` is not a heading and declares nothing.
+        if cleaned.contains("{#") {
+            self.ids
+                .extend(heading_custom_id(cleaned).map(str::to_owned));
+        }
+        crate::scanner::ScanAction::Continue
+    }
+
+    fn on_markup_line(&mut self, markup: &str, _line_num: usize) -> crate::scanner::ScanAction {
+        // Review follow-up (iteration 311): scan the markup view, not `raw` --
+        // the shared scanner has already blanked inline code spans and both
         // single- and multi-line HTML `<!-- … -->` comments there, so a
         // `<a id="x">` shown as a *sample* inside either is never mistaken
-        // for a real anchor.
-        if cleaned.contains('<') {
+        // for a real anchor. The reader view (DEC-402) would blank the tag
+        // itself, which is why this is not `on_body_line`.
+        if markup.contains('<') {
             self.ids
-                .extend(explicit_anchor_ids_in_line(cleaned).map(str::to_owned));
+                .extend(explicit_anchor_ids_in_line(markup).map(str::to_owned));
         }
         crate::scanner::ScanAction::Continue
     }
@@ -653,6 +688,26 @@ mod tests {
     #[test]
     fn explicit_anchor_scanner_ignores_a_backtick_code_span() {
         let content = "Write `<a id=\"inline\">` in your markup. <a id=\"real\"></a>\n";
+        assert_eq!(scanned_ids(content), vec!["real".to_owned()]);
+    }
+
+    #[test]
+    fn heading_custom_id_reads_a_trailing_brace_id() {
+        assert_eq!(
+            heading_custom_id("## Title {#custom-id}"),
+            Some("custom-id")
+        );
+        assert_eq!(heading_custom_id("# T {#a_b.c}  "), Some("a_b.c"));
+        assert_eq!(heading_custom_id("## Title {#}"), None);
+        assert_eq!(heading_custom_id("## Title {#a b}"), None);
+        assert_eq!(heading_custom_id("Title {#id}"), None);
+        assert_eq!(heading_custom_id("    ## Title {#id}"), None);
+        assert_eq!(heading_custom_id("####### Title {#id}"), None);
+    }
+
+    #[test]
+    fn heading_custom_id_is_collected_by_the_scanner_and_not_in_pre() {
+        let content = "## Real {#real}\n\n<pre>\n## Fake {#fake}\n</pre>\n";
         assert_eq!(scanned_ids(content), vec!["real".to_owned()]);
     }
 

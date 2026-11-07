@@ -716,8 +716,14 @@ Flags that only `--help` mentions, worth knowing:
   `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`,
   `properties rename` and `tags rename` still replace every file atomically, but a phase over
   8 files fsyncs each touched directory once at the end rather than every file before its
-  rename — the Obsidian Hub's `lint --fix` went from 48.1 s to 2.35 s. Past a few hundred
+  rename — the Obsidian Hub's `lint --fix` took 39 s with a per-file flush and 4.8 s without (DEC-404; 48.1 s to 2.35 s on an idle machine in iter-277). Past a few hundred
   files the phase reports progress on stderr; `-q` silences it.
+- **The reader skips raw HTML, `$$` math and code-like elements** (DEC-402; the owner's
+  decision, Obsidian documents none of it). A link, heading or task inside a raw HTML block
+  (`<pre>`, or a `<div>`/`<details>` up to the next blank line), a `$$` block or span, a tag's
+  attributes, or `<code>`/`<pre>`/`<kbd>`/`<samp>`/`<script>`/`<style>`/`<textarea>` content is
+  not counted, and `links fix`/`mv` leave it alone. `<div>`, blank line, `[[x]]` is a link.
+  A heading ending in `{#custom-id}` also declares that id as an anchor (DEC-403).
 - **`config` reports a broken config rather than failing.** `results.malformed` /
   `results.parse_error` mean every other value shown is a built-in default.
 - **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.

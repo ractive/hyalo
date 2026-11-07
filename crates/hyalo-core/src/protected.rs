@@ -124,9 +124,21 @@ pub struct ProtectedRegions {
     blocks: Vec<Range<usize>>,
     inline: Vec<Range<usize>>,
     destinations: Vec<Range<usize>>,
+    opaque: Vec<Range<usize>>,
 }
 
 impl ProtectedRegions {
+    /// The body byte ranges the *reader* does not parse: raw HTML blocks,
+    /// `$$` math, HTML tags, the content of `<code>`, `<pre>`, `<kbd>`,
+    /// `<samp>`, `<script>`, `<style>` and `<textarea>` (a subset of
+    /// [`Self::contains`]'s regions — link text, `<a>` content, macros, block
+    /// ids and single-`$` math stay readable). Sorted, merged, may end at
+    /// `usize::MAX` for a block that runs to the end of the body.
+    #[must_use]
+    pub fn opaque_ranges(&self) -> &[Range<usize>] {
+        &self.opaque
+    }
+
     /// Whether a diagnostic that starts at body byte `offset` points into
     /// protected text: anywhere in a block region, or strictly inside an
     /// inline region.
@@ -266,6 +278,9 @@ pub(crate) struct ProtectedBuilder {
     blocks: Vec<Range<usize>>,
     inline: Vec<Range<usize>>,
     destinations: Vec<Range<usize>>,
+    /// The part of the regions the reader skips, see
+    /// [`ProtectedRegions::opaque_ranges`].
+    opaque: Vec<Range<usize>>,
     tag: Option<PendingTag>,
     raw: Option<PendingRaw>,
     macro_call: Option<PendingMacro>,
@@ -430,15 +445,22 @@ impl ProtectedBuilder {
                 .iter()
                 .all(|b| matches!(b, b' ' | b'\t' | b'\r'))
         {
-            let name = rest[tag.name_start..tag.name_end].to_ascii_lowercase();
-            if !RAW_BLOCK_ELEMENTS.contains(&name.as_str()) {
-                return Some(HtmlBlockEnd::BlankLine);
-            }
+            // An opening `<pre>`, `<script>`, `<style>` or `<textarea>` took
+            // condition 1 above; a closing `</pre>` alone on a line is a
+            // condition 7 block in cmark, commonmark.js and markdown-it.
+            return Some(HtmlBlockEnd::BlankLine);
         }
         None
     }
 
-    /// Record a whole-line region (a `%%` comment block line).
+    /// Record a raw HTML or `$$` block: protected, and unread by the reader.
+    fn push_raw_block(&mut self, range: Range<usize>) {
+        self.opaque.push(range.clone());
+        self.blocks.push(range);
+    }
+
+    /// Record a whole-line region (a `%%` comment block line). The reader has
+    /// its own answer for `%%` and keeps it.
     pub(crate) fn push_block(&mut self, range: Range<usize>) {
         self.blocks.push(range);
     }
@@ -458,14 +480,14 @@ impl ProtectedBuilder {
         {
             let open = self.html_block.take();
             if let Some(open) = open {
-                self.blocks.push(open.start..info.start);
+                self.push_raw_block(open.start..info.start);
             }
         }
         if let Some(open) = self.html_block.take() {
             match open.end {
                 HtmlBlockEnd::BlankLine => {
                     if info.blank {
-                        self.blocks.push(open.start..info.start);
+                        self.push_raw_block(open.start..info.start);
                     } else {
                         self.html_block = Some(open);
                         return true;
@@ -473,7 +495,7 @@ impl ProtectedBuilder {
                 }
                 HtmlBlockEnd::Marker(marker) => {
                     if info.text.to_ascii_lowercase().contains(marker) {
-                        self.blocks.push(open.start..info.end);
+                        self.push_raw_block(open.start..info.end);
                     } else {
                         self.html_block = Some(HtmlBlock {
                             end: HtmlBlockEnd::Marker(marker),
@@ -487,7 +509,7 @@ impl ProtectedBuilder {
         if let Some((start, _)) = self.math_block {
             if info.text.trim_end().ends_with("$$") {
                 self.math_block = None;
-                self.blocks.push(start..info.end);
+                self.push_raw_block(start..info.end);
             }
             return true;
         }
@@ -512,7 +534,7 @@ impl ProtectedBuilder {
                 }
             };
             if closed_here {
-                self.blocks.push(info.start..info.end);
+                self.push_raw_block(info.start..info.end);
             } else {
                 self.html_block = Some(HtmlBlock {
                     end,
@@ -564,6 +586,9 @@ impl ProtectedBuilder {
             && let Some(end) = find_closing_tag(line, 0, &pending.name)
         {
             self.inline.push(pending.start..abs + end);
+            if pending.name != "a" {
+                self.opaque.push(pending.start..abs + end);
+            }
             self.raw = None;
         }
         if let Some(pending) = self.macro_call.clone()
@@ -662,6 +687,9 @@ impl ProtectedBuilder {
                 b'$' => {
                     if let Some(end) = inline_math_end(line, i) {
                         self.inline.push(abs + i..abs + end);
+                        if line.get(i + 1) == Some(&b'$') {
+                            self.opaque.push(abs + i..abs + end);
+                        }
                         i = end;
                     } else {
                         i += 1 + usize::from(line.get(i + 1) == Some(&b'$'));
@@ -718,6 +746,7 @@ impl ProtectedBuilder {
     ) -> usize {
         let end = tag.end;
         self.inline.push(tag_start_abs..abs + end + 1);
+        self.opaque.push(tag_start_abs..abs + end + 1);
         let mut next = end + 1;
         if !tag.closing
             && !tag.self_closing
@@ -726,6 +755,9 @@ impl ProtectedBuilder {
         {
             if let Some(close_end) = find_closing_tag(line, end + 1, name) {
                 self.inline.push(abs + end + 1..abs + close_end);
+                if name != "a" {
+                    self.opaque.push(abs + end + 1..abs + close_end);
+                }
                 next = close_end;
             } else {
                 raw_missing.push(name.to_owned());
@@ -744,20 +776,22 @@ impl ProtectedBuilder {
     /// only, and every other pending construct is dropped.
     pub(crate) fn finish(mut self) -> ProtectedRegions {
         if let Some((start, end)) = self.math_block.take() {
-            self.blocks.push(start..end);
+            self.push_raw_block(start..end);
         }
         if let Some(open) = self.html_block.take() {
             // A condition 1/3-5 block with no closer runs to the end of the
             // document; a condition 6/7 block ends there too.
-            self.blocks.push(open.start..usize::MAX);
+            self.push_raw_block(open.start..usize::MAX);
         }
         normalise(&mut self.blocks);
         normalise(&mut self.inline);
         normalise(&mut self.destinations);
+        normalise(&mut self.opaque);
         ProtectedRegions {
             blocks: self.blocks,
             inline: self.inline,
             destinations: self.destinations,
+            opaque: self.opaque,
         }
     }
 }

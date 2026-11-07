@@ -8,9 +8,12 @@ hardening (frontmatter YAML-bomb defenses, snapshot entry/edge caps, path
 validation) — see `reviews/adversarial-review-2026-08-23.md` and
 `decision-log.md` for the incidents that motivated those checks.
 
-**Not wired into CI**, by project preference (see `.claude/CLAUDE.md` /
+**Never fuzzed in CI**, by project preference (see `.claude/CLAUDE.md` /
 `decision-log.md`): fuzzing and Miri are run manually as part of a security
-review, alongside `cargo miri test -p hyalo-core`. This crate is excluded
+review, alongside `cargo miri test -p hyalo-core`. CI only checks that the
+targets still compile: the `quality-gates` job runs
+`cargo check --locked --bins --manifest-path fuzz/Cargo.toml` on stable, which
+needs no nightly and executes nothing (iteration 329). This crate is excluded
 from the parent workspace (`[workspace]` table in `fuzz/Cargo.toml`) so
 `cargo build/test/clippy --workspace` at the repo root never touches it.
 

@@ -41,18 +41,25 @@ pub fn lint_files_extended(
     md_lint_config: &hyalo_mdlint::LintConfig,
     opts: &mut ExtLintOptions<'_>,
 ) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_extended_observed(files, schema, md_lint_engine, md_lint_config, opts, |_| {})
+    lint_files_extended_observed(
+        files,
+        schema,
+        md_lint_engine,
+        md_lint_config,
+        opts,
+        |_, _| {},
+    )
 }
 
 /// [`lint_files_extended`]'s real implementation, with one test-only seam:
 /// `on_session_before_finish` is called with the shared write session's
 /// [`pending_directories`](hyalo_core::rooted::WriteSession::pending_directories)
-/// count immediately before the one `finish()` call that flushes it.
+/// count and its durability immediately before the one `finish()` call that flushes it.
 ///
 /// PR #369 review item 5: a correctness-only test (every file ends up
 /// written right) would pass just as well if `--fix` silently regressed to
 /// one independent `WriteSession` per file — this seam is what lets a test
-/// instead prove the DEC-317 mechanism itself: one shared `PerDirectory`
+/// instead prove the DEC-317 mechanism itself: one shared `BulkRewrite`
 /// session, absorbing every parallel worker's queued fence, finished exactly
 /// once. Kept as a real parameter rather than `#[cfg(test)]`-gated global
 /// state, which a parallel test run could race on.
@@ -63,7 +70,7 @@ pub(super) fn lint_files_extended_observed(
     md_lint_engine: &hyalo_mdlint::HyaloLintEngine,
     md_lint_config: &hyalo_mdlint::LintConfig,
     opts: &mut ExtLintOptions<'_>,
-    on_session_before_finish: impl FnOnce(usize),
+    on_session_before_finish: impl FnOnce(usize, hyalo_core::rooted::Durability),
 ) -> Result<(CommandOutcome, LintCounts)> {
     #[cfg(not(miri))]
     use rayon::prelude::*;
@@ -126,11 +133,9 @@ pub(super) fn lint_files_extended_observed(
     // --glob`, `properties rename`, `tags rename` via `PreparedChangeSet`;
     // batch `mv`) counts the same way: the resolved candidate set, not the
     // files that turn out to actually change.
-    let mut write_session = hyalo_core::rooted::WriteSession::new(if files.len() > 8 {
-        hyalo_core::rooted::Durability::PerDirectory
-    } else {
-        hyalo_core::rooted::Durability::PerFile
-    });
+    let mut write_session = hyalo_core::rooted::WriteSession::new(
+        hyalo_core::rooted::Durability::for_rewrites(files.len()),
+    );
 
     // B-13 (iteration 321): `lint --fix` is one of the bulk write phases that
     // reports progress on stderr past a few hundred files, like `set`/`mv`
@@ -220,7 +225,10 @@ pub(super) fn lint_files_extended_observed(
     // `CommittedWithFinalizationError` — mirroring `PreparedChangeSet::apply_with`
     // (`commands/apply.rs`), which does the same for its own single shared
     // session.
-    on_session_before_finish(write_session.pending_directories());
+    on_session_before_finish(
+        write_session.pending_directories(),
+        write_session.durability(),
+    );
     if let Err(error) = write_session.finish() {
         for effect in &mut mutation_effects {
             if effect.state == crate::commands::apply::EffectState::Committed {

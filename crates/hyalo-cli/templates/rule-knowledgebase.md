@@ -443,6 +443,16 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directive warns (`-q`-proof) instead of suppressing nothing. `--max-per-rule 0` means
   unlimited. MD010's `code_blocks` option is deliberately not exposed (DEC-316) — silence a
   tab-laden page with `<!-- markdownlint-disable no-hard-tabs -->`.
+- **The reader skips raw HTML, `$$` math and code-like elements** (iter-329, DEC-402, the
+  owner's decision — Obsidian documents none of it): `[[x]]`, `[x](y.md)`, a `# heading` or a
+  `- [ ] task` inside a raw HTML block (`<pre>`, or a `<div>`/`<details>` up to the next blank
+  line), a `$$` block or span, an HTML tag's attributes, or `<code>`/`<pre>`/`<kbd>`/`<samp>`/
+  `<script>`/`<style>`/`<textarea>` content is not a link, heading or task, for `find`,
+  `backlinks`, `summary`, HYALO006, `links fix`, `mv`, the title and `read --section` alike —
+  one view, so the writers rewrite exactly what the reader reports. `<div>`, blank line,
+  `[[x]]` is still a link; `<a>`/`<span>` content, link labels, single-`$` math, macros,
+  `%%` comments and frontmatter links read as before. A heading ending in `{#custom-id}` also
+  declares that id as an anchor (case-sensitive; the heading text is unchanged, DEC-403).
 - **Autofix and `links auto` leave content alone** (iter-321): prose rules, `lint --fix` and
   `links auto` share one model of what is not prose — raw HTML blocks, HTML tags and attribute
   values, the text of `<a>`/`<code>`/`<pre>`, `$$`/`$` math, `{{ }}`/`{% %}` macro calls,
@@ -488,7 +498,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `tags rename` still replace every file atomically (temp file + `rename`), but a phase
   writing more than 8 files fsyncs each touched *directory* once at the end instead of every
   file before its rename. On macOS that barrier is `F_FULLFSYNC`, ~5.5 ms per file whatever
-  its size — the Obsidian Hub's `lint --fix` fell from 48.1 s to 2.35 s. A phase past a few
+  its size — the Obsidian Hub's `lint --fix` took 39 s with a per-file flush and 4.8 s without (iter-329, DEC-404; 48.1 s to 2.35 s on an idle machine in iter-277). A phase past a few
   hundred files reports progress on stderr; `-q` silences it. Single-file mutations keep the
   full guarantee.
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and
