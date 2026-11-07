@@ -63,4 +63,3 @@ durability), DEC-405 (fuzz compile gate). Snapshot format 12.
 - [x] R10, R11 no `.expect`, no clone without ranges, stale comments fixed
 - [x] 25 000 notes against markdown-it in both directions: 0 lost links
 - [x] Incremental `create-index` after edits, deletes and renames equals `--force` and disk
-
