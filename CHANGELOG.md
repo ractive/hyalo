@@ -38,10 +38,12 @@ and this project adheres to
   has such a region, and `links fix --apply` and `mv` stop rewriting there.
   This is the owner's decision; Obsidian documents none of it. A `<div>` ends at
   a blank line, so `<div>`, a blank line, `[[x]]` is still a link. The content of
-  `<a>` and `<span>`, link labels, single-`$` math, `{{ }}` macros and
-  frontmatter links are unaffected, and `%%` comments read as before. MDN,
-  GitHub Docs and the Obsidian Hub contain no such region: their link, heading
-  and task inventories are identical (DEC-402). A closing `</pre>` alone on a
+  `<a>` and `<span>` written inline, link labels, single-`$` math, `{{ }}` macros
+  and frontmatter links are unaffected, and `%%` comments read as before. A tag
+  alone on a line after a blank line starts an HTML block (CommonMark condition 7),
+  so `<a href="u">`, `[[x]]` and `</a>` on three lines hide the link. MDN,
+  GitHub Docs and the Obsidian Hub hold HTML blocks and a `$$` line, but no
+  link, heading or task inside one: their inventories are identical (DEC-402). A closing `</pre>` alone on a
   line now starts an HTML block for `lint` as well, as in CommonMark.
 - A heading ending in `{#custom-id}` declares that id as an explicit anchor,
   matched case-sensitively like an HTML `id`; the heading text and its slug are
@@ -195,9 +197,14 @@ and this project adheres to
 ### Fixed
 
 - `lint --fix`, `set`/`append`/`remove --glob`, `properties rename` and
-  `tags rename` over more than eight notes no longer flush every note. DEC-317
-  promised one fence per directory, but since 0.24.0 only `mv` and `links fix`
-  kept it: these paid a per-file full-device barrier on macOS. The Obsidian
+  `tags rename`, `task` and `types set --default` over more than eight
+  candidates no longer flush every note. DEC-317 promised one fence per
+  directory, but since 0.24.0 only `mv` and `links fix` kept it: these paid a
+  per-file full-device barrier on macOS. The first eight notes really written
+  still flush, so a big candidate set that changes one note keeps the full
+  guarantee. Past that, a rewrite is atomic against a crash of the process but
+  not guaranteed against power loss until the OS has flushed (on XFS or NTFS a
+  rename can outlive its content), as DEC-317 intended; DEC-404 says so. The Obsidian
   Hub's `lint --fix` took 39 s whatever the load and now takes 4.8 s at a load
   average of 10 to 14 (DEC-404).
 - A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`

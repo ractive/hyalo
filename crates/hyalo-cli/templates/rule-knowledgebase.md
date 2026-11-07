@@ -450,7 +450,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `<script>`/`<style>`/`<textarea>` content is not a link, heading or task, for `find`,
   `backlinks`, `summary`, HYALO006, `links fix`, `mv`, the title and `read --section` alike —
   one view, so the writers rewrite exactly what the reader reports. `<div>`, blank line,
-  `[[x]]` is still a link; `<a>`/`<span>` content, link labels, single-`$` math, macros,
+  `[[x]]` is still a link; `<a>`/`<span>` content written inline (a tag alone on its line after a blank line is an HTML
+  block, so `<a href="u">`, `[[x]]`, `</a>` on three lines hide the link), link labels, single-`$` math, macros,
   `%%` comments and frontmatter links read as before. A heading ending in `{#custom-id}` also
   declares that id as an anchor (case-sensitive; the heading text is unchanged, DEC-403).
 - **Autofix and `links auto` leave content alone** (iter-321): prose rules, `lint --fix` and
@@ -495,12 +496,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   similarity and at least ten files carrying the property before it speaks.
 - **A bulk write is durable per directory, not per file** (DEC-317, iter-277): `lint --fix`,
   `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
-  `tags rename` still replace every file atomically (temp file + `rename`), but a phase
-  writing more than 8 files fsyncs each touched *directory* once at the end instead of every
+  `tags rename`, `task` over several files and `types set --default` still replace every file
+  atomically (temp file + `rename`), but past the first 8 notes really written a phase fsyncs each touched *directory* once at the end instead of every
   file before its rename. On macOS that barrier is `F_FULLFSYNC`, ~5.5 ms per file whatever
   its size — the Obsidian Hub's `lint --fix` took 39 s with a per-file flush and 4.8 s without (iter-329, DEC-404; 48.1 s to 2.35 s on an idle machine in iter-277). A phase past a few
-  hundred files reports progress on stderr; `-q` silences it. Single-file mutations keep the
-  full guarantee.
+  hundred files reports progress on stderr; `-q` silences it. Single-file mutations and a phase that
+  writes 8 notes or fewer keep the full guarantee. Past that, a rewrite is atomic against a crash
+  of the process, not guaranteed against power loss until the OS has flushed (DEC-404).
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and
   `find --orphan`/`find --dead-end` share one edge predicate. An external URI, a same-file
   anchor and any target with an explicit non-`.md` extension are not note-graph edges —

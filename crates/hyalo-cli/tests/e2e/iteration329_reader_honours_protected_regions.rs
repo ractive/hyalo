@@ -46,6 +46,17 @@ const CASES: &[Case] = &[
     Case { name: "percent_comment", body: "%% {L} %%\n", link: false, heading: false, task: false },
     Case { name: "link_text_in_span", body: "a <span>{L}</span> b\n", link: true, heading: false, task: false },
     Case { name: "link_text_in_anchor", body: "<a href=\"x\">{L}</a>\n", link: true, heading: false, task: false },
+    Case { name: "stray_angle_brackets", body: "if a<b see {L} and c>d then\n", link: true, heading: false, task: false },
+    Case { name: "angle_brackets_in_a_table_cell", body: "| a<b | {L} c>d |\n", link: true, heading: false, task: false },
+    Case { name: "comparison_and_arrow", body: "x<y {L} and more ->\n", link: true, heading: false, task: false },
+    Case { name: "generics_before_a_link", body: "Map<K, V> and Vec<T> then {L}\n", link: true, heading: false, task: false },
+    Case { name: "tag_spanning_lines_with_a_link_inside", body: "<b\n{L}\n>\n", link: true, heading: false, task: false },
+    Case { name: "task_after_an_inline_tag", body: "<span>{T}</span>\n", link: false, heading: false, task: false },
+    Case { name: "heading_after_an_inline_tag", body: "<b>{H}</b>\n", link: false, heading: false, task: false },
+    Case { name: "percent_marks_inside_pre", body: "<pre>\n%%\n</pre>\n\n{L}\n\n%%\n", link: true, heading: false, task: false },
+    Case { name: "quote_ends_at_an_unquoted_blank_line", body: "> <pre>\n> a\n\n> {L}\n", link: true, heading: false, task: false },
+    Case { name: "code_inside_anchor_text", body: "<a href=\"u\"><code>{L}</code></a>\n", link: false, heading: false, task: false },
+    Case { name: "anchor_tags_on_their_own_lines", body: "<a href=\"u\">\n{L}\n</a>\n", link: false, heading: false, task: false },
     Case { name: "prose", body: "{H}\n\n{L}\n\n{T}\n", link: true, heading: true, task: true },
 ];
 

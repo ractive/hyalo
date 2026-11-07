@@ -4258,7 +4258,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_eight_files_flush_content_but_nine_use_bulk_policy() {
+    fn rewrite_eight_files_flush_content_and_a_ninth_candidate_flushes_only_the_first_eight() {
         use crate::rooted::{FaultPoint, WriteSession};
         for count in [8, 9] {
             let vault = create_vault(&[]);
@@ -4276,12 +4276,20 @@ mod tests {
                 WriteSession::with_fault(rewrite_durability(count), FaultPoint::SyncFile),
             )
             .unwrap();
-            assert_eq!(execution.report.has_failures(), count == 8);
+            // The first eight writes flush (and fail on the fault); a ninth
+            // note is the only one that skips the flush.
+            assert!(execution.report.has_failures());
+            let applied = execution
+                .report
+                .outcomes
+                .iter()
+                .filter(|outcome| outcome.applied)
+                .count();
+            assert_eq!(applied, count - 8);
             for outcome in execution.report.outcomes {
-                assert_eq!(outcome.applied, count == 9);
                 assert_eq!(
                     fs::read_to_string(vault.path().join(outcome.rel_path)).unwrap(),
-                    if count == 8 { "old\n" } else { "new\n" }
+                    if outcome.applied { "new\n" } else { "old\n" }
                 );
             }
         }

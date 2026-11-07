@@ -74,7 +74,7 @@ fn publish_exact_fix_with_worker_session(
     // There is no `session.finish()` here to fold in as a second source of
     // error: finishing is deferred to the run's single top-level session, so
     // only `record()`'s own outcome (synchronous even under
-    // `Durability::PerDirectory` — see `WriteSession::record`) is visible yet.
+    // `Durability::BulkRewrite` — see `WriteSession::record`) is visible yet.
     let error = effect.finalization_error().map(str::to_owned);
     let category = error.as_ref().map(|_| EffectFailure::Finalization);
     Ok((

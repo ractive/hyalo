@@ -54,6 +54,9 @@ pub struct BodySyntax {
     protected: Option<ProtectedRegions>,
 }
 
+/// Fills an inline span the reader does not parse (see [`BodySyntax::for_reader`]).
+const INLINE_OPAQUE: u8 = 0x01;
+
 #[derive(Debug, Clone, Copy)]
 struct CodeFence {
     ch: u8,
@@ -108,19 +111,29 @@ impl BodySyntax {
     #[must_use]
     pub fn for_reader(body: &str) -> Self {
         let mut syntax = Self::build(body, true, true);
-        if let Some(protected) = syntax.protected.take() {
+        let Some(protected) = syntax.protected.take() else {
+            return syntax;
+        };
+        if !protected.opaque_blocks().is_empty() || !protected.opaque_inline().is_empty() {
             let mut bytes = syntax.visible.clone().into_bytes();
-            for range in protected.opaque_ranges() {
-                let end = range.end.min(bytes.len());
-                if let Some(span) = bytes.get_mut(range.start.min(end)..end) {
-                    for b in span.iter_mut().filter(|b| !matches!(**b, b'\n' | b'\r')) {
-                        *b = b' ';
+            // Inline spans get a marker byte, not a space: blanking the
+            // `<b>` of `<b>- [ ] x` to three spaces would make a task of it.
+            for (ranges, fill) in [
+                (protected.opaque_inline(), INLINE_OPAQUE),
+                (protected.opaque_blocks(), b' '),
+            ] {
+                for range in ranges {
+                    let end = range.end.min(bytes.len());
+                    if let Some(span) = bytes.get_mut(range.start.min(end)..end) {
+                        for b in span.iter_mut().filter(|b| !matches!(**b, b'\n' | b'\r')) {
+                            *b = fill;
+                        }
                     }
                 }
             }
-            syntax.reader = Some(String::from_utf8(bytes).expect("masking preserves UTF-8"));
-            syntax.protected = Some(protected);
+            syntax.reader = String::from_utf8(bytes).ok();
         }
+        syntax.protected = Some(protected);
         syntax
     }
 
@@ -291,7 +304,10 @@ impl BodySyntax {
                     // can succeed either, so do not search again.
                     comment_closer_missing = true;
                 }
-                if crate::scanner::opens_comment_block(line) && !comment_closer_missing {
+                if crate::scanner::opens_comment_block(line)
+                    && !comment_closer_missing
+                    && !(reader && consumed)
+                {
                     syntax.percent_comment[i] = true;
                     if let Some(p) = prot.as_mut() {
                         p.push_block(physical.start..physical.physical_end);

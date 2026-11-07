@@ -235,7 +235,9 @@ impl FileVisitor for TaskExtractor {
             self.current_section = format!("{} {}", "#".repeat(level as usize), text);
         }
 
-        if let Some((status_char, done)) = detect_task_checkbox(cleaned) {
+        if let Some((status_char, done)) = detect_task_checkbox(cleaned)
+            && detect_task_checkbox(raw).is_some()
+        {
             self.tasks.push(crate::types::FindTaskInfo {
                 line: line_num,
                 section: self.current_section.clone(),

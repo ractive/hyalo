@@ -51,3 +51,16 @@ durability), DEC-405 (fuzz compile gate). Snapshot format 12.
 
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
 - [x] Every xtask gate, `generate-npm-packages --check`, `cargo deny check`, `hyalo lint --strict`, npm gate, case-sensitive gate, `lint-kb` with the released binary
+
+### PR #411 review round
+
+- [x] R1 a tag is blanked only if it parses under the CommonMark tag grammar, across lines too
+- [x] R2 inline spans are marked with a control byte, tasks also need the raw line to be a task
+- [x] R3 a bulk session flushes the first eight notes it really writes; `task` and `types` listed
+- [x] R4 DEC-404, CLAUDE.md, templates and CHANGELOG state power-loss exposure; backlog item filed ([[backlog/bulk-rewrite-durability-against-power-loss]])
+- [x] R5, R6 CHANGELOG and CLAUDE.md say HTML blocks exist in the corpora and document condition 7
+- [x] R7 `<a>` content is scanned; R8 `%%` inside HTML is HTML text; R9 a quoted block ends at an unquoted blank line
+- [x] R10, R11 no `.expect`, no clone without ranges, stale comments fixed
+- [x] 25 000 notes against markdown-it in both directions: 0 lost links
+- [x] Incremental `create-index` after edits, deletes and renames equals `--force` and disk
+
