@@ -35,12 +35,13 @@ contents changed. Numbers and the audit's ranking are in
 
 ### Review round
 
+- [x] Regression tests that fail under mutation: the refresh comparison (`a_refresh_tells_a_fragment_from_a_query_of_the_same_length`) and a write that names a stale note (`a_write_that_names_a_stale_note_saves_its_current_postings`); backlog note for the upstream MD007 abort
 - [x] Allow-list for the shared AST (R1), unranked `find --index` no longer resolves the graph (R2), field-named encoding in the refresh comparison (R3), `tokens_matter` true for writes (R4), `rebuild_lower_index` only on a non-replaying load (R5), DEC-407 and DEC-406 reworded (R6), numbering dropped (R7)
 
 ### Proof
 
 - [x] Baseline binary built from `5e2512ed` before any change
-- [x] Byte-identical JSON, baseline against new, hints off, disk and `--index`, on MDN, GitHub Docs and the Obsidian Hub: `find` with `--fields links`, `--fields properties`, `--broken-links`, `--orphan`, `--dead-end`, `summary`, `tags`, `properties`, `lint`, `backlinks` on 25 notes, ranked `find` on 20 queries: 324 comparisons, 0 differences; plus `lint` with every stock rule enabled (MD007 off on the Hub, where upstream MD007 panics on baseline too): identical, disk and `--index`
+- [x] Byte-identical JSON, baseline against new, hints off, disk and `--index`, on MDN, GitHub Docs and the Obsidian Hub: `find` with `--fields links`, `--fields properties`, `--broken-links`, `--orphan`, `--dead-end`, `summary`, `tags`, `properties`, `lint`, `backlinks` on 25 notes, ranked `find` on 20 queries: 324 comparisons, 0 differences; plus `lint` with every stock rule enabled (my runs were plain `lint`, capped at 50 files and 3 findings per rule; the review's uncapped `--limit 0 --max-per-rule 0` run is byte-identical too) (MD007 off on the Hub, where upstream MD007 panics on baseline too): identical, disk and `--index`
 - [x] Staleness matrix (an edit, an edit keeping size, an edit keeping size and mtime, a body-only edit keeping both, a delete, a deleted target, an add; `backlinks`, `read`, `find --file`, `lint FILE`): new and baseline give the same 112 results; the 4 that differ from disk are an unnamed referrer edited with size and mtime restored, invisible to any stat probe in both binaries
 - [x] Table-driven tests: every default stock rule on 13 bodies with the shared tree against a fresh parse; MD034 on the full against the emptied document; `lint_body` with every rule against one rule at a time; refresh after each kind of edit with and without `tokens_matter`; lazy graph resolves once; `read_aliases` over 10 frontmatter shapes (also run against the old behaviour)
 - [x] Allocation counts before and after for every changed command (research note)

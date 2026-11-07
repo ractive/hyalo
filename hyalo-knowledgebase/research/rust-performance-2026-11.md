@@ -129,7 +129,7 @@ Wall time, same runs, indicative only: `tags --index` 0.35 s to 0.20 s,
   by 399M (-83%) with every stock rule on. Sharing the parse is limited to the 26
   `AstRule`s: MD051, MD056 and MD059 answer differently for `Some` and `None`, so a
   first draft that shared with every rule changed `lint` output (caught in review).
-  The default rules do not include those three, which is why the default-rule
+  Uncapped (`--limit 0 --max-per-rule 0`) the first draft read MD051 0 to 286 and MD056 422 to 0 on GitHub Docs, and MD051 5 to 2377 and MD056 15 to 0 on MDN. The default rules do not include those three, which is why the default-rule
   number did not move when the allow-list came in.
 - **Item 5**: the one-line `needs_body` fix halves logical body reads on a disk
   scan (28,750 to 14,375, measured), but disk `summary` allocations did not move
