@@ -104,10 +104,12 @@ noise-bound and only the allocation counts carry the claim.
 | `tags --index` | 3.11M | 0.95M | 247 MiB | 206 MiB |
 | `summary --index` | 5.31M | 4.24M | 247 MiB | 234 MiB |
 | `backlinks --index` (one note) | 6.81M | 2.02M | 373 MiB | 217 MiB |
-| `find --fields links --index` | 5.84M | 4.76M | 420 MiB | 410 MiB |
+| `find --fields links --index` | 5.84M | 3.67M | 420 MiB | 391 MiB |
+| `find --file --index` (one note) | 6.74M | 0.86M | not recorded | not recorded |
 | ranked `find --index` | 5.81M | 3.66M | 374 MiB | 345 MiB |
 | `summary` (disk) | 7.40M | 7.41M | 110 MiB | 110 MiB |
-| `lint` | 331.89M | 34.40M | 42 MiB | 41 MiB |
+| `lint` (default rules) | 331.89M | 34.40M | 42 MiB | 41 MiB |
+| `lint` (every stock rule on) | 483.47M | 84.35M | not recorded | not recorded |
 | `create-index` (cold) | 49.26M | 46.93M | 854 MiB | 847 MiB |
 | ranked `find` (disk) | 30.28M | 27.95M | 429 MiB | 429 MiB |
 
@@ -123,8 +125,12 @@ Wall time, same runs, indicative only: `tags --index` 0.35 s to 0.20 s,
   needs it once and no longer decodes BM25 (-70%, measured). The audit's 0.9M per
   rebuild matches: 3.11M - 0.95M = 2.16M saved by removing two rebuilds and the
   decode that followed.
-- **Item 3 and 4**: lint allocations fall by 297M (-90%). The audit estimated 57M
-  plus 256M; the measurement is 313M less 16M that remain in other rules.
+- **Item 3 and 4**: lint allocations fall by 297M (-90%) with the default rules and
+  by 399M (-83%) with every stock rule on. Sharing the parse is limited to the 26
+  `AstRule`s: MD051, MD056 and MD059 answer differently for `Some` and `None`, so a
+  first draft that shared with every rule changed `lint` output (caught in review).
+  The default rules do not include those three, which is why the default-rule
+  number did not move when the allow-list came in.
 - **Item 5**: the one-line `needs_body` fix halves logical body reads on a disk
   scan (28,750 to 14,375, measured), but disk `summary` allocations did not move
   (7.40M to 7.41M). The audit's -3.4M assumed the alias pass is replaced by the scan's

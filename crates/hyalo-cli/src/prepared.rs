@@ -782,9 +782,10 @@ impl PreparedInvocation {
             PreparedCommand::Find(query) => query.reads_link_graph(),
             _ => false,
         };
-        // Only a ranked `find` reads the postings (DEC-406).
-        let tokens_matter =
-            matches!(&self.command, PreparedCommand::Find(query) if query.pattern.is_some());
+        // Only a ranked `find` reads the postings, and a write saves them
+        // (DEC-406): both need them exact.
+        let tokens_matter = !read_fallback
+            || matches!(&self.command, PreparedCommand::Find(query) if query.pattern.is_some());
         let (selection, repairs, insert) = match &self.command {
             PreparedCommand::Read { target, .. }
             | PreparedCommand::Backlinks { target, .. }

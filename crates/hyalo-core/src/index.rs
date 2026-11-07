@@ -1846,8 +1846,8 @@ impl SnapshotIndex {
     /// which a loaded entry no longer holds (the postings do, and reading them
     /// back means decoding the whole section). `tokens_matter` says what to do
     /// then: `true` refreshes unless the snapshot has no BM25 section or the
-    /// entry still carries equal tokens; `false` (a read that never ranks)
-    /// trusts the postings. That leaves one blind spot, a body edit that keeps
+    /// entry still carries equal tokens; `false` (a read that neither ranks nor
+    /// saves) trusts the postings. That leaves one blind spot, a body edit that keeps
     /// the size, the mtime second, the line count and every outline, link,
     /// task and property: the one DEC-302 already documents for same-second
     /// edits.
@@ -1865,7 +1865,7 @@ impl SnapshotIndex {
         if same_scan_product(old, &fresh)
             && match (&old.bm25_tokens, &fresh.bm25_tokens) {
                 (Some(old), Some(fresh)) => {
-                    rmp_serde::to_vec(old).ok() == rmp_serde::to_vec(fresh).ok()
+                    rmp_serde::to_vec_named(old).ok() == rmp_serde::to_vec_named(fresh).ok()
                 }
                 (None, _) => !tokens_matter || !self.bm25.is_present(),
                 (Some(_), None) => false,
@@ -2381,7 +2381,9 @@ impl SnapshotIndex {
         // The graph's lowercased companion map is `#[serde(skip)]`, so a
         // freshly-deserialized graph has an empty one — rebuild it from
         // the restored index keys so `backlinks_ci` works off snapshots.
-        graph.rebuild_lower_index();
+        if !replay {
+            graph.rebuild_lower_index();
+        }
         // Persisted graphs from older binaries are derived data, never
         // resolution authority: a replaying load leaves the cell empty so the
         // first read resolves the entries under this run's options.
@@ -3333,8 +3335,9 @@ pub fn refresh_if_changed_at(
 
 /// Whether two scans of one note agree on everything but its BM25 tokens.
 fn same_scan_product(a: &IndexEntry, b: &IndexEntry) -> bool {
+    // Named, so a skipped `None` cannot make two different structs encode alike.
     let key = |e: &IndexEntry| {
-        rmp_serde::to_vec(&(
+        rmp_serde::to_vec_named(&(
             &e.modified,
             e.size,
             e.lines,
@@ -5703,6 +5706,25 @@ Content.
                 assert_eq!(to_c, usize::from(content.contains("[[c]]")), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_refresh_tells_a_fragment_from_a_query_of_the_same_length() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut snapshot = loaded_bm25_snapshot(
+            tmp.path(),
+            &[("a.md", "# A\n[t](b.md#x) words\n"), ("b.md", "# B\n")],
+        );
+        let full = tmp.path().join("a.md");
+        std::fs::write(&full, "# A\n[t](b.md?x) words\n").unwrap();
+        assert!(refresh_if_changed_at(&mut snapshot, &full, "a.md", false));
+        let fresh = scan_one_file(&full, "a.md", true, false, None, None)
+            .unwrap()
+            .0;
+        assert_eq!(
+            serde_json::to_value(&snapshot.get("a.md").unwrap().links).unwrap(),
+            serde_json::to_value(&fresh.links).unwrap()
+        );
     }
 
     #[test]
