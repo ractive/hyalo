@@ -1043,12 +1043,21 @@ fn execute_plans_with_session(
     // A queued rewrite is renamed by `finish_staged`, so only now is it known
     // which notes changed (DEC-408): one that was not renamed is untouched.
     let report = session.finish_staged();
-    let unpublished = report.unpublished_by_entry();
+    let settlement = report.settlement();
     for outcome in outcomes.iter_mut().filter(|outcome| outcome.applied) {
-        if let Some(note) = unpublished.get(crate::rooted::entry_key(&outcome.rel_path).as_str()) {
+        let reason = match settlement.of(&outcome.rel_path) {
+            crate::rooted::Settled::NotWritten(note) => {
+                Some(format!("rewrite not written: {}", note.reason()))
+            }
+            crate::rooted::Settled::Unknown => Some(
+                "rewrite not written: the note cannot be matched against the phase report"
+                    .to_owned(),
+            ),
+            crate::rooted::Settled::Written => None,
+        };
+        if let Some(reason) = reason {
             outcome.applied = false;
             receipts.remove(&outcome.rel_path);
-            let reason = format!("rewrite not written: {}", note.reason());
             outcome.error = Some(match outcome.error.take() {
                 Some(existing) => format!("{existing}; {reason}"),
                 None => reason,

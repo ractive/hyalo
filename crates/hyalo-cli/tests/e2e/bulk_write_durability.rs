@@ -100,3 +100,69 @@ fn a_multi_note_write_leaves_no_temporary_file() {
         assert!(content.contains("status: done"));
     }
 }
+
+/// DEC-409: Ctrl-C in the middle of a phase removes every temp file not yet
+/// renamed, renames nothing more, says what was written and exits 130; every
+/// note is whole, old or new.
+#[cfg(unix)]
+#[test]
+fn an_interrupt_mid_phase_leaves_no_temporary_file_and_no_damaged_note() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    const NOTES: usize = 6000;
+    let tmp = vault_of(NOTES);
+    let program = hyalo_no_hints().get_program().to_owned();
+    let mut child = std::process::Command::new(program)
+        .current_dir(tmp.path())
+        .args(["--no-hints", "lint", "--fix", "--rule", "MD047"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let staged = |dir: &std::path::Path| {
+        (0..4).any(|i| {
+            std::fs::read_dir(dir.join(format!("d{i}")))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(".hyalo-tmp-"))
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !staged(tmp.path()) {
+        assert!(Instant::now() < deadline, "the phase never staged a note");
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "finished before staging"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let signalled = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(signalled.success());
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert!(stderr.contains("hyalo: interrupted"), "{stderr}");
+    assert_eq!(
+        leftovers(tmp.path()).len(),
+        0,
+        "{:?}",
+        leftovers(tmp.path())
+    );
+    let (mut old, mut new) = (0, 0);
+    for i in 0..NOTES {
+        let content =
+            std::fs::read_to_string(tmp.path().join(format!("d{}/n{i}.md", i % 4))).unwrap();
+        if content.ends_with("body\n\n") {
+            old += 1;
+        } else if content.ends_with("body\n") {
+            new += 1;
+        } else {
+            panic!("n{i}.md is damaged: {content:?}");
+        }
+    }
+    assert_eq!(old + new, NOTES);
+}

@@ -247,13 +247,54 @@ pub struct CapturedInput {
     exact_identity: ExactIdentity,
     identity: u64,
     /// The bytes callers read through [`Self::reader`] and [`Self::bytes`].
-    original: Arc<TempPath>,
-    /// Set on a capture of a replacement that is staged but not yet renamed
-    /// (DEC-408): the bytes the file on disk must still have. `original`
-    /// then holds the staged bytes, which the file on disk does not.
-    base: Option<Arc<TempPath>>,
+    /// `None` once the capture was reduced to its fingerprint for a staged
+    /// replacement (DEC-408): the phase then keeps no copy of the note.
+    original: Option<Arc<TempPath>>,
+    /// What the file on disk must still be (size and hash of its bytes), once
+    /// computed. On a capture of a replacement that is staged but not yet
+    /// renamed, `original` holds the staged bytes, which the file on disk does
+    /// not, and this is what [`Self::verify`] checks the disk against.
+    base: Option<Fingerprint>,
     permissions: std::fs::Permissions,
     size: u64,
+}
+
+/// Size and a 128-bit hash of a note's bytes: two SipHash-1-3 streams with
+/// distinct prefixes over fixed 64 KiB chunks. It stands in for a copy of the
+/// original in the lost-update guard of a staged replacement (DEC-409). It is
+/// not cryptographic: it detects any edit by accident, not a forged collision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Fingerprint {
+    size: u64,
+    hash: (u64, u64),
+}
+
+impl Fingerprint {
+    fn of(mut reader: impl Read) -> std::io::Result<Self> {
+        let (mut first, mut second) = (DefaultHasher::new(), DefaultHasher::new());
+        second.write(b"hyalo-fingerprint-2");
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut size = 0u64;
+        loop {
+            let mut filled = 0;
+            while filled < buffer.len() {
+                let n = reader.read(&mut buffer[filled..])?;
+                if n == 0 {
+                    break;
+                }
+                filled += n;
+            }
+            first.write(&buffer[..filled]);
+            second.write(&buffer[..filled]);
+            size += filled as u64;
+            if filled < buffer.len() {
+                return Ok(Self {
+                    size,
+                    hash: (first.finish(), second.finish()),
+                });
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -319,7 +360,7 @@ impl CapturedInput {
             referent: opened.referent,
             exact_identity,
             identity,
-            original: Arc::new(original.into_temp_path()),
+            original: Some(Arc::new(original.into_temp_path())),
             base: None,
             permissions: metadata.permissions(),
             size,
@@ -338,16 +379,28 @@ impl CapturedInput {
     pub fn size(&self) -> u64 {
         self.size
     }
+    fn original_path(&self) -> Result<&Path> {
+        self.original
+            .as_deref()
+            .map(|path| &**path)
+            .context("the captured copy was released after the write was staged")
+    }
     pub fn reader(&self) -> Result<File> {
-        Ok(File::open(&**self.original)?)
+        Ok(File::open(self.original_path()?)?)
     }
     pub fn bytes(&self) -> Result<Vec<u8>> {
-        Ok(std::fs::read(&**self.original)?)
+        Ok(std::fs::read(self.original_path()?)?)
     }
 
-    /// The bytes the file on disk must have for this capture to hold.
-    fn verification_base(&self) -> &Arc<TempPath> {
-        self.base.as_ref().unwrap_or(&self.original)
+    /// What the file on disk must be for this capture to hold, computed from
+    /// the captured copy the first time.
+    fn fingerprint(&mut self) -> Result<Fingerprint> {
+        if let Some(base) = self.base {
+            return Ok(base);
+        }
+        let base = Fingerprint::of(self.reader()?)?;
+        self.base = Some(base);
+        Ok(base)
     }
 
     pub fn verify(&self) -> Result<()> {
@@ -368,7 +421,15 @@ impl CapturedInput {
         if exact_identity != self.exact_identity || identity != self.identity {
             bail!(SourceConflict("target file identity changed"));
         }
-        let mut original = File::open(&***self.verification_base())?;
+        if let Some(base) = self.base {
+            // Size and hash of the live bytes against the original's, streamed.
+            return if Fingerprint::of(&mut current)? == base {
+                Ok(())
+            } else {
+                Err(SourceConflict("source bytes changed").into())
+            };
+        }
+        let mut original = self.reader()?;
         let buffer_size = usize::try_from(self.size.clamp(1, 64 * 1024))?;
         let mut left = vec![0u8; buffer_size].into_boxed_slice();
         let mut right = vec![0u8; buffer_size].into_boxed_slice();
@@ -427,15 +488,30 @@ impl CapturedInput {
         &self,
         session: &WriteSession,
         write: impl FnOnce(&mut NamedTempFile) -> Result<()>,
-    ) -> Result<(PathBuf, NamedTempFile)> {
+    ) -> Result<(PathBuf, StagingTemp)> {
         self.verify()?;
         let path = self.root.check(&self.entry, true)?;
         let parent = path.parent().context("target has no parent")?;
-        let staged = (|| -> Result<NamedTempFile> {
-            let mut temp = NamedTempFile::new_in(parent)?;
-            write(&mut temp)?;
-            temp.as_file().set_permissions(self.permissions.clone())?;
-            session.flush(temp.as_file())?;
+        let bulk = session.durability == Durability::BulkRewrite;
+        let staged = (|| -> Result<StagingTemp> {
+            let _flight = bulk.then(crate::interrupt::flight);
+            let file = tempfile::Builder::new()
+                .prefix(crate::interrupt::TEMP_PREFIX)
+                .tempfile_in(parent)?;
+            // Tracked from creation so a signal removes it, written or not.
+            let tracked = if bulk {
+                crate::interrupt::Tracked::new(file.path())
+            } else {
+                crate::interrupt::Tracked::none()
+            };
+            let mut temp = StagingTemp { file, tracked };
+            write(&mut temp.file)?;
+            temp.file
+                .as_file()
+                .set_permissions(self.permissions.clone())?;
+            if !bulk {
+                session.flush(temp.file.as_file())?;
+            }
             session.probe(|| format!("stage {}", entry_name(&self.entry)));
             Ok(temp)
         })();
@@ -449,37 +525,35 @@ impl CapturedInput {
     }
 
     fn publish_replacement(
-        self,
+        mut self,
         path: &Path,
-        temp: NamedTempFile,
+        temp: StagingTemp,
         session: &mut WriteSession,
     ) -> Result<CommitEffect> {
         if session.durability == Durability::BulkRewrite {
-            // The content is flushed; the name changes at `finish`, after one
-            // barrier for every staged note, and `finish` verifies the source
-            // again right before it renames (DEC-408).
-            let device = match barrier::device_of(temp.as_file()) {
-                Ok(device) => device,
-                Err(error) => {
-                    let error = anyhow::Error::from(error);
-                    session.poison_unless_local(&error);
-                    return Err(error);
-                }
-            };
+            // The name changes at `finish`, after every staged file was
+            // flushed and one barrier ran; `finish` verifies the source again
+            // right before it renames (DEC-408). The phase keeps a hash of the
+            // original, not a copy of it (DEC-409).
+            if let Err(error) = self.fingerprint() {
+                session.poison_unless_local(&error);
+                return Err(error);
+            }
+            self.original = None;
             session.stage(
                 path.to_path_buf(),
                 Staged {
                     entry: self.entry.clone(),
-                    temp: temp.into_temp_path(),
+                    temp: temp.file.into_temp_path(),
+                    tracked: temp.tracked,
                     source: self,
-                    device,
                 },
             );
             return Ok(WriteSession::queued(path));
         }
         session.fault(FaultPoint::Persist)?;
         self.verify()?;
-        temp.persist(path).map_err(|e| e.error)?;
+        temp.file.persist(path).map_err(|e| e.error)?;
         Ok(session.record(path, Operation::Replaced))
     }
 
@@ -538,7 +612,7 @@ pub struct OwnedPublication {
 /// What the entry on disk must still be while a replacement waits for its rename.
 struct StagedOver {
     identity: ExactIdentity,
-    base: Arc<TempPath>,
+    base: Fingerprint,
 }
 
 impl OwnedPublication {
@@ -569,13 +643,13 @@ impl OwnedPublication {
             }
         } else if let Some(staged) = &self.staged_over
             && captured.exact_identity == staged.identity
-            && captured.bytes()? == std::fs::read(&**staged.base)?
+            && Fingerprint::of(captured.reader()?)? == staged.base
         {
             let mut staged_bytes = NamedTempFile::new()?;
             staged_bytes.write_all(&expected)?;
             captured.size = expected.len() as u64;
-            captured.base = Some(Arc::clone(&staged.base));
-            captured.original = Arc::new(staged_bytes.into_temp_path());
+            captured.base = Some(staged.base);
+            captured.original = Some(Arc::new(staged_bytes.into_temp_path()));
             return Ok(captured);
         }
         bail!(SourceConflict(
@@ -594,7 +668,7 @@ impl PreparedReplacement {
     }
 
     pub fn commit_with_receipt(
-        self,
+        mut self,
         session: &mut WriteSession,
     ) -> Result<(CommitEffect, OwnedPublication)> {
         let (path, temp) = self.source.stage_replacement(session, |temp| {
@@ -602,11 +676,15 @@ impl PreparedReplacement {
             std::io::copy(&mut staged, temp)?;
             Ok(())
         })?;
-        let handle = same_file::Handle::from_file(temp.as_file().try_clone()?)?;
-        let staged_over = (session.durability == Durability::BulkRewrite).then(|| StagedOver {
-            identity: self.source.exact_identity,
-            base: Arc::clone(self.source.verification_base()),
-        });
+        let handle = same_file::Handle::from_file(temp.file.as_file().try_clone()?)?;
+        let staged_over = if session.durability == Durability::BulkRewrite {
+            Some(StagedOver {
+                identity: self.source.exact_identity,
+                base: self.source.fingerprint()?,
+            })
+        } else {
+            None
+        };
         let receipt = OwnedPublication {
             root: self.source.root.clone(),
             entry: self.source.entry.clone(),
@@ -653,7 +731,7 @@ pub fn move_no_replace_with_receipt(
         root: destination.root.clone(),
         entry: destination.name.clone(),
         handle,
-        expected: source.original,
+        expected: source.original.context("the captured copy was released")?,
         staged_over: None,
     };
     session.fault(FaultPoint::Persist)?;
@@ -768,16 +846,27 @@ pub enum FaultPoint {
     Finalize,
 }
 
-/// A replacement written and flushed beside its note, waiting for the rename.
+/// A sibling temporary file being written, tracked for signal cleanup.
+struct StagingTemp {
+    file: NamedTempFile,
+    tracked: crate::interrupt::Tracked,
+}
+
+/// A replacement written beside its note, waiting for its flush and rename.
 /// It holds a path and no open handle, so a phase can stage more notes than
 /// the process may keep open.
 struct Staged {
     entry: RelativeName,
     temp: TempPath,
-    /// Verified again right before the rename (DEC-408).
+    tracked: crate::interrupt::Tracked,
+    /// Reduced to its fingerprint; verified again right before the rename
+    /// (DEC-408, DEC-409).
     source: CapturedInput,
-    device: Option<u64>,
 }
+
+/// Pretends a staged path lives on a device (tests only).
+#[cfg(test)]
+type DeviceOf = Arc<dyn Fn(&Path) -> u64 + Send + Sync>;
 
 /// Told each step of a phase before it happens (tests only).
 #[cfg(test)]
@@ -795,6 +884,9 @@ struct Shared {
     /// test can check the order against the file system itself.
     #[cfg(test)]
     probe: Option<Probe>,
+    /// Test seam: the device a staged path pretends to live on.
+    #[cfg(test)]
+    device_override: Option<DeviceOf>,
 }
 
 /// A note a bulk phase staged and did not rename.
@@ -841,27 +933,80 @@ impl FinishReport {
     pub fn finalization_error(&self) -> Option<&str> {
         self.finalization.as_deref()
     }
-    /// The unpublished notes by [`entry_key`], for matching a caller's own
-    /// per-note effects in one pass.
+    /// Look up notes of the caller's own effects against this report.
     #[must_use]
-    pub fn unpublished_by_entry(&self) -> HashMap<&str, &Unpublished> {
-        self.unpublished
-            .iter()
-            .map(|note| (note.entry(), note))
-            .collect()
+    pub fn settlement(&self) -> Settlement<'_> {
+        Settlement {
+            by_entry: self
+                .unpublished
+                .iter()
+                .map(|note| (note.entry(), note))
+                .collect(),
+        }
     }
     pub fn into_result(self) -> Result<()> {
-        if let Some(first) = self.unpublished.first() {
-            bail!(
+        let unwritten = self.unpublished.first().map(|first| {
+            format!(
                 "{} of the queued notes were not written, first {}: {}",
                 self.unpublished.len(),
                 first.entry,
                 first.reason
-            );
+            )
+        });
+        match (unwritten, self.finalization) {
+            (None, None) => Ok(()),
+            (Some(message), None) => bail!("{message}"),
+            (None, Some(error)) => bail!("{error}"),
+            (Some(message), Some(error)) => bail!("{message}; and finalization failed: {error}"),
         }
-        match self.finalization {
-            Some(error) => bail!("{error}"),
-            None => Ok(()),
+    }
+    /// A report that refuses `entries` (vault-relative names) with `reason`.
+    /// For callers' tests of how they settle a report; a phase never makes one.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn refusing(entries: &[&str], reason: &str) -> Self {
+        Self {
+            unpublished: entries
+                .iter()
+                .map(|entry| Unpublished {
+                    entry: (*entry).to_owned(),
+                    reason: reason.to_owned(),
+                    conflict: false,
+                })
+                .collect(),
+            finalization: None,
+        }
+    }
+}
+
+/// How one of a caller's notes stands after the phase.
+#[derive(Debug)]
+pub enum Settled<'a> {
+    /// Renamed (or never queued): the caller's report stands.
+    Written,
+    /// Queued and not renamed: the note is as it was.
+    NotWritten(&'a Unpublished),
+    /// The name cannot be matched against the report (see [`entry_key`]) while
+    /// the report names unwritten notes, so it is not known to be written.
+    Unknown,
+}
+
+/// [`FinishReport::settlement`].
+#[derive(Debug)]
+pub struct Settlement<'a> {
+    by_entry: HashMap<&'a str, &'a Unpublished>,
+}
+
+impl<'a> Settlement<'a> {
+    #[must_use]
+    pub fn of(&self, rel: &str) -> Settled<'a> {
+        match entry_key(rel) {
+            Some(key) => self
+                .by_entry
+                .get(key.as_str())
+                .map_or(Settled::Written, |note| Settled::NotWritten(note)),
+            None if self.by_entry.is_empty() => Settled::Written,
+            None => Settled::Unknown,
         }
     }
 }
@@ -927,6 +1072,21 @@ impl WriteSession {
         Self {
             shared: Arc::new(Shared {
                 probe: Some(probe),
+                ..Shared::default()
+            }),
+            ..Self::new(durability)
+        }
+    }
+    /// A session whose staged paths pretend to sit on the devices `device`
+    /// names, to test one barrier per device.
+    #[cfg(test)]
+    fn with_devices(
+        durability: Durability,
+        device: Arc<dyn Fn(&Path) -> u64 + Send + Sync>,
+    ) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                device_override: Some(device),
                 ..Shared::default()
             }),
             ..Self::new(durability)
@@ -1083,33 +1243,70 @@ impl WriteSession {
     pub fn finish(self) -> Result<()> {
         self.finish_staged().into_result()
     }
-    /// Barrier, then renames, then directory fences (DEC-408), and report
+    /// Flush, barrier, renames, then directory fences (DEC-408), and report
     /// which queued notes did not make it.
     ///
-    /// Nothing is renamed if a staging step failed, the barrier failed or the
-    /// session is dropped first; every note is then untouched. Otherwise a
-    /// note whose source changed since it was read, or whose rename failed,
-    /// stays as it was and is listed, and the others are renamed: the phase
-    /// can end as a mix of old and new notes, never a damaged one.
+    /// Nothing is renamed if a staging step failed, a flush or the barrier
+    /// failed or the session is dropped first; every note is then untouched.
+    /// Otherwise a note whose source changed since it was read, or whose
+    /// rename failed, stays as it was and is listed, and the others are
+    /// renamed: the phase can end as a mix of old and new notes, never a
+    /// damaged one.
     #[must_use]
     pub fn finish_staged(mut self) -> FinishReport {
         let mut report = FinishReport::default();
         let staged = std::mem::take(&mut self.staged);
-        if !staged.is_empty() {
+        let had_staged = !staged.is_empty();
+        if had_staged {
             self.publish_staged(staged, &mut report);
         }
         report.finalization = (|| -> Result<()> {
             self.fault(FaultPoint::Finalize)?;
-            for parent in &self.directories {
-                self.probe(|| format!("fence {}", parent.display()));
-                sync_directory(parent)?;
-            }
-            Ok(())
+            self.fence_directories()
         })()
         .err()
         .map(|error| format!("{error:#}"));
+        if had_staged {
+            crate::interrupt::phase_done();
+        }
         report
     }
+
+    /// Fsync every touched directory on the pool, then one barrier per device.
+    #[cfg(unix)]
+    fn fence_directories(&self) -> Result<()> {
+        use rayon::prelude::*;
+        let flush = |parent: &PathBuf| -> Result<(u64, PathBuf)> {
+            self.probe(|| format!("fence {}", parent.display()));
+            let directory = File::open(parent).context("opening directory to fence")?;
+            barrier::flush_content(&directory).context("syncing parent directory")?;
+            let device = barrier::device_of(&directory)?.unwrap_or(0);
+            Ok((device, parent.clone()))
+        };
+        let directories: Vec<&PathBuf> = self.directories.iter().collect();
+        #[cfg(not(miri))]
+        let fenced: Vec<Result<(u64, PathBuf)>> = directories.into_par_iter().map(flush).collect();
+        #[cfg(miri)]
+        let fenced: Vec<Result<(u64, PathBuf)>> = directories.into_iter().map(flush).collect();
+        let mut anchors: BTreeMap<u64, PathBuf> = BTreeMap::new();
+        for fence in fenced {
+            let (device, parent) = fence?;
+            anchors.entry(device).or_insert(parent);
+        }
+        for anchor in anchors.values() {
+            barrier::barrier(anchor).context("flushing directories")?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    fn fence_directories(&self) -> Result<()> {
+        for parent in &self.directories {
+            self.probe(|| format!("fence {}", parent.display()));
+            sync_directory(parent)?;
+        }
+        Ok(())
+    }
+
     fn publish_staged(&mut self, staged: BTreeMap<PathBuf, Staged>, report: &mut FinishReport) {
         let refuse_all =
             |report: &mut FinishReport, staged: BTreeMap<PathBuf, Staged>, reason: &str| {
@@ -1131,14 +1328,51 @@ impl WriteSession {
             refuse_all(report, staged, &format!("staging failed: {reason}"));
             return;
         }
-        // One barrier per device, after every note's content was flushed and
-        // before the first rename. `st_dev` tells nested mounts apart.
-        let mut anchors: BTreeMap<u64, &Path> = BTreeMap::new();
-        for (path, note) in &staged {
-            if let (Some(device), Some(parent)) = (note.device, path.parent()) {
-                anchors.entry(device).or_insert(parent);
+        // Flush every staged file on the pool (a fsync, or `FlushFileBuffers`
+        // on Windows). The injected fault is decided here, in path order, so a
+        // test lands it on a chosen note.
+        let to_flush: Vec<(&PathBuf, &Staged, Result<()>)> = staged
+            .iter()
+            .map(|(path, note)| (path, note, self.fault(FaultPoint::SyncFile)))
+            .collect();
+        let this = &*self;
+        let flush = |(path, note, injected): (&PathBuf, &Staged, Result<()>)| -> Result<Option<(u64, PathBuf)>> {
+            injected?;
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&*note.temp)
+                .context("reopening a staged file to flush it")?;
+            barrier::flush_content(&file)?;
+            let device = this.device_of(path, &file)?;
+            Ok(device.zip(path.parent().map(Path::to_path_buf)))
+        };
+        #[cfg(not(miri))]
+        let flushed: Vec<Result<Option<(u64, PathBuf)>>> = {
+            use rayon::prelude::*;
+            to_flush.into_par_iter().map(flush).collect()
+        };
+        #[cfg(miri)]
+        let flushed: Vec<Result<Option<(u64, PathBuf)>>> =
+            to_flush.into_iter().map(flush).collect();
+        let mut anchors: BTreeMap<u64, PathBuf> = BTreeMap::new();
+        for result in flushed {
+            match result {
+                Ok(Some((device, parent))) => {
+                    anchors.entry(device).or_insert(parent);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    refuse_all(
+                        report,
+                        staged,
+                        &format!("flushing staged notes failed: {error:#}"),
+                    );
+                    return;
+                }
             }
         }
+        // One barrier per device, after every file was flushed and before the
+        // first rename. `st_dev` tells nested mounts apart.
         let barrier_result = self.fault(FaultPoint::Barrier).and_then(|()| {
             self.probe(|| "barrier".to_owned());
             anchors.iter().try_for_each(|(device, anchor)| {
@@ -1155,8 +1389,7 @@ impl WriteSession {
             return;
         }
         // Each note is verified and renamed independently, so the renames run
-        // on the pool. The injected fault is decided here, in path order, so a
-        // test lands it on a chosen note.
+        // on the pool. The injected fault is decided here, in path order.
         let queue: Vec<_> = staged
             .into_iter()
             .map(|(path, note)| {
@@ -1172,10 +1405,15 @@ impl WriteSession {
                     note.source.verify()
                 })
                 .and_then(|()| {
+                    // A signal now means the handler removes the temp file.
+                    if !note.tracked.claim() {
+                        bail!("interrupted before the rename");
+                    }
                     note.temp
                         .persist(&path)
                         .map_err(|error| anyhow::Error::from(error.error))
-                });
+                })
+                .inspect(|()| crate::interrupt::renamed_one());
             (path, note.entry, outcome)
         };
         #[cfg(not(miri))]
@@ -1200,6 +1438,20 @@ impl WriteSession {
             }
         }
     }
+
+    /// The device a staged file lives on, or `None` where no barrier exists.
+    #[cfg(test)]
+    fn device_of(&self, path: &Path, file: &File) -> Result<Option<u64>> {
+        if let Some(fake) = &self.shared.device_override {
+            return Ok(Some(fake(path)));
+        }
+        Ok(barrier::device_of(file)?)
+    }
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    fn device_of(&self, _path: &Path, file: &File) -> Result<Option<u64>> {
+        Ok(barrier::device_of(file)?)
+    }
 }
 
 /// The vault-relative spelling effects and reports use: `/` on every platform.
@@ -1209,9 +1461,12 @@ fn entry_name(entry: &RelativeName) -> String {
 
 /// The key a vault-relative name has in [`FinishReport::unpublished_by_entry`]:
 /// the one derivation, whatever separators or `./` the caller spelled it with.
+/// `None` for a name no write could have used (absolute, `..`, empty): such an
+/// effect cannot be matched against the report, and a caller must not treat
+/// that as "was renamed".
 #[must_use]
-pub fn entry_key(rel: &str) -> String {
-    RelativeName::new(rel).map_or_else(|_| rel.replace('\\', "/"), |name| entry_name(&name))
+pub fn entry_key(rel: &str) -> Option<String> {
+    RelativeName::new(rel).ok().map(|name| entry_name(&name))
 }
 
 #[cfg(unix)]
@@ -1221,9 +1476,10 @@ fn sync_directory(path: &Path) -> Result<()> {
         .context("syncing parent directory")
 }
 /// Windows has no supported per-directory fsync equivalent here. Replacement
-/// files are flushed before publication except under BulkRewrite policy, but
-/// directory-entry crash durability is explicitly unavailable; atomic/exclusive
-/// publication remains supported.
+/// content is flushed before it is renamed in every policy (per file under
+/// PerFile and PerDirectory, for the whole staged set before the renames
+/// under BulkRewrite), but directory-entry crash durability is explicitly
+/// unavailable; atomic/exclusive publication remains supported.
 #[cfg(windows)]
 fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())

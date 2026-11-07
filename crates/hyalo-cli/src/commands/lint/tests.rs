@@ -1713,13 +1713,14 @@ fn lint_fix_does_not_overwrite_a_note_edited_while_its_fix_was_queued() {
     };
     let edited = dir.path().join("note3.md");
     let edit = "---\ntitle: Note 3\n---\nEDIT\n\n";
-    let (outcome, _counts) =
+    let (outcome, counts) =
         lint_files_extended_observed(&files, &schema, &engine, &md_config, &mut opts, |_, _| {
             std::fs::write(&edited, edit).unwrap();
         })
         .unwrap();
     let crate::output::CommandOutcome::Success {
         effects: Some(report),
+        output,
         ..
     } = outcome
     else {
@@ -1747,6 +1748,27 @@ fn lint_fix_does_not_overwrite_a_note_edited_while_its_fix_was_queued() {
     assert_eq!(
         state_of("note0.md"),
         Some(crate::commands::apply::EffectState::Committed)
+    );
+    // The listing, the totals and the exit status do not claim the fix that
+    // never landed, and the note carries the error a failed write always did.
+    assert_eq!(output["total_fixed"], 5, "{output}");
+    assert_eq!(output["rules_fixed"]["MD047"], 5, "{output}");
+    let files = output["files"].as_array().unwrap();
+    let note3 = files.iter().find(|f| f["file"] == "note3.md").unwrap();
+    assert!(
+        note3["fixed_groups"].as_array().is_none_or(Vec::is_empty),
+        "{note3}"
+    );
+    assert!(
+        note3
+            .to_string()
+            .contains("could not write fixes to note3.md"),
+        "{note3}"
+    );
+    assert!(
+        counts.errors >= 1,
+        "the run must fail: errors = {}",
+        counts.errors
     );
     let leftovers = std::fs::read_dir(dir.path()).unwrap().count();
     assert_eq!(leftovers, 6, "no temporary file may survive");

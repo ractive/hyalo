@@ -1,23 +1,20 @@
-//! The flush half of a bulk rewrite phase (DEC-408): what makes the content of
-//! every staged temporary file reach the device before the first rename.
+//! The flush half of a bulk rewrite phase (DEC-408, DEC-409): what makes the
+//! content of every staged temporary file reach the device before the first
+//! rename. `finish_staged` flushes every staged file on the rayon pool with
+//! [`flush_content`], then runs [`barrier`] once per device.
 //!
-//! The order is the whole guarantee, so each platform gets the cheapest
-//! primitive that still puts the content on stable storage first:
-//!
-//! * macOS: [`flush_content`] is a plain `fsync` per file (data to the drive,
-//!   drive cache not flushed, 0.03 ms a file measured on APFS) and [`barrier`]
-//!   one `F_FULLFSYNC` per device, which flushes the drive cache for everything
+//! * macOS: [`flush_content`] is a plain `fsync` (data to the drive, drive
+//!   cache not flushed, 0.03 ms a file measured on APFS) and [`barrier`] one
+//!   `F_FULLFSYNC` per device, which flushes the drive cache for everything
 //!   written before it. Rust's `File::sync_all` is `F_FULLFSYNC` on every call,
 //!   5.5 ms each, and does not amortise across threads. A volume that refuses
 //!   `F_FULLFSYNC` (some network filesystems) keeps the per-file `fsync`, the
 //!   strongest primitive it offers.
-//! * Linux and Android: [`flush_content`] does nothing and [`barrier`] is one
-//!   `syncfs` per filesystem, which writes out all of its dirty data. It reports
-//!   a writeback error only on Linux 5.8 and later; on an older kernel an error
-//!   that happened before the call can be missed.
-//! * Windows and other Unix: [`flush_content`] is `sync_all` per file
-//!   (`FlushFileBuffers`), there is no unprivileged volume barrier and
-//!   [`barrier`] does nothing.
+//! * Linux, Windows and other platforms: [`flush_content`] is `sync_all` (a
+//!   Linux `fsync` flushes the device cache for that file; `FlushFileBuffers`
+//!   on Windows) and there is no volume barrier: `syncfs` was dropped because
+//!   it writes out every dirty page of the filesystem and reports errors of
+//!   unrelated writers. Unmeasured here.
 //!
 //! Devices are told apart by `st_dev` ([`device_of`]); a vault can span
 //! filesystems through nested mounts, and a barrier on one does not cover another.
@@ -54,12 +51,7 @@ pub(super) fn flush_content(file: &File) -> io::Result<()> {
         }
     }
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[allow(clippy::unnecessary_wraps)]
-pub(super) fn flush_content(_file: &File) -> io::Result<()> {
-    Ok(())
-}
-#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+#[cfg(not(target_vendor = "apple"))]
 pub(super) fn flush_content(file: &File) -> io::Result<()> {
     file.sync_all()
 }
@@ -86,19 +78,7 @@ pub(super) fn barrier(anchor: &Path) -> io::Result<()> {
         }
     }
 }
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub(super) fn barrier(anchor: &Path) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
-    let handle = File::open(anchor)?;
-    // SAFETY: `fd` is a valid descriptor owned by `handle` for the whole call;
-    // `syncfs` reads no memory of ours.
-    if unsafe { libc::syncfs(handle.as_raw_fd()) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+#[cfg(not(target_vendor = "apple"))]
 #[allow(clippy::unnecessary_wraps)]
 pub(super) fn barrier(_anchor: &Path) -> io::Result<()> {
     Ok(())

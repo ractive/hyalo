@@ -736,6 +736,7 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "criterion",
+ "ctrlc",
  "dunce",
  "globset",
  "ignore",

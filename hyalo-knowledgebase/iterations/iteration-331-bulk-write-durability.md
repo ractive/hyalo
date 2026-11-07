@@ -25,7 +25,7 @@ notes may be a mix. Decision: DEC-408 (amends DEC-404, DEC-317, DEC-323). Backlo
 
 - [x] Audit what breaks when a write is deferred: a note written twice in a phase, a note read after it was written, the lost-update guard, failure semantics, the journal, temp files, open handles, memory, disk space
 - [x] Measure the flush primitives on macOS (per-file `fsync` plus one `F_FULLFSYNC` against `sync_all` per file)
-- [x] `rooted/barrier.rs`: `fsync` per file and one `F_FULLFSYNC` per device on macOS, one `syncfs` per filesystem on Linux, `sync_all` per file on Windows and other Unix
+- [x] `rooted/barrier.rs`: `fsync` per file and one `F_FULLFSYNC` per device on macOS, `sync_all` per file elsewhere
 - [x] `BulkRewrite` stages and flushes at write time, `finish_staged` runs barrier, renames, fences and returns a `FinishReport`
 - [x] A second write to a staged note replaces the first and starts from its staged bytes (`OwnedPublication::capture_verified` on a staged entry)
 - [x] The source is verified again at the rename, on the pool
@@ -42,6 +42,15 @@ notes may be a mix. Decision: DEC-408 (amends DEC-404, DEC-317, DEC-323). Backlo
 - [x] Every behaviour test fails under its mutation, 20 of 20 runs, and passes 20 of 20 without it
 - [x] Byte-identical trees, JSON, stderr and exit codes against the `cce1c8c8` build for `lint --fix`, `tags rename`, `properties rename`, `set --glob`, `mv`, `links fix --apply --apply-fuzzy` on the Obsidian Hub, GitHub Docs and MDN (16 cells); a binary that skips some renames fails the tree comparison in all 6 cells tried (its JSON is identical, so the tree is the check)
 - [x] Hub and MDN `lint --fix`, `set --glob`, a phase of 8 notes and the peak temp-file count, median of 5, baseline and head interleaved
+
+### Review round (DEC-409)
+
+- [x] `lint --fix` takes a fix that was queued and not renamed out of its listing, totals and exit status; the other bulk commands already fail through their reports
+- [x] One process-wide signal handler (`hyalo_core::interrupt`) shared with the `--jq` worker: Ctrl-C, SIGTERM and SIGHUP remove the unrenamed temp files and exit 130; temp files are named `.hyalo-tmp-*`
+- [x] The lost-update guard keeps a size-and-hash fingerprint, not a copy of each original in `$TMPDIR`
+- [x] Directory fences on the pool, one barrier per device; every staged file flushed on the pool in `finish_staged`; `syncfs` dropped
+- [x] `into_result` reports both failures; an effect that cannot be matched against the report is an error, not "written"; the Windows comment reworded
+- [x] Mutation checks (20 of 20 runs each side), both signal probes, the 16-cell differential with a control, and the timings rerun
 
 ### Documentation
 

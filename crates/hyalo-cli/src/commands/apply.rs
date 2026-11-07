@@ -137,29 +137,51 @@ fn emit_progress(message: Option<String>) {
 /// what `finish_staged` then did (DEC-408). A queued note that was not renamed
 /// is untouched, so it becomes `FailedBeforeCommit`; a renamed one whose
 /// directory fence failed becomes `CommittedWithFinalizationError`.
+///
+/// Returns the notes it turned into failures, `(file, reason)`, for callers
+/// whose user-visible output also claims the write.
 pub(crate) fn settle_effects(
     effects: &mut [PathEffect],
     report: &hyalo_core::rooted::FinishReport,
-) {
-    let unpublished = report.unpublished_by_entry();
+) -> Vec<(String, String)> {
+    use hyalo_core::rooted::Settled;
+    let mut failed = Vec::new();
+    let settlement = report.settlement();
     for effect in effects
         .iter_mut()
         .filter(|effect| effect.state == EffectState::Committed)
     {
-        if let Some(note) = unpublished.get(hyalo_core::rooted::entry_key(&effect.file).as_str()) {
-            effect.state = EffectState::FailedBeforeCommit;
-            effect.error = Some(note.reason().to_owned());
-            effect.category = Some(if note.is_source_conflict() {
-                EffectFailure::SourceConflict
-            } else {
-                EffectFailure::Io
-            });
-        } else if let Some(error) = report.finalization_error() {
-            effect.state = EffectState::CommittedWithFinalizationError;
-            effect.error = Some(error.to_owned());
-            effect.category = Some(EffectFailure::Finalization);
+        match settlement.of(&effect.file) {
+            Settled::NotWritten(note) => {
+                effect.state = EffectState::FailedBeforeCommit;
+                effect.error = Some(note.reason().to_owned());
+                effect.category = Some(if note.is_source_conflict() {
+                    EffectFailure::SourceConflict
+                } else {
+                    EffectFailure::Io
+                });
+                failed.push((effect.file.clone(), note.reason().to_owned()));
+            }
+            Settled::Unknown => {
+                effect.state = EffectState::FailedBeforeCommit;
+                effect.error =
+                    Some("the note cannot be matched against the phase report".to_owned());
+                effect.category = Some(EffectFailure::Io);
+                failed.push((
+                    effect.file.clone(),
+                    "not matched against the phase report".to_owned(),
+                ));
+            }
+            Settled::Written => {
+                if let Some(error) = report.finalization_error() {
+                    effect.state = EffectState::CommittedWithFinalizationError;
+                    effect.error = Some(error.to_owned());
+                    effect.category = Some(EffectFailure::Finalization);
+                }
+            }
         }
     }
+    failed
 }
 
 /// Staging closes files between entries and limits cumulative source+output
@@ -451,6 +473,31 @@ mod tests {
         }
         assert_eq!(std::fs::read(&edited).unwrap(), b"mod\n");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
+    }
+
+    /// An effect whose name cannot be matched against the phase report is not
+    /// reported as written when the report names unwritten notes.
+    #[test]
+    fn an_effect_that_cannot_be_matched_is_not_reported_committed() {
+        let effect = |file: &str| PathEffect {
+            file: file.to_owned(),
+            state: EffectState::Committed,
+            error: None,
+            category: None,
+        };
+        let mut effects = vec![effect("a.md"), effect("b.md"), effect("../x.md")];
+        let report = hyalo_core::rooted::FinishReport::refusing(&["a.md"], "no");
+        let failed = settle_effects(&mut effects, &report);
+        let states: Vec<_> = effects.iter().map(|e| e.state.clone()).collect();
+        assert_eq!(
+            states,
+            [
+                EffectState::FailedBeforeCommit,
+                EffectState::Committed,
+                EffectState::FailedBeforeCommit
+            ]
+        );
+        assert_eq!(failed.len(), 2);
     }
 
     #[test]

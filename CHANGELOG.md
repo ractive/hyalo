@@ -206,15 +206,17 @@ and this project adheres to
 - A bulk write phase can no longer leave an empty note after power loss. It
   writes every replacement to a hidden sibling temp file and flushes them all
   with one barrier per device (macOS: `fsync` per file and one `F_FULLFSYNC`;
-  Linux: one `syncfs`; Windows: `FlushFileBuffers` per file), then renames them
+  Linux and Windows: `fsync`/`FlushFileBuffers` per file), then renames them
   all and fences the directories, so each note is whole afterwards, the old bytes
   or the new; a phase may end as a mix. Nothing is renamed if staging or the
   barrier fails (a full disk, say), and a note edited since it was read, or whose
   rename failed, stays as it was and is reported. The phase needs room for every
-  rewritten note at once, and a kill or Ctrl-C mid-phase leaves its `.tmp*` files
-  beside the notes. The first eight notes no longer get special treatment: two or
+  rewritten note at once, and Ctrl-C, SIGTERM and SIGHUP remove the
+  unrenamed temp files, say what was written and exit 130; a kill leaves them,
+  named `.hyalo-tmp-*`. `lint --fix` no longer lists or counts a fix that was
+  queued and not written, and exits 1 for it (DEC-409). The first eight notes no longer get special treatment: two or
   more notes take one path, one note keeps the per-file path. The Obsidian Hub's
-  `lint --fix` stays at 4 s (3.91 s to 3.99 s, median of 5); a phase of 8 notes
+  `lint --fix` stays at 4 s (4.12 s to 3.95 s, median of 5); a phase of 8 notes
   takes half as long (DEC-408).
 - A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`
   lists it (`respons`, `promis`, `databas`) matches that dictionary term when its stem

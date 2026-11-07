@@ -194,23 +194,25 @@ fn staged_temporary_files_are_invisible_to_a_vault_scan() {
 #[test]
 fn a_bulk_phase_runs_one_barrier_per_device() {
     let (dir, root, names) = vault_of_notes(4, 2);
+    // Pretend the two directories sit on two mounts; the real barrier and
+    // fences still run on the real device.
+    let d0 = dir.path().canonicalize().unwrap().join("d0");
+    let mut session = WriteSession::with_devices(
+        Durability::BulkRewrite,
+        Arc::new(move |path| if path.starts_with(&d0) { 1 } else { 2 }),
+    );
     let barriers = Arc::new(Mutex::new(0usize));
-    let probe: Arc<dyn Fn(&str) + Send + Sync> = {
+    {
         let barriers = Arc::clone(&barriers);
-        Arc::new(move |event: &str| {
+        let probe: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |event: &str| {
             if event.starts_with("barrier-device") {
                 *barriers.lock().unwrap() += 1;
             }
-        })
-    };
-    let mut session = WriteSession::with_probe(Durability::BulkRewrite, probe);
+        });
+        Arc::get_mut(&mut session.shared).unwrap().probe = Some(probe);
+    }
     for name in &names {
         stage(&root, name, b"new", &mut session).unwrap();
-    }
-    // Pretend the two directories sit on two mounts.
-    let d0 = dir.path().canonicalize().unwrap().join("d0");
-    for (path, note) in &mut session.staged {
-        note.device = Some(if path.starts_with(&d0) { 1 } else { 2 });
     }
     assert_none(session.finish_staged().unpublished());
     assert_eq!(*barriers.lock().unwrap(), 2);
@@ -218,25 +220,41 @@ fn a_bulk_phase_runs_one_barrier_per_device() {
 
 #[test]
 fn a_staging_fault_leaves_every_note_untouched_and_no_temporary_file() {
-    for fault in [FaultPoint::Prepare, FaultPoint::SyncFile] {
-        let (dir, root, names) = vault_of_notes(6, 2);
-        // The fault lands on the fourth note; three are already staged.
-        let mut session = WriteSession::with_fault_after(Durability::BulkRewrite, fault, 3);
-        let staged: Vec<bool> = names
-            .iter()
-            .map(|n| stage(&root, n, b"new", &mut session).is_ok())
-            .collect();
-        assert_eq!(staged[..3], [true; 3], "{fault:?}");
-        assert!(!staged[3], "{fault:?}");
-        let report = session.finish_staged();
-        assert!(
-            contents(dir.path(), &names).iter().all(|c| c == "old"),
-            "{fault:?}: no note may change after a failed staging step"
-        );
-        assert!(leftovers(dir.path()).is_empty(), "{fault:?}");
-        assert!(report.unpublished().len() >= 3, "{fault:?}");
-        assert!(report.into_result().is_err());
+    let (dir, root, names) = vault_of_notes(6, 2);
+    // The fault lands on the fourth note; three are already staged.
+    let mut session =
+        WriteSession::with_fault_after(Durability::BulkRewrite, FaultPoint::Prepare, 3);
+    let staged: Vec<bool> = names
+        .iter()
+        .map(|n| stage(&root, n, b"new", &mut session).is_ok())
+        .collect();
+    assert_eq!(staged[..3], [true; 3]);
+    assert!(!staged[3]);
+    let report = session.finish_staged();
+    assert!(
+        contents(dir.path(), &names).iter().all(|c| c == "old"),
+        "no note may change after a failed staging step"
+    );
+    assert_none(&leftovers(dir.path()));
+    assert!(report.unpublished().len() >= 3);
+    assert!(report.into_result().is_err());
+}
+
+/// The flush of every staged file happens in `finish_staged`, before the
+/// barrier and the first rename: one that fails refuses the whole phase.
+#[test]
+fn a_failed_flush_renames_nothing_and_leaves_no_temporary_file() {
+    let (dir, root, names) = vault_of_notes(6, 2);
+    let mut session =
+        WriteSession::with_fault_after(Durability::BulkRewrite, FaultPoint::SyncFile, 3);
+    for name in &names {
+        stage(&root, name, b"new", &mut session).unwrap();
     }
+    let report = session.finish_staged();
+    assert_eq!(report.unpublished().len(), 6);
+    assert!(report.unpublished()[0].reason().contains("flushing"));
+    assert!(contents(dir.path(), &names).iter().all(|c| c == "old"));
+    assert_none(&leftovers(dir.path()));
 }
 
 #[test]
@@ -472,11 +490,11 @@ fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
             );
             let result = source.replace_immediate(b"new", &mut session);
             let bulk = durability == Durability::BulkRewrite;
-            // Under `BulkRewrite` the rename belongs to `finish`, so `Persist`
-            // fails there and not here.
+            // Under `BulkRewrite` the flush and the rename belong to `finish`,
+            // so `SyncFile` and `Persist` fail there and not here.
             let accepted = match fault {
-                Some(FaultPoint::Prepare | FaultPoint::SyncFile) => false,
-                Some(FaultPoint::Persist) => bulk,
+                Some(FaultPoint::Prepare) => false,
+                Some(FaultPoint::SyncFile | FaultPoint::Persist) => bulk,
                 _ => true,
             };
             assert_eq!(result.is_ok(), accepted);
@@ -502,7 +520,9 @@ fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
             );
             assert_eq!(
                 report.unpublished().len(),
-                usize::from(bulk && fault == Some(FaultPoint::Persist))
+                usize::from(
+                    bulk && matches!(fault, Some(FaultPoint::Persist | FaultPoint::SyncFile))
+                )
             );
             assert_eq!(
                 std::fs::read_dir(dir.path()).unwrap().count(),
@@ -919,4 +939,87 @@ fn windows_reserved_and_stream_names_are_not_portable() {
     ] {
         assert!(is_portable_windows_name(good), "{good}");
     }
+}
+
+/// DEC-409: the phase keeps a fingerprint of each original, not a copy of it.
+#[test]
+fn a_staged_note_keeps_no_copy_of_its_original() {
+    let (_dir, root, names) = vault_of_notes(5, 2);
+    let mut session = WriteSession::new(Durability::BulkRewrite);
+    for name in &names {
+        stage(&root, name, b"new", &mut session).unwrap();
+    }
+    assert_eq!(session.staged.len(), 5);
+    assert!(
+        session
+            .staged
+            .values()
+            .all(|note| note.source.original.is_none())
+    );
+    assert_none(session.finish_staged().unpublished());
+}
+
+/// The fingerprint covers the whole file: a one-byte edit past the first hash
+/// chunk, with the size and mtime put back, is still a conflict.
+#[test]
+fn a_one_byte_edit_deep_in_a_staged_note_is_detected_without_a_copy() {
+    for offset in [0usize, 65_535, 65_536, 150_000, 199_999] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        std::fs::write(&path, vec![b'a'; 200_000]).unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let mut session = WriteSession::new(Durability::BulkRewrite);
+        root.capture(&RelativeName::new("big.md").unwrap())
+            .unwrap()
+            .replace_immediate(b"new", &mut session)
+            .unwrap();
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[offset] = b'b';
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(before)
+            .unwrap();
+        let report = session.finish_staged();
+        assert_eq!(report.unpublished().len(), 1, "offset {offset}");
+        assert!(
+            report.unpublished()[0].is_source_conflict(),
+            "offset {offset}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn a_report_with_unwritten_notes_and_a_failed_fence_says_both() {
+    let mut report = FinishReport::refusing(&["a.md"], "disk said no");
+    report.finalization = Some("fence failed".to_owned());
+    let message = report.into_result().unwrap_err().to_string();
+    assert!(
+        message.contains("a.md") && message.contains("disk said no"),
+        "{message}"
+    );
+    assert!(message.contains("fence failed"), "{message}");
+}
+
+/// A name no write could have used cannot be matched against the report, and
+/// must not read as "was written" while the report names unwritten notes.
+#[test]
+fn a_name_that_cannot_be_matched_is_unknown_not_written() {
+    assert_eq!(entry_key("../x.md"), None);
+    assert_eq!(entry_key("/abs.md"), None);
+    assert_eq!(entry_key("./sub//a.md").as_deref(), Some("sub/a.md"));
+    let report = FinishReport::refusing(&["sub/a.md"], "no");
+    let settlement = report.settlement();
+    assert!(matches!(
+        settlement.of("./sub/a.md"),
+        Settled::NotWritten(_)
+    ));
+    assert!(matches!(settlement.of("b.md"), Settled::Written));
+    assert!(matches!(settlement.of("../x.md"), Settled::Unknown));
+    let clean = FinishReport::default();
+    assert!(matches!(clean.settlement().of("../x.md"), Settled::Written));
 }

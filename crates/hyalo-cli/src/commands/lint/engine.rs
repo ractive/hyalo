@@ -230,7 +230,46 @@ pub(super) fn lint_files_extended_observed(
         write_session.pending_directories(),
         write_session.durability(),
     );
-    crate::commands::apply::settle_effects(&mut mutation_effects, &write_session.finish_staged());
+    let not_written = crate::commands::apply::settle_effects(
+        &mut mutation_effects,
+        &write_session.finish_staged(),
+    );
+    // A fix that was queued and not renamed did not happen (DEC-409): take the
+    // claim back out of the listing and the totals and say so as an error, as a
+    // write that failed at once always did.
+    if !not_written.is_empty() {
+        let reasons: std::collections::HashMap<String, &str> = not_written
+            .iter()
+            .map(|(file, reason)| {
+                (
+                    hyalo_core::rooted::entry_key(file).unwrap_or_else(|| file.clone()),
+                    reason.as_str(),
+                )
+            })
+            .collect();
+        for result in &mut all_results {
+            let key = hyalo_core::rooted::entry_key(&result.rel_path)
+                .unwrap_or_else(|| result.rel_path.clone());
+            let Some(reason) = reasons.get(&key) else {
+                continue;
+            };
+            result.fix_actions.clear();
+            result.body_modified = false;
+            for violation in result.violations_by_rule.values_mut().flatten() {
+                violation.fixed = false;
+            }
+            for (_, _, outcome) in &mut result.body_fix_outcomes {
+                if matches!(outcome, FixOutcome::Applied) {
+                    *outcome = FixOutcome::NoFix;
+                }
+            }
+            push_fix_write_error_violation(
+                &mut result.violations_by_rule,
+                &format!("could not write fixes to {}: {reason}", result.rel_path),
+            );
+            result.total_violations += 1;
+        }
+    }
 
     // Patch index for body-modified files (ARCH-3, iter-226): through the
     // MutationJournal so entry AND link graph stay current, flushed once.

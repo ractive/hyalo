@@ -41,6 +41,7 @@ pub(crate) mod ignore_classify;
 pub mod index;
 #[doc(hidden)]
 pub mod internal_metrics;
+pub mod interrupt;
 pub mod link_fix;
 pub mod link_graph;
 pub mod link_resolve;

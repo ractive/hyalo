@@ -21,6 +21,7 @@ globset = { workspace = true }
 ignore = { workspace = true }
 indexmap = { workspace = true }
 memchr = { workspace = true }
+ctrlc = { workspace = true }
 libc = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }

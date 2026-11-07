@@ -498,12 +498,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
   `tags rename`, `task` over several files and `types set --default` write every replacement to a
   hidden sibling temp file (`.tmpXXXXXX`), flush them all with one barrier per device (macOS: `fsync`
-  per file plus one `F_FULLFSYNC`; Linux: one `syncfs`; Windows: `FlushFileBuffers` per file), and
+  per file plus one `F_FULLFSYNC` per device; Linux and Windows: `fsync`/`FlushFileBuffers` per file), and
   only then rename them and fence the directories. After power loss every note is whole, old or
   new, never empty; a phase may end as a mix. A note edited since it was read, or whose rename
   failed, stays as it was and is reported; a full disk renames nothing. The phase needs room for
-  every rewritten note at once, and a kill or Ctrl-C mid-phase leaves its `.tmp*` files beside the
-  notes. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
+  every rewritten note at once, and Ctrl-C and SIGTERM remove the unrenamed temp files and exit 130, while a kill
+  leaves them beside the notes, named `.hyalo-tmp-*`. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
   past a few hundred files reports progress on stderr; `-q` silences it. A single-file mutation
   keeps the per-file path.
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and
