@@ -632,7 +632,9 @@ pub(crate) fn find_prepared(
 
     let mut scoped_entries = scoped_entries;
     if presorted {
-        presort_index_entries(&mut scoped_entries, effective_sort_ref, index.link_graph());
+        presort_index_entries(&mut scoped_entries, effective_sort_ref, || {
+            index.link_graph()
+        });
     }
 
     // Pre-check: does any property filter target the "title" key?

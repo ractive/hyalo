@@ -152,10 +152,10 @@ pub(super) fn apply_sort(
 /// instead of `FileObject` values, avoiding construction of the full object.
 /// Only reached when `--reverse` is off (see `presorted` in the caller), so it
 /// needs no direction parameter.
-pub(super) fn presort_index_entries(
+pub(super) fn presort_index_entries<'g>(
     entries: &mut [&IndexEntry],
     sort: Option<&SortField>,
-    link_graph: &LinkGraph,
+    link_graph: impl FnOnce() -> &'g LinkGraph,
 ) {
     match sort.unwrap_or(&SortField::File) {
         SortField::File => entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path)),
@@ -166,6 +166,9 @@ pub(super) fn presort_index_entries(
         }),
         SortField::BacklinksCount => {
             // Ascending by backlink count — matches apply_sort (DEC-273).
+            // Taken lazily: only this arm needs the graph, and resolving it
+            // costs a pass over every link in the vault.
+            let link_graph = link_graph();
             entries.sort_by(|a, b| {
                 let a_count = link_graph.backlinks(&a.rel_path).len();
                 let b_count = link_graph.backlinks(&b.rel_path).len();
@@ -305,7 +308,7 @@ mod tests {
         presort_index_entries(
             &mut entries,
             Some(&SortField::Property("versions.ghes".to_owned())),
-            &link_graph,
+            || &link_graph,
         );
         assert_eq!(
             entries

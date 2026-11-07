@@ -674,10 +674,12 @@ impl Bm25InvertedIndex {
         }
         for (term, mut posting) in tf {
             posting.doc_id = doc_id;
-            self.postings
-                .entry(term.to_owned())
-                .or_default()
-                .push(posting);
+            // Most terms are already known; only a new one needs an owned key.
+            if let Some(list) = self.postings.get_mut(term) {
+                list.push(posting);
+            } else {
+                self.postings.insert(term.to_owned(), vec![posting]);
+            }
         }
         #[allow(clippy::cast_possible_truncation)]
         self.doc_lengths.push(doc.tokens.len() as u32);

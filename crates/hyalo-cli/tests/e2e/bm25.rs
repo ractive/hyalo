@@ -1785,3 +1785,60 @@ fn ranked_language_fallback_reuses_compatible_persisted_document_tokens() {
     assert!(!String::from_utf8_lossy(&after.stderr).contains("unreadable"));
     assert!(!String::from_utf8_lossy(&after.stderr).contains("changed on disk"));
 }
+
+/// DEC-406: a named read that does not rank trusts the saved postings, but a
+/// write saves them, so it must not. `a.md` is edited with its size, mtime and
+/// outline kept and only a word changed; `lint --fix` then rewrites `b.md`
+/// alone, naming both, and saves the snapshot. The saved postings must hold
+/// the word `a.md` has now.
+#[test]
+fn a_write_that_names_a_stale_note_saves_its_current_postings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a.md");
+    std::fs::write(&a, "# A\n\nalpha beta\n").unwrap();
+    std::fs::write(tmp.path().join("b.md"), "# B\n\n\n\n\nfiller\n").unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    let created = hyalo_no_hints()
+        .args(["--dir", dir, "create-index"])
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{created:?}");
+
+    let mtime = std::fs::metadata(&a).unwrap().modified().unwrap();
+    std::fs::write(&a, "# A\n\nalpha gama\n").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&a)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+
+    let fixed = hyalo_no_hints()
+        .args(["--dir", dir, "lint", "b.md", "a.md", "--fix", "--index"])
+        .output()
+        .unwrap();
+    assert!(
+        std::fs::read_to_string(tmp.path().join("b.md"))
+            .unwrap()
+            .matches("\n\n\n")
+            .count()
+            == 0,
+        "lint --fix must have rewritten b.md: {fixed:?}"
+    );
+
+    let total = |word: &str, index: bool| -> u64 {
+        let mut args = vec!["--dir", dir, "find", word, "--count"];
+        if index {
+            args.push("--index");
+        }
+        let out = hyalo_no_hints().args(args).output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    };
+    for word in ["gama", "beta"] {
+        assert_eq!(total(word, true), total(word, false), "{word}");
+    }
+    assert_eq!(total("gama", true), 1);
+}

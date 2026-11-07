@@ -782,6 +782,10 @@ impl PreparedInvocation {
             PreparedCommand::Find(query) => query.reads_link_graph(),
             _ => false,
         };
+        // Only a ranked `find` reads the postings, and a write saves them
+        // (DEC-406): both need them exact.
+        let tokens_matter = !read_fallback
+            || matches!(&self.command, PreparedCommand::Find(query) if query.pattern.is_some());
         let (selection, repairs, insert) = match &self.command {
             PreparedCommand::Read { target, .. }
             | PreparedCommand::Backlinks { target, .. }
@@ -809,7 +813,8 @@ impl PreparedInvocation {
             }
         };
         let root = hyalo_core::rooted::VaultRoot::new(ctx.dir)?;
-        let refreshed = selection::refresh_named_selection(&root, &selection, index, insert)?;
+        let refreshed =
+            selection::refresh_named_selection(&root, &selection, index, insert, tokens_matter)?;
         if (!refreshed.all_current(&selection) || reads_graph) && !repairs {
             if read_fallback {
                 // DEC-339: a read repairs drifted entries in memory for this

@@ -180,6 +180,7 @@ pub(crate) fn refresh_named_selection(
     selection: &PreparedSelection,
     index: &mut SnapshotIndex,
     insert_missing: bool,
+    tokens_matter: bool,
 ) -> Result<RefreshSummary> {
     // Whole-set preflight remains ahead of the first scan or state mutation.
     selection.precheck(root)?;
@@ -189,7 +190,7 @@ pub(crate) fn refresh_named_selection(
         selection,
         index,
         insert_missing,
-        |index, target, op| scan_checked_target(root, index, target, op),
+        |index, target, op| scan_checked_target(root, index, target, op, tokens_matter),
     );
     index.finish_changes();
     result
@@ -232,11 +233,12 @@ fn scan_checked_target(
     index: &mut SnapshotIndex,
     target: &CheckedTarget,
     operation: RefreshOperation,
+    tokens_matter: bool,
 ) -> bool {
     let rel = target.target.relative();
     match operation {
         RefreshOperation::Existing => {
-            hyalo_core::index::refresh_if_changed_at(index, &target.full, rel)
+            hyalo_core::index::refresh_if_changed_at(index, &target.full, rel, tokens_matter)
         }
         RefreshOperation::Insert => {
             if let Err(error) = index.insert_or_replace_entry_with_links(&target.full, rel) {
@@ -313,7 +315,7 @@ mod tests {
             true,
             |index, target, operation| {
                 calls.push((target.target.relative().to_owned(), operation));
-                let result = scan_checked_target(&root, index, target, operation);
+                let result = scan_checked_target(&root, index, target, operation, true);
                 // A false result must not prevent later refresh OR insertion.
                 result && target.target.relative() != "first.md"
             },
@@ -388,7 +390,7 @@ mod tests {
                     true,
                     |index, target, operation| {
                         calls += 1;
-                        scan_checked_target(&root, index, target, operation)
+                        scan_checked_target(&root, index, target, operation, true)
                     },
                 );
                 assert!(result.is_err());
