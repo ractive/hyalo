@@ -55,6 +55,43 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
   (<https://nnethercote.github.io/perf-book/heap-allocations.html>): reduce
   allocations first. That is what this iteration does.
 
+## The Rust Performance Book against hyalo
+
+Source: <https://nnethercote.github.io/perf-book/>, read in full on 2026-11-07. The
+book's own rule is that the biggest wins usually come from algorithms and data
+structures, not from tuning; that matches the audit, where the wins were repeated work.
+Everything under "candidates" is **unmeasured**: each needs a measurement before any
+change, and none is part of iteration 330.
+
+**Already done**
+- `codegen-units = 1`, fat LTO and `panic = "abort"` in the release profile.
+- rayon for the per-note scans.
+- `BufReader` and raw-byte line splitting in the scanner.
+
+**Candidates (measure first)**
+- **Fast hasher** (`rustc-hash` or `ahash`). hyalo has 332 std `HashMap`/`HashSet`
+  uses and none sets a hasher. The book's caveat: only worth it if hashing is hot,
+  and only where HashDoS is not a concern. Notes are local files, but a hasher swap
+  also changes iteration order, so any output that leaks map order would change.
+- **`mimalloc` or `tikv-jemallocator`.** The allocator was 17-27% of samples, so
+  there is room, but the book calls the gain workload-dependent; it also needs a
+  check on all three platforms and on peak memory (`create-index` peaks at 850 MiB).
+  Listed as a separate experiment above.
+- **PGO via `cargo-pgo`.** The book quotes "10% or more". It does not reach users who
+  `cargo install`, so it would only help the prebuilt release binaries, and it adds a
+  training-run step to the release pipeline.
+- **Hot types over 128 bytes.** The book notes they are `memcpy`d; check
+  `IndexEntry`, `Link` and `OutlineSection` with `-Zprint-type-sizes` or
+  `top-type-sizes`. The audit already put interning those types at about 20 ms.
+- **`dhat-rs`-style heap tests** as a regression guard for allocation counts. The
+  `HYALO_INTERNAL_ALLOC_REPORT` counter already gives the numbers; a test that
+  asserts a ceiling on a fixed fixture would stop a repeat of the work removed here.
+
+**Not applicable**
+- `target-cpu=native`: the binaries are distributed, so it would be wrong on other CPUs.
+- `parking_lot`: locks are not hot here.
+- `get_unchecked`: the book's last resort, and nothing here justifies unsafe.
+
 ## Measured results
 
 MDN (14,375 notes), baseline `5e2512ed` against iteration 330. Allocations are
