@@ -416,7 +416,7 @@ impl CapturedInput {
         let mut temp = NamedTempFile::new_in(parent)?;
         write(&mut temp)?;
         temp.as_file().set_permissions(self.permissions.clone())?;
-        if session.durability != Durability::BulkRewrite {
+        if session.flushes_next_rewrite() {
             session.fault(FaultPoint::SyncFile)?;
             temp.as_file().sync_all()?;
         }
@@ -652,6 +652,28 @@ pub enum Durability {
     BulkRewrite,
 }
 
+impl Durability {
+    /// More rewrites than this are a bulk phase (DEC-317).
+    pub(crate) const BULK_REWRITE_MAX: usize = 8;
+
+    /// The policy for a phase that may rewrite `count` existing notes (the
+    /// candidates, not the notes that turn out to change): past
+    /// [`Self::BULK_REWRITE_MAX`] candidates the session is `BulkRewrite`,
+    /// which flushes the first eight notes it really writes and drops the
+    /// per-file flush after that, for one fence per directory. At or below
+    /// the threshold the full per-file guarantee stays. `PerDirectory` is not
+    /// that policy: it flushes every file, which made `lint --fix` over the
+    /// Obsidian Hub take 39 s instead of 5 s (iteration 329).
+    #[must_use]
+    pub const fn for_rewrites(count: usize) -> Self {
+        if count > Self::BULK_REWRITE_MAX {
+            Self::BulkRewrite
+        } else {
+            Self::PerFile
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultPoint {
     Prepare,
@@ -667,6 +689,9 @@ pub struct WriteSession {
     durability: Durability,
     directories: BTreeSet<PathBuf>,
     fault: Option<FaultPoint>,
+    /// Replacements staged so far, shared with every [`worker`](Self::worker):
+    /// under `BulkRewrite` only the notes past the eighth skip the flush.
+    rewrites: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl WriteSession {
@@ -676,6 +701,7 @@ impl WriteSession {
             durability,
             directories: BTreeSet::new(),
             fault: None,
+            rewrites: std::sync::Arc::default(),
         }
     }
     /// Deterministic fault seam; scoped to this session, never environment/global state.
@@ -685,7 +711,13 @@ impl WriteSession {
             durability,
             directories: BTreeSet::new(),
             fault: Some(fault),
+            rewrites: std::sync::Arc::default(),
         }
+    }
+    /// The durability policy this session was created with.
+    #[must_use]
+    pub fn durability(&self) -> Durability {
+        self.durability
     }
     /// A parallel worker inherits policy, but owns its pending directories.
     ///
@@ -702,6 +734,7 @@ impl WriteSession {
             durability: self.durability,
             directories: BTreeSet::new(),
             fault: self.fault,
+            rewrites: std::sync::Arc::clone(&self.rewrites),
         }
     }
     /// Transfer a worker's pending finalization to the invocation owner. See
@@ -721,6 +754,17 @@ impl WriteSession {
     #[must_use]
     pub fn pending_directories(&self) -> usize {
         self.directories.len()
+    }
+    /// Whether the next replacement flushes its content before the rename.
+    /// Every one does, except under `BulkRewrite` once more than
+    /// [`Durability::BULK_REWRITE_MAX`] notes were really written: a bulk
+    /// phase that ends up rewriting 8 or fewer notes keeps the full guarantee.
+    fn flushes_next_rewrite(&self) -> bool {
+        self.durability != Durability::BulkRewrite
+            || self
+                .rewrites
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                < Durability::BULK_REWRITE_MAX
     }
     fn fault(&self, point: FaultPoint) -> Result<()> {
         if self.fault == Some(point) {

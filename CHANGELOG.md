@@ -26,6 +26,30 @@ and this project adheres to
 
 ### Changed
 
+- **Breaking: the reader skips raw HTML, `$$` math and code-like elements.**
+  `[[x]]` or `[x](y.md)` inside a raw HTML block (`<pre>`, a `<div>` or
+  `<details>` with no blank line after its first line), a `$$` block or span,
+  an HTML tag's attributes, or `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<script>`,
+  `<style>` or `<textarea>` content is no longer a link, and a `# x` or
+  `- [ ] x` in such a region is no heading and no task. `find --fields links`,
+  `backlinks`, `--orphan`, `--dead-end`, `--broken-links`, `summary.links`,
+  HYALO006, `links fix`, `mv`, the promoted `title`, `read --section` and task
+  scanning all follow, so link counts and `backlinks` change on a note that
+  has such a region, and `links fix --apply` and `mv` stop rewriting there.
+  This is the owner's decision; Obsidian documents none of it. A `<div>` ends at
+  a blank line, so `<div>`, a blank line, `[[x]]` is still a link. The content of
+  `<a>` and `<span>` written inline, link labels, single-`$` math, `{{ }}` macros
+  and frontmatter links are unaffected, and `%%` comments read as before. A tag
+  alone on a line after a blank line starts an HTML block (CommonMark condition 7),
+  so `<a href="u">`, `[[x]]` and `</a>` on three lines hide the link. MDN,
+  GitHub Docs and the Obsidian Hub hold HTML blocks and a `$$` line, but no
+  link, heading or task inside one: their inventories are identical (DEC-402). A closing `</pre>` alone on a
+  line now starts an HTML block for `lint` as well, as in CommonMark.
+- A heading ending in `{#custom-id}` declares that id as an explicit anchor,
+  matched case-sensitively like an HTML `id`; the heading text and its slug are
+  unchanged. GitHub Docs' broken anchors fall from 370 to 366 (DEC-403).
+- CI's `quality-gates` job compiles the `fuzz/` targets (`cargo check`, stable,
+  nothing runs); fuzzing and Miri stay manual (DEC-405).
 - Breaking, `hyalo-core` (0.x), a diff of its public API against 0.25.1.
   Removed: `CaseInsensitiveIndex::alias_count`, `FilenameTemplate::matches_path`,
   `FrontmatterFrame::opening_span` and `closing_span`, and
@@ -43,14 +67,17 @@ and this project adheres to
   `BrokenLinkReport::unresolved_relocations` field, the new `FixPlan::occurrence`
   field (a struct literal stops compiling), `link_fix::EmittedTargets` keyed by
   `EmittedKey`, `(FixPlanKey, occurrence)`, instead of `FixPlanKey` (two plans with
-  one key no longer share a slot, DEC-399), and `SNAPSHOT_FORMAT_VERSION`, 7 to 11. Added:
+  one key no longer share a slot, DEC-399), and `SNAPSHOT_FORMAT_VERSION`, 7 to 12. Added:
   the modules `link_target` and `protected`;
   `CaseInsensitiveIndex::{lookup_path_suffix, stem_ambiguity, ambiguity,
   target_ambiguity, target_stem_ambiguity, literal_target_stem_ambiguity,
   ambiguous_candidates, ambiguous_stem_candidates, path_suffix_ambiguity}`;
   `link_fix::{EmittedKey, assign_occurrences, FixPlan::emitted_key}`;
   `SnapshotIndex::build_info`; `BodySyntax::{with_protected,
-  protected, line_in_block_quote, line_in_list_item, line_is_fence_delimiter}`;
+  for_reader, reader_line, protected, line_in_block_quote, line_in_list_item,
+  line_is_fence_delimiter}`; `ProtectedRegions::opaque_ranges`;
+  `FileVisitor::on_markup_line` (a provided method); `rooted::Durability::for_rewrites`;
+  `WriteSession::durability`;
   `anchor::suggest_heading`; `discovery::{scan_include_allows_dir,
   scan_include_patterns, ignore_stamps, set_ignore_stamps}`;
   `index::{peek_build, same_link_props, SnapshotBuild,
@@ -114,16 +141,17 @@ and this project adheres to
   how `a: 0X1F` reads; and a kept trailing blank line in a `|+` or `>+` value
   is written as an empty line instead of an indent-only one (the value reads
   the same).
-- **Breaking: snapshot format 11** (0.25.1 wrote format 7). A snapshot written
+- **Breaking: snapshot format 12** (0.25.1 wrote format 7). A snapshot written
   by any other format, older or newer, is refused with a `-q`-proof warning and
   the command falls back to disk; rebuild it with `hyalo create-index`. This
-  release moved the format four times, each because a reused entry would have
+  release moved the format five times, each because a reused entry would have
   been wrong: the YAML parser change below (`flag: tRUE` stays `true` under
   `--index` while a disk scan says `"tRUE"`, DEC-375), the code-span and `%%`
   scanner changes below, which alter the links a body yields (DEC-381), the
   `[links] frontmatter` allow-list the entries were scanned under (DEC-389), and
   the `[scan] include` globs and ignore files the file set was built under
-  (DEC-399).
+  (DEC-399), and the links, headings, tasks and anchors the reader now skips in
+  raw HTML and `$$` math (DEC-402, DEC-403).
 - The jev tidy helper moves to `@typesafe-ai/sdk` 0.7.0 and Bun 1.4.4. Its
   requests stay uncompressed JSON, a token count the API leaves `null` sets
   `usageUnknown` instead of failing the batch, and a note holding text the SDK
@@ -168,6 +196,17 @@ and this project adheres to
 
 ### Fixed
 
+- `lint --fix`, `set`/`append`/`remove --glob`, `properties rename` and
+  `tags rename`, `task` and `types set --default` over more than eight
+  candidates no longer flush every note. DEC-317 promised one fence per
+  directory, but since 0.24.0 only `mv` and `links fix` kept it: these paid a
+  per-file full-device barrier on macOS. The first eight notes really written
+  still flush, so a big candidate set that changes one note keeps the full
+  guarantee. Past that, a rewrite is atomic against a crash of the process but
+  not guaranteed against power loss until the OS has flushed (on XFS or NTFS a
+  rename can outlive its content), as DEC-317 intended; DEC-404 says so. The Obsidian
+  Hub's `lint --fix` took 39 s whatever the load and now takes 4.8 s at a load
+  average of 10 to 14 (DEC-404).
 - A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`
   lists it (`respons`, `promis`, `databas`) matches that dictionary term when its stem
   does not occur, so `find responce` -> `-- respons` returns the 1,365 documents `terms`

@@ -47,6 +47,39 @@ fn prepare_and_persist_failures_keep_original_and_finalize_retains_effect() {
 }
 
 #[test]
+fn a_bulk_rewrite_phase_flushes_the_first_eight_notes_it_really_writes() {
+    assert_eq!(Durability::for_rewrites(8), Durability::PerFile);
+    assert_eq!(Durability::for_rewrites(9), Durability::BulkRewrite);
+    // A `SyncFile` fault fires only where the temp file is flushed. A large
+    // candidate set that rewrites one note still keeps the full guarantee.
+    let dir = tempfile::tempdir().unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let mut session = WriteSession::with_fault(Durability::for_rewrites(500), FaultPoint::SyncFile);
+    let flushed: Vec<bool> = (0..10)
+        .map(|i| {
+            let name = format!("n{i}.md");
+            std::fs::write(dir.path().join(&name), b"old").unwrap();
+            let captured = root.capture(&RelativeName::new(name).unwrap()).unwrap();
+            captured.replace_immediate(b"new", &mut session).is_err()
+        })
+        .collect();
+    assert_eq!(
+        flushed,
+        [true, true, true, true, true, true, true, true, false, false]
+    );
+    // Workers share the count: eight writes on one, the next on another.
+    let mut a = WriteSession::new(Durability::BulkRewrite);
+    let b = a.worker();
+    for i in 0..8 {
+        let name = format!("w{i}.md");
+        std::fs::write(dir.path().join(&name), b"old").unwrap();
+        let c = root.capture(&RelativeName::new(name).unwrap()).unwrap();
+        c.replace_immediate(b"new", &mut a).unwrap();
+    }
+    assert!(!b.flushes_next_rewrite());
+}
+
+#[test]
 fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
     for durability in [
         Durability::PerFile,
@@ -77,11 +110,10 @@ fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
                 |fault| WriteSession::with_fault(durability, fault),
             );
             let result = source.replace_immediate(b"new", &mut session);
-            let committed = match fault {
-                Some(FaultPoint::Prepare | FaultPoint::Persist) => false,
-                Some(FaultPoint::SyncFile) => durability == Durability::BulkRewrite,
-                _ => true,
-            };
+            let committed = !matches!(
+                fault,
+                Some(FaultPoint::Prepare | FaultPoint::Persist | FaultPoint::SyncFile)
+            );
             assert_eq!(result.is_ok(), committed);
             assert_eq!(
                 std::fs::read(&path).unwrap(),

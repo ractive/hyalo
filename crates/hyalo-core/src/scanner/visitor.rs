@@ -91,6 +91,14 @@ pub trait FileVisitor {
         ScanAction::Continue
     }
 
+    /// Called for each body line outside code and comments, with the markup
+    /// still in place: `cleaned` of [`Self::on_body_line`] additionally has
+    /// raw HTML blocks, HTML tags and `$$` math blanked (DEC-402), which the
+    /// explicit-anchor scan (`<a id>`, DEC-353) must still see.
+    fn on_markup_line(&mut self, _markup: &str, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
     /// Called when a fenced code block opens (e.g. `` ```rust ``).
     fn on_code_fence_open(&mut self, _raw: &str, _language: &str, _line_num: usize) -> ScanAction {
         ScanAction::Continue

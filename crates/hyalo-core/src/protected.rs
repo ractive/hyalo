@@ -124,9 +124,29 @@ pub struct ProtectedRegions {
     blocks: Vec<Range<usize>>,
     inline: Vec<Range<usize>>,
     destinations: Vec<Range<usize>>,
+    opaque: Vec<Range<usize>>,
+    opaque_inline: Vec<Range<usize>>,
 }
 
 impl ProtectedRegions {
+    /// The whole-line body byte ranges the *reader* does not parse: raw HTML
+    /// blocks and `$$` math blocks. Sorted, merged, may end at `usize::MAX`
+    /// for a block that runs to the end of the body.
+    #[must_use]
+    pub fn opaque_blocks(&self) -> &[Range<usize>] {
+        &self.opaque
+    }
+
+    /// The inline body byte ranges the reader does not parse: HTML tags, the
+    /// content of `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<script>`, `<style>`
+    /// and `<textarea>`, and `$$…$$` math. Link text, single-`$` math, macros
+    /// and block ids stay readable. The reader marks them rather than
+    /// blanking them, so a leading `<b>` cannot turn `- [ ] x` into a task.
+    #[must_use]
+    pub fn opaque_inline(&self) -> &[Range<usize>] {
+        &self.opaque_inline
+    }
+
     /// Whether a diagnostic that starts at body byte `offset` points into
     /// protected text: anywhere in a block region, or strictly inside an
     /// inline region.
@@ -266,6 +286,10 @@ pub(crate) struct ProtectedBuilder {
     blocks: Vec<Range<usize>>,
     inline: Vec<Range<usize>>,
     destinations: Vec<Range<usize>>,
+    /// The part of the regions the reader skips, see
+    /// [`ProtectedRegions::opaque_ranges`].
+    opaque: Vec<Range<usize>>,
+    opaque_inline: Vec<Range<usize>>,
     tag: Option<PendingTag>,
     raw: Option<PendingRaw>,
     macro_call: Option<PendingMacro>,
@@ -430,15 +454,22 @@ impl ProtectedBuilder {
                 .iter()
                 .all(|b| matches!(b, b' ' | b'\t' | b'\r'))
         {
-            let name = rest[tag.name_start..tag.name_end].to_ascii_lowercase();
-            if !RAW_BLOCK_ELEMENTS.contains(&name.as_str()) {
-                return Some(HtmlBlockEnd::BlankLine);
-            }
+            // An opening `<pre>`, `<script>`, `<style>` or `<textarea>` took
+            // condition 1 above; a closing `</pre>` alone on a line is a
+            // condition 7 block in cmark, commonmark.js and markdown-it.
+            return Some(HtmlBlockEnd::BlankLine);
         }
         None
     }
 
-    /// Record a whole-line region (a `%%` comment block line).
+    /// Record a raw HTML or `$$` block: protected, and unread by the reader.
+    fn push_raw_block(&mut self, range: Range<usize>) {
+        self.opaque.push(range.clone());
+        self.blocks.push(range);
+    }
+
+    /// Record a whole-line region (a `%%` comment block line). The reader has
+    /// its own answer for `%%` and keeps it.
     pub(crate) fn push_block(&mut self, range: Range<usize>) {
         self.blocks.push(range);
     }
@@ -452,20 +483,19 @@ impl ProtectedBuilder {
         // An open block ends with its container: a block quote that stops
         // quoting, or a list item that the line no longer sits inside.
         if let Some(open) = &self.html_block
-            && !info.blank
             && ((open.quoted && !info.quoted)
-                || (open.container_col > 0 && info.indent < open.container_col))
+                || (!info.blank && open.container_col > 0 && info.indent < open.container_col))
         {
             let open = self.html_block.take();
             if let Some(open) = open {
-                self.blocks.push(open.start..info.start);
+                self.push_raw_block(open.start..info.start);
             }
         }
         if let Some(open) = self.html_block.take() {
             match open.end {
                 HtmlBlockEnd::BlankLine => {
                     if info.blank {
-                        self.blocks.push(open.start..info.start);
+                        self.push_raw_block(open.start..info.start);
                     } else {
                         self.html_block = Some(open);
                         return true;
@@ -473,7 +503,7 @@ impl ProtectedBuilder {
                 }
                 HtmlBlockEnd::Marker(marker) => {
                     if info.text.to_ascii_lowercase().contains(marker) {
-                        self.blocks.push(open.start..info.end);
+                        self.push_raw_block(open.start..info.end);
                     } else {
                         self.html_block = Some(HtmlBlock {
                             end: HtmlBlockEnd::Marker(marker),
@@ -487,7 +517,7 @@ impl ProtectedBuilder {
         if let Some((start, _)) = self.math_block {
             if info.text.trim_end().ends_with("$$") {
                 self.math_block = None;
-                self.blocks.push(start..info.end);
+                self.push_raw_block(start..info.end);
             }
             return true;
         }
@@ -512,7 +542,7 @@ impl ProtectedBuilder {
                 }
             };
             if closed_here {
-                self.blocks.push(info.start..info.end);
+                self.push_raw_block(info.start..info.end);
             } else {
                 self.html_block = Some(HtmlBlock {
                     end,
@@ -556,6 +586,9 @@ impl ProtectedBuilder {
         let mut dest_search = true;
         let mut macro_closer_missing = [false; 2];
         let mut raw_missing: Vec<String> = Vec::new();
+        // End of the first `</a>` found on this line, so a line of `<a>`
+        // openers searches for it once.
+        let mut a_closer: Option<usize> = None;
         if let Some(def) = reference_definition_destination(line) {
             self.destinations.push(abs + def.start..abs + def.end);
         }
@@ -564,6 +597,9 @@ impl ProtectedBuilder {
             && let Some(end) = find_closing_tag(line, 0, &pending.name)
         {
             self.inline.push(pending.start..abs + end);
+            if pending.name != "a" {
+                self.opaque_inline.push(pending.start..abs + end);
+            }
             self.raw = None;
         }
         if let Some(pending) = self.macro_call.clone()
@@ -587,6 +623,7 @@ impl ProtectedBuilder {
                             &pending.name,
                             &tag,
                             &mut raw_missing,
+                            &mut a_closer,
                         );
                         self.tag = None;
                         i = next;
@@ -610,7 +647,15 @@ impl ProtectedBuilder {
                 b'<' => match scan_tag(line, i, None, 0) {
                     TagScan::Complete(tag) => {
                         let name = ascii_lower(&line[tag.name_start..tag.name_end]);
-                        i = self.finish_tag(line, abs, abs + i, &name, &tag, &mut raw_missing);
+                        i = self.finish_tag(
+                            line,
+                            abs,
+                            abs + i,
+                            &name,
+                            &tag,
+                            &mut raw_missing,
+                            &mut a_closer,
+                        );
                     }
                     TagScan::Open {
                         name_start,
@@ -662,6 +707,9 @@ impl ProtectedBuilder {
                 b'$' => {
                     if let Some(end) = inline_math_end(line, i) {
                         self.inline.push(abs + i..abs + end);
+                        if line.get(i + 1) == Some(&b'$') {
+                            self.opaque_inline.push(abs + i..abs + end);
+                        }
                         i = end;
                     } else {
                         i += 1 + usize::from(line.get(i + 1) == Some(&b'$'));
@@ -707,6 +755,7 @@ impl ProtectedBuilder {
     /// its closing tag. Returns the index the scan resumes at: just past the
     /// closing tag when one was found (everything between is protected
     /// already, so the scan does not walk it again).
+    #[allow(clippy::too_many_arguments)]
     fn finish_tag(
         &mut self,
         line: &[u8],
@@ -715,18 +764,33 @@ impl ProtectedBuilder {
         name: &str,
         tag: &Tag,
         raw_missing: &mut Vec<String>,
+        a_closer: &mut Option<usize>,
     ) -> usize {
         let end = tag.end;
         self.inline.push(tag_start_abs..abs + end + 1);
+        self.opaque_inline.push(tag_start_abs..abs + end + 1);
         let mut next = end + 1;
         if !tag.closing
             && !tag.self_closing
             && RAW_ELEMENTS.contains(&name)
             && !raw_missing.iter().any(|m| m == name)
         {
-            if let Some(close_end) = find_closing_tag(line, end + 1, name) {
+            let found = match (name, *a_closer) {
+                ("a", Some(close_end)) if close_end > end => Some(close_end),
+                _ => find_closing_tag(line, end + 1, name),
+            };
+            if let Some(close_end) = found {
+                if name == "a" {
+                    *a_closer = Some(close_end);
+                }
                 self.inline.push(abs + end + 1..abs + close_end);
-                next = close_end;
+                if name == "a" {
+                    // Link text can hold code and macros: keep scanning it.
+                    next = end + 1;
+                } else {
+                    self.opaque_inline.push(abs + end + 1..abs + close_end);
+                    next = close_end;
+                }
             } else {
                 raw_missing.push(name.to_owned());
                 if self.raw.is_none() {
@@ -744,20 +808,24 @@ impl ProtectedBuilder {
     /// only, and every other pending construct is dropped.
     pub(crate) fn finish(mut self) -> ProtectedRegions {
         if let Some((start, end)) = self.math_block.take() {
-            self.blocks.push(start..end);
+            self.push_raw_block(start..end);
         }
         if let Some(open) = self.html_block.take() {
             // A condition 1/3-5 block with no closer runs to the end of the
             // document; a condition 6/7 block ends there too.
-            self.blocks.push(open.start..usize::MAX);
+            self.push_raw_block(open.start..usize::MAX);
         }
         normalise(&mut self.blocks);
         normalise(&mut self.inline);
         normalise(&mut self.destinations);
+        normalise(&mut self.opaque);
+        normalise(&mut self.opaque_inline);
         ProtectedRegions {
             blocks: self.blocks,
             inline: self.inline,
             destinations: self.destinations,
+            opaque: self.opaque,
+            opaque_inline: self.opaque_inline,
         }
     }
 }
@@ -798,7 +866,8 @@ fn scan_tag(line: &[u8], i: usize, quote: Option<u8>, prev: u8) -> TagScan {
     {
         return TagScan::No;
     }
-    match continue_tag(line, j, quote, prev) {
+    let state = if closing { TAG_CLOSING } else { prev };
+    match continue_tag(line, j, quote, state) {
         TagScan::Open { quote, prev, .. } => TagScan::Open {
             name_start,
             name_end,
@@ -816,40 +885,97 @@ fn scan_tag(line: &[u8], i: usize, quote: Option<u8>, prev: u8) -> TagScan {
     }
 }
 
-/// Continue scanning a tag's attributes from `line[from..]`. `prev` is the
-/// last significant byte seen so far (`=` makes the next quote an attribute
-/// value, `/` before `>` a self-closing tag).
-fn continue_tag(line: &[u8], from: usize, mut quote: Option<u8>, mut prev: u8) -> TagScan {
+// States of the CommonMark §6.6 tag grammar, carried across lines in the
+// `prev` field of `TagScan::Open` and `PendingTag`.
+/// Just after the tag name.
+const TAG_NAME_END: u8 = 0;
+/// Whitespace seen: an attribute name, `/` or `>` may follow.
+const TAG_SPACE: u8 = 1;
+/// Inside an attribute name.
+const TAG_ATTR_NAME: u8 = 2;
+/// After an attribute name and whitespace: `=` or the next attribute.
+const TAG_AFTER_NAME: u8 = 3;
+/// After `=`: a value must follow.
+const TAG_BEFORE_VALUE: u8 = 4;
+/// Inside an unquoted value.
+const TAG_UNQUOTED: u8 = 5;
+/// Inside a quoted value (the quote is the other half of the state).
+const TAG_QUOTED: u8 = 6;
+/// Just after a closing quote: whitespace, `/` or `>` only.
+const TAG_AFTER_QUOTE: u8 = 7;
+/// After `/`: only `>` may follow.
+const TAG_SLASH: u8 = 8;
+/// Inside a closing tag: whitespace or `>` only.
+const TAG_CLOSING: u8 = 9;
+
+/// Continue scanning a tag from `line[from..]` in grammar state `state`
+/// (CommonMark §6.6: a tag name, then attributes — a name, an optional
+/// `= value` — each separated by whitespace). Anything else, such as the
+/// `[[x]]` of `a<b see [[x]] and c>d`, is not a tag: the reader would
+/// otherwise blank real prose.
+fn continue_tag(line: &[u8], from: usize, mut quote: Option<u8>, mut state: u8) -> TagScan {
     for (j, &b) in line.iter().enumerate().skip(from) {
         if let Some(q) = quote {
             if b == q {
                 quote = None;
-                prev = b;
+                state = TAG_AFTER_QUOTE;
             }
             continue;
         }
-        match b {
-            b'>' => {
-                return TagScan::Complete(Tag {
-                    end: j,
-                    name_start: 0,
-                    name_end: 0,
-                    closing: false,
-                    self_closing: prev == b'/',
-                });
+        let ws = matches!(b, b' ' | b'\t' | b'\r');
+        let complete = |self_closing| {
+            TagScan::Complete(Tag {
+                end: j,
+                name_start: 0,
+                name_end: 0,
+                closing: false,
+                self_closing,
+            })
+        };
+        let name_start = b.is_ascii_alphabetic() || matches!(b, b'_' | b':');
+        let name_char = name_start || b.is_ascii_digit() || matches!(b, b'.' | b'-');
+        state = match (state, b) {
+            (TAG_CLOSING | TAG_SPACE | TAG_AFTER_NAME | TAG_BEFORE_VALUE, _) if ws => state,
+            (TAG_NAME_END | TAG_AFTER_QUOTE | TAG_ATTR_NAME | TAG_UNQUOTED, _) if ws => {
+                if state == TAG_ATTR_NAME {
+                    TAG_AFTER_NAME
+                } else {
+                    TAG_SPACE
+                }
             }
-            b'"' | b'\'' if prev == b'=' => quote = Some(b),
-            b'"' | b'\'' | b'<' => return TagScan::No,
-            b' ' | b'\t' | b'\r' => {}
-            _ => prev = b,
-        }
+            (TAG_CLOSING | TAG_UNQUOTED, b'>') => return complete(false),
+            (TAG_BEFORE_VALUE, b'"' | b'\'') => {
+                quote = Some(b);
+                TAG_QUOTED
+            }
+            (TAG_UNQUOTED | TAG_BEFORE_VALUE, b'"' | b'\'' | b'=' | b'<' | b'`' | b'>') => {
+                return TagScan::No;
+            }
+            (TAG_UNQUOTED | TAG_BEFORE_VALUE, _) => TAG_UNQUOTED,
+            (TAG_SLASH, b'>') => return complete(true),
+            (TAG_SLASH, _) => return TagScan::No,
+            (_, b'>') => return complete(false),
+            (_, b'/') => TAG_SLASH,
+            (TAG_ATTR_NAME | TAG_AFTER_NAME, b'=') => TAG_BEFORE_VALUE,
+            (TAG_ATTR_NAME, _) if name_char => TAG_ATTR_NAME,
+            (TAG_SPACE | TAG_AFTER_NAME, _) if name_start => TAG_ATTR_NAME,
+            _ => return TagScan::No,
+        };
+    }
+    // A line end is whitespace, except inside a quoted value.
+    if quote.is_none() {
+        state = match state {
+            TAG_ATTR_NAME => TAG_AFTER_NAME,
+            TAG_NAME_END | TAG_UNQUOTED | TAG_AFTER_QUOTE => TAG_SPACE,
+            other => other,
+        };
     }
     TagScan::Open {
         name_start: 0,
         name_end: 0,
         closing: false,
         quote,
-        prev,
+        prev: state,
     }
 }
 

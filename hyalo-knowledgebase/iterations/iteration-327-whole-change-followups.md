@@ -6,7 +6,7 @@ tags: [iteration, review, docs, index]
 status: completed
 branch: iter-327/whole-change-followups
 priority: 1
-related: ["[[decision-log]]", "[[backlog/link-inventory-ignores-protected-regions]]", "[[backlog/regression-dogfood-2026-10-05-leftovers]]"]
+related: ["[[decision-log]]", "[[backlog/done/link-inventory-ignores-protected-regions]]", "[[backlog/regression-dogfood-2026-10-05-leftovers]]"]
 ---
 
 # Iteration 327: whole-change follow-ups

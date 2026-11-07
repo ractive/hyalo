@@ -167,7 +167,7 @@ impl LineScanner {
             } else {
                 format!("{line}\n{rest}")
             };
-            self.body_syntax = Some(BodySyntax::new(&body));
+            self.body_syntax = Some(BodySyntax::for_reader(&body));
         }
         self.body_line += 1;
         let syntax = self.body_syntax.as_ref().expect("initialized above");
@@ -184,7 +184,7 @@ impl LineScanner {
 
         // ---- Normal body line ----
         let mut visible = syntax
-            .visible_line(self.body_line)
+            .reader_line(self.body_line)
             .unwrap_or(line)
             .to_owned();
         if line.ends_with('\r') {

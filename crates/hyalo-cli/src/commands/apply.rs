@@ -157,11 +157,7 @@ impl PreparedChangeSet {
             identities: HashSet::new(),
             staged_bytes: 0,
             output_bytes: 0,
-            session: WriteSession::new(if count > 8 {
-                Durability::PerDirectory
-            } else {
-                Durability::PerFile
-            }),
+            session: WriteSession::new(Durability::for_rewrites(count)),
         })
     }
     pub(crate) fn capture(&mut self, rel: &str) -> Result<CapturedInput> {
@@ -369,6 +365,22 @@ impl PreparedChangeSet {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bulk_change_set_does_not_flush_every_file() {
+        // DEC-317: past eight files the content flush is dropped for one
+        // directory fence. `PerDirectory` kept the flush and made
+        // `set --glob` pay the macOS full-device barrier per note.
+        let dir = tempfile::tempdir().unwrap();
+        let policy = |count| {
+            PreparedChangeSet::new(dir.path(), count)
+                .unwrap()
+                .session
+                .durability()
+        };
+        assert_eq!(policy(9), Durability::BulkRewrite);
+        assert_eq!(policy(8), Durability::PerFile);
+    }
+
     use super::*;
     #[test]
     fn indexed_late_same_size_restored_mtime_conflict_invalidates_snapshot() {
