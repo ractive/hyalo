@@ -2,7 +2,7 @@
 type: backlog
 title: A bulk rewrite can leave an empty note after power loss
 date: 2026-11-07
-status: planned
+status: completed
 priority: low
 origin: "PR #411 review (R4), 2026-11-07, DEC-404, DEC-317"
 ---
@@ -28,5 +28,9 @@ Obsidian Hub's `lint --fix` went; one barrier for the phase should keep the 5 s.
 
 ## Plan
 
-- [ ] Measure the Hub's `lint --fix` with all temp files written first, one flush, then the renames
-- [ ] If it stays within a second or two of today, make it the `BulkRewrite` behaviour and drop the sentence about power loss from DEC-404 and the docs
+- [x] Measure the Hub's `lint --fix` with all temp files written first, one flush, then the renames
+- [x] If it stays within a second or two of today, make it the `BulkRewrite` behaviour and drop the sentence about power loss from DEC-404 and the docs
+
+## Outcome
+
+Done in [[iterations/iteration-331-bulk-write-durability]] (DEC-408): the Hub's `lint --fix` stays at 3.9 s against 4.0 s, and a note is whole after power loss, old or new.

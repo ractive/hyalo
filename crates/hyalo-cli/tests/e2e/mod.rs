@@ -7,6 +7,7 @@ mod backlinks;
 mod backslash_filename;
 mod bm25;
 mod broken_pipe;
+mod bulk_write_durability;
 mod bundled_recipes;
 mod changelog_profile;
 mod codex_init;

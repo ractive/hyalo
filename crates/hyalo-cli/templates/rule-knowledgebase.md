@@ -494,15 +494,18 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `skipped_detail` (`{file, reason}` with `unchanged` or `unparsable`), so a same-value write is
   distinguishable from a refusal; and `summary`'s near-duplicate-value warning needs a real
   similarity and at least ten files carrying the property before it speaks.
-- **A bulk write is durable per directory, not per file** (DEC-317, iter-277): `lint --fix`,
-  `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
-  `tags rename`, `task` over several files and `types set --default` still replace every file
-  atomically (temp file + `rename`), but past the first 8 notes really written a phase fsyncs each touched *directory* once at the end instead of every
-  file before its rename. On macOS that barrier is `F_FULLFSYNC`, ~5.5 ms per file whatever
-  its size — the Obsidian Hub's `lint --fix` took 39 s with a per-file flush and 4.8 s without (iter-329, DEC-404; 48.1 s to 2.35 s on an idle machine in iter-277). A phase past a few
-  hundred files reports progress on stderr; `-q` silences it. Single-file mutations and a phase that
-  writes 8 notes or fewer keep the full guarantee. Past that, a rewrite is atomic against a crash
-  of the process, not guaranteed against power loss until the OS has flushed (DEC-404).
+- **A bulk write stages, flushes once, then renames** (DEC-408, iter-331; amends DEC-317, DEC-404):
+  `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
+  `tags rename`, `task` over several files and `types set --default` write every replacement to a
+  hidden sibling temp file (`.tmpXXXXXX`), flush them all with one barrier per device (macOS: `fsync`
+  per file plus one `F_FULLFSYNC`; Linux: one `syncfs`; Windows: `FlushFileBuffers` per file), and
+  only then rename them and fence the directories. After power loss every note is whole, old or
+  new, never empty; a phase may end as a mix. A note edited since it was read, or whose rename
+  failed, stays as it was and is reported; a full disk renames nothing. The phase needs room for
+  every rewritten note at once, and a kill or Ctrl-C mid-phase leaves its `.tmp*` files beside the
+  notes. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
+  past a few hundred files reports progress on stderr; `-q` silences it. A single-file mutation
+  keeps the per-file path.
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and
   `find --orphan`/`find --dead-end` share one edge predicate. An external URI, a same-file
   anchor and any target with an explicit non-`.md` extension are not note-graph edges —

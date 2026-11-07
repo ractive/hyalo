@@ -712,11 +712,13 @@ Flags that only `--help` mentions, worth knowing:
 - **`find --broken-links --format text` prints only the broken links** of each matched file
   (iter-277). JSON is unchanged: it carries every link with its own `path` / `broken_anchor`
   verdict.
-- **A bulk write phase is durable per directory, not per file** (DEC-317, iter-277):
+- **A bulk write phase stages, flushes once, then renames** (DEC-408, iter-331):
   `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`,
-  `properties rename` and `tags rename` still replace every file atomically, but a phase over
-  8 files fsyncs each touched directory once at the end rather than every file before its
-  rename — the Obsidian Hub's `lint --fix` took 39 s with a per-file flush and 4.8 s without (DEC-404; 48.1 s to 2.35 s on an idle machine in iter-277). Past a few hundred
+  `properties rename` and `tags rename` write every replacement beside its note first, flush
+  them all with one barrier, then rename them, so after power loss each note is whole, old or
+  new. A note edited since it was read stays as it was and is reported; a full disk renames
+  nothing. The phase needs room for every rewritten note at once, and a kill mid-phase leaves
+  `.tmp*` files beside the notes. The Obsidian Hub's `lint --fix` takes about 4 s. Past a few hundred
   files the phase reports progress on stderr; `-q` silences it.
 - **The reader skips raw HTML, `$$` math and code-like elements** (DEC-402; the owner's
   decision, Obsidian documents none of it). A link, heading or task inside a raw HTML block

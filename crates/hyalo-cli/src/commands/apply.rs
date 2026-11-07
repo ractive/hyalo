@@ -133,6 +133,35 @@ fn emit_progress(message: Option<String>) {
     }
 }
 
+/// Reconcile the effects a bulk phase reported while it queued its writes with
+/// what `finish_staged` then did (DEC-408). A queued note that was not renamed
+/// is untouched, so it becomes `FailedBeforeCommit`; a renamed one whose
+/// directory fence failed becomes `CommittedWithFinalizationError`.
+pub(crate) fn settle_effects(
+    effects: &mut [PathEffect],
+    report: &hyalo_core::rooted::FinishReport,
+) {
+    let unpublished = report.unpublished_by_entry();
+    for effect in effects
+        .iter_mut()
+        .filter(|effect| effect.state == EffectState::Committed)
+    {
+        if let Some(note) = unpublished.get(hyalo_core::rooted::entry_key(&effect.file).as_str()) {
+            effect.state = EffectState::FailedBeforeCommit;
+            effect.error = Some(note.reason().to_owned());
+            effect.category = Some(if note.is_source_conflict() {
+                EffectFailure::SourceConflict
+            } else {
+                EffectFailure::Io
+            });
+        } else if let Some(error) = report.finalization_error() {
+            effect.state = EffectState::CommittedWithFinalizationError;
+            effect.error = Some(error.to_owned());
+            effect.category = Some(EffectFailure::Finalization);
+        }
+    }
+}
+
 /// Staging closes files between entries and limits cumulative source+output
 /// bytes to 8 GiB. Hitting this budget refuses the whole batch before writes.
 pub(crate) struct PreparedChangeSet {
@@ -327,15 +356,7 @@ impl PreparedChangeSet {
             progress(&effect);
             paths.push(effect);
         }
-        if let Err(error) = self.session.finish() {
-            for path in &mut paths {
-                if path.state == EffectState::Committed {
-                    path.state = EffectState::CommittedWithFinalizationError;
-                    path.error = Some(error.to_string());
-                    path.category = Some(EffectFailure::Finalization);
-                }
-            }
-        }
+        settle_effects(&mut paths, &self.session.finish_staged());
         let mut report = ApplyReport {
             paths,
             index: IndexDisposition::NotUsed,
@@ -367,9 +388,9 @@ impl PreparedChangeSet {
 mod tests {
     #[test]
     fn a_bulk_change_set_does_not_flush_every_file() {
-        // DEC-317: past eight files the content flush is dropped for one
-        // directory fence. `PerDirectory` kept the flush and made
-        // `set --glob` pay the macOS full-device barrier per note.
+        // DEC-408: more than one file is a staged phase with one barrier.
+        // `PerDirectory` flushed every file and made `set --glob` pay the
+        // macOS full-device barrier per note.
         let dir = tempfile::tempdir().unwrap();
         let policy = |count| {
             PreparedChangeSet::new(dir.path(), count)
@@ -377,11 +398,61 @@ mod tests {
                 .session
                 .durability()
         };
-        assert_eq!(policy(9), Durability::BulkRewrite);
-        assert_eq!(policy(8), Durability::PerFile);
+        assert_eq!(policy(2), Durability::BulkRewrite);
+        assert_eq!(policy(1), Durability::PerFile);
     }
 
     use super::*;
+
+    /// DEC-408: `set --glob` and the other change sets queue their writes and
+    /// rename at the end, so a note edited after its write was queued stays as
+    /// the user left it and is reported as not written; the rest are written.
+    #[test]
+    fn a_note_edited_after_its_write_was_queued_is_reported_and_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = ["a.md", "b.md", "c.md", "d.md"];
+        let mut set = PreparedChangeSet::new(dir.path(), names.len()).unwrap();
+        for name in names {
+            std::fs::write(dir.path().join(name), "old\n").unwrap();
+            let captured = set.capture(name).unwrap();
+            set.push(captured, Some(b"new\n")).unwrap();
+        }
+        let mut index = None;
+        let mut journal = super::super::journal::MutationJournal::new(&mut index, None);
+        let edited = dir.path().join("a.md");
+        let report = set.apply_with(
+            &mut journal,
+            |position, _| {
+                // `a.md` is queued by the time the last note is attempted.
+                if position == 3 {
+                    std::fs::write(&edited, "mod\n")?;
+                }
+                Ok(())
+            },
+            |_| {},
+        );
+        let state = |name: &str| {
+            report
+                .paths
+                .iter()
+                .find(|p| p.file == name)
+                .map(|p| (p.state.clone(), p.category.clone()))
+        };
+        assert_eq!(
+            state("a.md"),
+            Some((
+                EffectState::FailedBeforeCommit,
+                Some(EffectFailure::SourceConflict)
+            ))
+        );
+        for name in ["b.md", "c.md", "d.md"] {
+            assert_eq!(state(name), Some((EffectState::Committed, None)), "{name}");
+            assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"new\n");
+        }
+        assert_eq!(std::fs::read(&edited).unwrap(), b"mod\n");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
+    }
+
     #[test]
     fn indexed_late_same_size_restored_mtime_conflict_invalidates_snapshot() {
         indexed_failed_source_invalidates(false);

@@ -1995,7 +1995,7 @@ fn lint_fix_md047_converges_in_one_run() {
 }
 
 /// Codebase review 2026-10-03 item 3 / DEC-317 follow-up: a `lint --fix` run
-/// over more than 8 files takes the batched `Durability::PerDirectory` path
+/// over several files takes the batched `Durability::BulkRewrite` path
 /// (`crates/hyalo-core/src/rooted/tests.rs` pins the underlying per-directory
 /// fsync deduplication this relies on). Ten files, split across two
 /// directories so the shared top-level write session absorbs more than one

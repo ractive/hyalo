@@ -57,7 +57,7 @@ durability), DEC-405 (fuzz compile gate). Snapshot format 12.
 - [x] R1 a tag is blanked only if it parses under the CommonMark tag grammar, across lines too
 - [x] R2 inline spans are marked with a control byte, tasks also need the raw line to be a task
 - [x] R3 a bulk session flushes the first eight notes it really writes; `task` and `types` listed
-- [x] R4 DEC-404, CLAUDE.md, templates and CHANGELOG state power-loss exposure; backlog item filed ([[backlog/bulk-rewrite-durability-against-power-loss]])
+- [x] R4 DEC-404, CLAUDE.md, templates and CHANGELOG state power-loss exposure; backlog item filed ([[backlog/done/bulk-rewrite-durability-against-power-loss]])
 - [x] R5, R6 CHANGELOG and CLAUDE.md say HTML blocks exist in the corpora and document condition 7
 - [x] R7 `<a>` content is scanned; R8 `%%` inside HTML is HTML text; R9 a quoted block ends at an unquoted blank line
 - [x] R10, R11 no `.expect`, no clone without ranges, stale comments fixed

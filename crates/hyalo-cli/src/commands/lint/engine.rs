@@ -219,25 +219,18 @@ pub(super) fn lint_files_extended_observed(
         }
     }
 
-    // Finish the shared session exactly once, after every worker's directory
-    // fences have been absorbed. On failure, every write this run committed
-    // without yet reporting a finalization error is retroactively marked
-    // `CommittedWithFinalizationError` — mirroring `PreparedChangeSet::apply_with`
-    // (`commands/apply.rs`), which does the same for its own single shared
-    // session.
+    // Finish the shared session exactly once, after every worker's staged
+    // writes and directory fences have been absorbed (DEC-408): the barrier,
+    // the renames and the fences run here. A write the workers queued and
+    // `finish_staged` did not rename is untouched and becomes
+    // `FailedBeforeCommit`; one whose fence failed becomes
+    // `CommittedWithFinalizationError`, as in `PreparedChangeSet::apply_with`
+    // (`commands/apply.rs`), which settles its own single session the same way.
     on_session_before_finish(
         write_session.pending_directories(),
         write_session.durability(),
     );
-    if let Err(error) = write_session.finish() {
-        for effect in &mut mutation_effects {
-            if effect.state == crate::commands::apply::EffectState::Committed {
-                effect.state = crate::commands::apply::EffectState::CommittedWithFinalizationError;
-                effect.error = Some(error.to_string());
-                effect.category = Some(crate::commands::apply::EffectFailure::Finalization);
-            }
-        }
-    }
+    crate::commands::apply::settle_effects(&mut mutation_effects, &write_session.finish_staged());
 
     // Patch index for body-modified files (ARCH-3, iter-226): through the
     // MutationJournal so entry AND link graph stay current, flushed once.
