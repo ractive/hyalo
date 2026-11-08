@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 337: backlog sweep (jev timeout, MD007 abort, bookkeeping, three closed backlog items)"
 date: 2026-11-08
-status: in-progress
+status: completed
 tags:
   - iteration
   - backlog
