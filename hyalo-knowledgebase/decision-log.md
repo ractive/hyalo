@@ -5328,7 +5328,8 @@ Obsidian vault would be a false positive.
 
 **Where:** `anchor::is_block_ref` (the current skip, unchanged). See
 [[iterations/iteration-272-resolution-completeness]] and the carry-over item
-[[backlog/link-resolution-block-reference-and-slug-anchors]].
+[[backlog/link-resolution-block-reference-and-slug-anchors]]. DEC-410
+(iteration 337) closes that item: block references stay unchecked.
 
 ## DEC-300: no `[links] redirect_property` — backlog (2026-09-05)
 
@@ -5642,11 +5643,12 @@ path saw two different files.
 `discovery::resolves_via_alias`. See
 [[iterations/iteration-275-alias-semantics-and-mv-guards]].
 
-**Known exception (DEC-368, iteration 317).** A wikilink's trailing `.md`
-is still stripped at parse time, so `[[sub/note.md]]` reports
-`target: "sub/note"`. The audit of the reporting sites is in
-[[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]]; it was
-left open rather than fixed piecemeal.
+**Known exception (DEC-368, iteration 317; settled by DEC-411).** A wikilink's trailing `.md`
+is stripped at parse time, so `[[sub/note.md]]` reports
+`target: "sub/note"`. DEC-411 (iteration 337) makes that the rule instead of
+an open item: `target` drops an authored `.md`, and `links fix` writes the
+suffix-less form. The audit of the reporting sites is in
+[[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]].
 
 ## DEC-311: `[[note#Heading One#Sub Two]]` is a heading *path*, resolved by walking the outline (2026-09-05) — sits beside DEC-299
 
@@ -9169,3 +9171,35 @@ A review of DEC-408 found these. Each is verified and answered.
 - **The flush moved to `finish_staged`.** Every staged file is flushed on the pool before the barrier, on every platform (fsync on macOS and Linux, `FlushFileBuffers` on Windows); the macOS `F_FULLFSYNC` stays one per device and `syncfs` is gone. A Linux `fsync` flushes the device cache for its file, so the guarantee holds without it. The flush is no longer serial per note while staging on Windows. Linux and Windows are unmeasured. macOS: Hub `lint --fix` 4.12 s to 3.95 s against the baseline, MDN `set --glob` 23.57 s to 18.21 s.
 - **Smaller.** `FinishReport::into_result` reports unwritten notes and a failed fence together. `entry_key` returns `None` for a name no write could have used and `Settlement::of` then reports the note as `Unknown` (an error, never "written") whenever the report names unwritten notes. The Windows `sync_directory` comment was wrong and is reworded.
 - **The 14 notes at SIGINT 1.0 s** were the Obsidian Hub checkout's own uncommitted changes (`git status` lists 14 modified notes before any run); a diff against the original shows 0 changed on head and 1 097 on the baseline, which writes as it goes. No note is renamed before the barrier.
+
+## DEC-410: block-reference anchors stay unchecked, and the backlog item is closed (2026-11-08) — amends DEC-299
+
+**Decision.** `[[Target#^block-id]]` is still never judged: `anchor::is_block_ref` returns early in every anchor check (`anchor.rs:72`, used at the checks around lines 327, 502 and 582), so `find --broken-links`, HYALO008 and `links fix` leave it alone. No block-id index is built. DEC-299 said "backlogged, not rejected"; this closes [[backlog/link-resolution-block-reference-and-slug-anchors]] as `wont-do`. The slug half of DEC-299 needed nothing: `[[Target#section-one]]` against `## Section One` resolves (DEC-268, DEC-309), and `[[Target#nope]]` carries `broken_anchor` and is reported by HYALO008 (checked on a two-note vault).
+
+**Why.** The index would be a new snapshot field (the format is at 12) and a new class of false positive for a gain that measures at zero. On the Obsidian Hub checkout `a56b648b` there are 6 block-reference links: one points at a target file that does not exist (already reported as a broken target), the other five point at ids that exist, so none is a broken block reference. The hyalo knowledgebase has none. Checking `^id` also needs the *target's* block ids at scan time (a link into another note's block), which makes the index larger than a same-file check. The cost is real and no corpus in reach has a finding to show for it.
+
+**If this is reopened.** `protected::trailing_block_id` (`protected.rs:1150`) already recognises a trailing `^id` marker, so the scan would reuse it; the snapshot bump and `--index`/disk parity from DEC-299's list still apply.
+
+**Where.** [[iterations/iteration-337-backlog-sweep]].
+
+## DEC-411: a wikilink's reported `target` drops an authored `.md`, and `links fix` writes the suffix-less form (2026-11-08) — amends DEC-310
+
+**Decision.** `[[sub/note.md]]` reports `target: "sub/note"`, not `"sub/note.md"`. DEC-310's sentence that `target` "still carries the text the author wrote" holds for everything except a trailing `.md` on a wikilink, which `links::parse_wikilink` strips at parse time, and a wikilink fix always writes the suffix-less form (`[[sub/Note.MD]]` becomes `[[sub/note]]`, the rule `links fix` already follows). The "Known exception (DEC-368)" in DEC-310 is now the rule. [[backlog/wikilink-target-does-not-preserve-the-authored-md-suffix]] is closed as `wont-do`.
+
+**Why.** The audit in that item puts the fix at about ten user-visible sites (`find --fields links`, `find --broken-links` text, HYALO006 and HYALO008 messages, five `old_target` constructions in `links fix`, `backlinks`, `mv`'s skipped links, the anchor-fix report) plus a snapshot format bump so that `--index` agrees with a disk scan. `old_target` is also the key `--apply` uses to find the span, so the work touches the writer, not only the display. The gain is a display field: resolution is unaffected, because the stripped stem is what every resolver already reads, and `[[note.md]]` and `[[note]]` already name the same note. A stable, suffix-less `target` is also a simpler contract for a `--jq` consumer than one that depends on how the author typed it.
+
+**Where.** `.claude/CLAUDE.md` and the rule template now state the rule; no help text promised the old behaviour. See [[iterations/iteration-337-backlog-sweep]].
+
+## DEC-412: MD007 does not judge a tab-indented bullet (2026-11-08)
+
+**Decision.** `hyalo-mdlint` hands upstream MD007 a view of the note (`md007_view` in `engine.rs`, the sibling of `md034_view`) in which the leading whitespace of every tab-indented unordered list item is written as spaces totalling the columns upstream's own `parse_list_item` counts there (a space is one, a tab four); the rest of that line, every other line and every terminator stay verbatim. Upstream's list stack therefore sees the indent it computes on the original, and its byte slice is in bounds. Two rules go with the view: MD007 always gets the AST of the ORIGINAL note, shared or parsed for it, whatever else is enabled; and every MD007 finding on a rewritten line is dropped, because its column and fix range come from the longer view line and the upstream fix there drops characters. MD010 still reports the tab, and once the tab is four spaces (MD010's fix) MD007 judges the item on the next run. [[backlog/md007-aborts-lint-on-multibyte-list-text]] is completed.
+
+**The invariant, pinned by tests.** On every line except the tab-indented bullets, MD007's findings and fixes equal upstream's on the original note (`md007_view_changes_no_finding_off_the_rewritten_lines`, `md007_gives_the_same_findings_alone_and_beside_other_rules`, and a table body in `SHARED_AST_BODIES`). The first version of this decision blanked the bullet instead, and claimed the other lines were unaffected. A review of PR #419 showed that false: a blank line is not in MD007's list stack, so the children of a tab-indented bullet were measured one level too shallow (`- a / ␣␣- b / TAB- c / six spaces - d` proposed a fix that made `d` a sibling of `c`; upstream says nothing there), and a blanked line changed how comrak parsed the view when MD007 ran alone, so the same note got different findings alone and beside other rules (the DEC-407 equivalence).
+
+**Why.** Upstream `parse_list_item` (`mdbook-lint-rulesets` 0.16.2, the latest release) counts a leading tab as four columns, then cuts the line with `&line[indent..]`, treating that column count as a byte offset. A tab is one byte, so the cut lands inside the text: on a multibyte character it panics (`start byte index 4 is not a char boundary`; `panic = "abort"` makes that exit 134, outside the 0 / 1 / 2 contract of DEC-307, and the one note takes down every other note's findings), and on ASCII it silently produces a fix that drops the first characters of the item. A space is one byte and one column, so only a tab opens the gap. The Obsidian Hub with MD007 enabled aborted on every binary; it now exits 1 with the rest of its findings (MD007 alone: exit 0, 3 457 warnings over 71 files).
+
+**Alternatives.** Keeping the MD007 finding on a tab-indented bullet would need its fix range rewritten (the view line is longer than the real one by three bytes per tab) and would make MD007's and MD010's fixes collide on every tabbed line, and the upstream fix on such a line drops characters anyway, so those lines stay silent. Blanking the line was the first version (see above). Running each rule under `catch_unwind` is impossible with `panic = "abort"`, and a vendored copy of the rule is a fork to maintain for a one-byte-offset bug. The price of the chosen guard is that MD007 says nothing about a tab-indented bullet itself until MD010's fix runs; MD007 is opt-in and MD010 is default-on, so the tab is never unreported. One residue: the view reads ` \t ` as six columns where CommonMark reads five, so for such a line the view's own parse could differ from the note's, which is why MD007 never uses it.
+
+**Not fixed upstream.** The cause is upstream's and no report has been filed; a fix in `mdbook-lint` would let the view go (the `md007_*` tests pin the behaviour either way).
+
+**Where.** `engine::tab_indented_bullet`, `engine::md007_view` and the `rewritten` filter in `lint_body`; tests `md007_*` in `engine.rs` and `lint_md007_*` in `tests/e2e/lint.rs`. See [[iterations/iteration-337-backlog-sweep]].

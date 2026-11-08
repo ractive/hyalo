@@ -202,6 +202,17 @@ and this project adheres to
 
 ### Fixed
 
+- `lint` with MD007 enabled (`[lint.rules.MD007] enabled = true`) no longer
+  aborts the whole run (exit 134, no output) on a tab-indented bullet whose text
+  starts with a multibyte character, and no longer proposes a fix that drops
+  the first characters of a tab-indented bullet with ASCII text. Upstream MD007
+  counts a tab as four columns and then cuts the line there as if it were a byte
+  offset. MD007 now leaves a tab-indented bullet to MD010, which still reports
+  the tab; the Obsidian Hub, which aborted, now lints (DEC-412).
+- A wikilink's reported `target` drops an authored `.md` suffix
+  (`[[sub/note.md]]` reports `sub/note`) and `links fix` writes the suffix-less
+  form; the docs no longer say `target` keeps the written text in that case
+  (DEC-411).
 - `lint --fix`, `set`/`append`/`remove --glob`, `properties rename` and
   `tags rename`, `task` and `types set --default` over several notes no longer
   flush every note with a full-device barrier. DEC-317 promised one fence per

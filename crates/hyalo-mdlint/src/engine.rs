@@ -805,21 +805,44 @@ impl HyaloLintEngine {
                     continue;
                 };
                 let pruned;
-                let rule_doc = if *rule_id == "MD034" {
-                    pruned = md034_view(&doc);
-                    &pruned
+                // Lines (ascending, 1-based) whose text the MD007 view rewrote.
+                let mut rewritten: Vec<usize> = Vec::new();
+                let rule_doc = match *rule_id {
+                    "MD034" => {
+                        pruned = md034_view(&doc);
+                        &pruned
+                    }
+                    "MD007" => match md007_view(&doc) {
+                        Some((view, lines)) => {
+                            pruned = view;
+                            rewritten = lines;
+                            &pruned
+                        }
+                        None => &doc,
+                    },
+                    _ => &doc,
+                };
+                // MD007 reads its code-block lines from the tree. Whenever it
+                // is handed a rewritten document the tree is the ORIGINAL
+                // document's, shared or parsed here, so which lines count as
+                // code never depends on how many other rules are on.
+                let rule_ast = if rewritten.is_empty() {
+                    ast.filter(|_| AST_SHARING_RULES.contains(rule_id))
                 } else {
-                    &doc
+                    Some(ast.unwrap_or_else(|| doc.parse_ast(&arena)))
                 };
                 let violations = rule
-                    .check_with_ast(
-                        rule_doc,
-                        ast.filter(|_| AST_SHARING_RULES.contains(rule_id)),
-                    )
+                    .check_with_ast(rule_doc, rule_ast)
                     .with_context(|| format!("running {rule_id} on {rel_path}"))?;
 
                 let sev = effective_severity(rule_id);
                 for v in violations {
+                    // A tab-indented bullet is left to MD010: what MD007 says
+                    // about a rewritten line is computed from the longer view
+                    // line, so its fix range and column are not the note's.
+                    if rewritten.binary_search(&v.line).is_ok() {
+                        continue;
+                    }
                     // UX-4 (dogfood v0.20.0): upstream MD011 flags regex/math
                     // prose like `(3rd|[Tt]hird)[-_]` as a "reversed link".
                     // The reversal autofix would rewrite the regex into
@@ -1303,6 +1326,91 @@ fn md034_view(doc: &Document) -> Document {
             .collect(),
         book_src_dir: doc.book_src_dir.clone(),
     }
+}
+
+/// The unordered list item upstream MD007 would measure in columns and slice in
+/// bytes: `line` when its leading whitespace holds a tab, as the number of
+/// columns upstream counts there (a space is one, a tab four) and the text
+/// after that whitespace.
+///
+/// Mirrors the unordered branch of upstream `parse_list_item`: any run of
+/// spaces and tabs, then a `*`, `+` or `-` followed by whitespace. An ordered
+/// item and a line that is not a list item never reach the slice, so they are
+/// left alone.
+fn tab_indented_bullet(line: &str) -> Option<(usize, &str)> {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let indent = &line[..line.len() - rest.len()];
+    let mut chars = rest.chars();
+    if !indent.contains('\t')
+        || !matches!(chars.next(), Some('*' | '+' | '-'))
+        || !chars.next().is_some_and(char::is_whitespace)
+    {
+        return None;
+    }
+    let columns = indent.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+    Some((columns, rest))
+}
+
+/// `doc` with the leading whitespace of every tab-indented bullet written as
+/// spaces, plus those lines' numbers (ascending, 1-based); `None` when there is
+/// no such bullet.
+///
+/// Upstream MD007 (`mdbook-lint-rulesets` 0.16.2, `md007.rs`) counts a leading
+/// tab as four columns, then cuts the fix text with `&line[indent..]`, using
+/// that column count as a byte offset. A tab is one byte, so the cut lands in
+/// the middle of the text: a multibyte character there panics (`panic =
+/// "abort"` makes that exit 134 and takes every other note's findings with it),
+/// and ASCII text silently loses its first characters in the fix. Spaces are
+/// one byte and one column, so only a tab can open the gap. 0.16.2 is the
+/// latest release.
+///
+/// The view writes exactly the columns upstream computes (space 1, tab 4) as
+/// spaces and keeps the rest of the line, every other line and every line
+/// terminator verbatim. Upstream's list stack therefore sees the indent it saw
+/// on the original, and its slice is in bounds. MD007 reads
+/// `Document::content`, so that is what is rewritten.
+///
+/// The invariant, pinned by `md007_view_changes_no_finding_off_the_rewritten_lines`:
+/// handed this view and the AST of `doc`, MD007's findings and fixes on every
+/// line that is not returned are identical to its findings and fixes on `doc`.
+/// A finding on a returned line is computed from the longer view line, so the
+/// caller drops it; MD010 still reports the tab.
+fn md007_view(doc: &Document) -> Option<(Document, Vec<usize>)> {
+    if !doc
+        .content
+        .lines()
+        .any(|line| tab_indented_bullet(line).is_some())
+    {
+        return None;
+    }
+    let mut content = String::with_capacity(doc.content.len());
+    let mut rewritten = Vec::new();
+    for (index, piece) in doc.content.split_inclusive('\n').enumerate() {
+        let (text, terminator) = match piece.strip_suffix("\r\n") {
+            Some(text) => (text, "\r\n"),
+            None => match piece.strip_suffix('\n') {
+                Some(text) => (text, "\n"),
+                None => (piece, ""),
+            },
+        };
+        match tab_indented_bullet(text) {
+            Some((columns, rest)) => {
+                rewritten.push(index + 1);
+                content.extend(std::iter::repeat_n(' ', columns));
+                content.push_str(rest);
+            }
+            None => content.push_str(text),
+        }
+        content.push_str(terminator);
+    }
+    let lines = content.lines().map(str::to_owned).collect();
+    let view = Document {
+        content,
+        path: doc.path.clone(),
+        lines,
+        book_src_dir: doc.book_src_dir.clone(),
+    };
+    Some((view, rewritten))
 }
 
 /// Convert a rule's 1-based **byte** column to a 1-based Unicode-scalar
@@ -2653,6 +2761,8 @@ mod tests {
         "<!-- markdownlint-disable MD034 MD051 -->\n# T\n\nhttps://suppressed.example [x](#nowhere)\n<!-- markdownlint-enable MD034 MD051 -->\nhttps://live.example\n",
         "# T\n\n| a | b |\n|---|---|\n| only one |\n| 1 | 2 | 3 |\n\n[wide  text ](#t) [a|b](https://x.example)\n",
         "# T\n\nline with trailing spaces   \n\n\n\nthree blanks above\n```rust\nfn main() {}\n```\nno newline at end",
+        "- a\n  - b\n\t- c\n      - d\n",
+        "Para\n\t- b\n        - c\n",
     ];
 
     #[test]
@@ -2693,6 +2803,191 @@ mod tests {
                 MD034.check(&doc).unwrap(),
                 "{body:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_md007_guard_matches_the_shape_upstream_slices_on() {
+        for (line, columns) in [
+            ("\t- x", Some(4)),
+            (" \t* x", Some(5)),
+            ("\t\t+ \u{26a0} x", Some(8)),
+            ("\t \t- x", Some(9)),
+            ("\t- ", Some(4)),
+            ("\t1. x", None),
+            ("\tplain", None),
+            ("\t-x", None),
+            ("\t-", None),
+            ("  - x", None),
+            ("- x", None),
+            ("", None),
+        ] {
+            assert_eq!(
+                tab_indented_bullet(line).map(|(columns, _)| columns),
+                columns,
+                "{line:?}"
+            );
+        }
+        assert_eq!(
+            tab_indented_bullet("\t- \u{26a0} x"),
+            Some((4, "- \u{26a0} x"))
+        );
+    }
+
+    #[test]
+    fn md007_view_writes_the_columns_upstream_counts_and_keeps_the_rest() {
+        let doc = Document::new(
+            "- a\r\n\t- \u{26a0} b\r\n  - c\n\tplain\n\t1. n\n \t* last".to_owned(),
+            PathBuf::from("t.md"),
+        )
+        .unwrap();
+        let (view, rewritten) = md007_view(&doc).expect("two tab-indented bullets");
+        assert_eq!(
+            view.content,
+            "- a\r\n    - \u{26a0} b\r\n  - c\n\tplain\n\t1. n\n     * last"
+        );
+        assert_eq!(rewritten, [2, 6]);
+        assert_eq!(view.lines.len(), doc.lines.len());
+        // Without a tab-indented bullet there is no view at all.
+        for body in [
+            "",
+            "- a\n  - b\n",
+            "para\n\ttabbed line  \n\t1. n\n",
+            "\t-x\n",
+        ] {
+            let doc = Document::new(body.to_owned(), PathBuf::from("t.md")).unwrap();
+            assert!(md007_view(&doc).is_none(), "{body:?}");
+        }
+    }
+
+    /// Bodies with a tab-indented bullet that upstream MD007 handles without
+    /// panicking on the original document (every sliced line is long enough and
+    /// ASCII), so the original can be the reference.
+    const TAB_BULLET_BODIES: &[&str] = &[
+        // Review of PR 419, finding 1: `c` sits at four columns, `d` under it.
+        "- a\n  - b\n\t- c\n      - d\n",
+        // Review of PR 419, finding 2: the bullet continues a paragraph.
+        "Para\n\t- b\n        - c\n",
+        "- a\n\t- bbbbbbbbbb\n\t\t- cccccccccc\n   - bad\n",
+        "* a\n \t* bbbbbbbbbb\n  * c\n\t* dddddddddd\n",
+        "1. one\n\t- under ordered\n- x\n\t- yyyyyyyyyy\n     - z\n",
+        "- a\r\n\t- bbbbbbbbbb\r\n      - c\r\n",
+        "# T\n\n- a\n\t- bbbbbbbbbb\n\n```\n\t- code sample\n```\n\n- c\n   - d\n",
+        "text\n\n\t- indented code?\n\n- a\n\t- bbbbbbbbbb\n",
+    ];
+
+    /// The invariant the view exists to keep: given the original document's
+    /// tree, MD007 says the same thing about every line the view did not
+    /// rewrite, findings and fixes alike.
+    #[test]
+    fn md007_view_changes_no_finding_off_the_rewritten_lines() {
+        use mdbook_lint_core::Violation;
+        use mdbook_lint_core::rule::Rule as _;
+        use mdbook_lint_rulesets::standard::md007::MD007;
+        for body in TAB_BULLET_BODIES {
+            let doc = Document::new((*body).to_owned(), PathBuf::from("t.md")).unwrap();
+            let (view, rewritten) = md007_view(&doc).expect("a tab-indented bullet");
+            let arena = comrak::Arena::new();
+            let ast = doc.parse_ast(&arena);
+            let off_rewritten = |violations: Vec<Violation>| -> Vec<Violation> {
+                violations
+                    .into_iter()
+                    .filter(|v| !rewritten.contains(&v.line))
+                    .collect()
+            };
+            let on_view = off_rewritten(MD007::new().check_with_ast(&view, Some(ast)).unwrap());
+            let on_original = off_rewritten(MD007::new().check_with_ast(&doc, Some(ast)).unwrap());
+            assert_eq!(on_view, on_original, "{body:?}");
+        }
+    }
+
+    /// `body` through `lint_body` with MD007 (opt-in) as the only rule.
+    fn lint_md007(body: &str) -> Vec<Diagnostic> {
+        use crate::config::RuleOverride;
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("MD007".to_owned(), RuleOverride::Enabled(true));
+        HyaloLintEngine::create()
+            .unwrap()
+            .lint_body(body, "t.md", None, false, &config, &["MD007".to_owned()])
+            .unwrap()
+    }
+
+    /// Upstream cuts a tab-indented bullet at byte 4 (four columns for a one-byte
+    /// tab): inside `\u{26a0}` here, which panics, and `abort`s the release build.
+    #[test]
+    fn md007_survives_a_tab_indented_bullet_with_multibyte_text() {
+        for body in [
+            "- a\n\t- \u{26a0} b\n",
+            "- a\n \t* \u{e9}\u{e9}\n",
+            "- a\r\n\t\t+ \u{4e2d}\u{6587}\r\n",
+        ] {
+            let found = lint_md007(body);
+            assert!(found.is_empty(), "{body:?}: {found:?}");
+        }
+    }
+
+    /// With ASCII text the same slice does not panic: it writes a fix that
+    /// drops the first characters of the item.
+    #[test]
+    fn md007_offers_no_fix_that_drops_characters_from_a_tab_indented_bullet() {
+        let found = lint_md007("- a\n\t- keep every character\n");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn md007_still_judges_space_indented_bullets_beside_a_tab_indented_one() {
+        let found = lint_md007("- a\n   - b\n\t- \u{26a0} c\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, 2);
+        let fix = found[0].fix.as_ref().expect("a space-indented fix");
+        assert_eq!(fix.replacement, "  - b");
+    }
+
+    /// Review of PR 419, finding 1: a tab-indented bullet stays in MD007's
+    /// list stack at the four columns upstream counts, so the bullet under it
+    /// is measured against its real parent. Upstream, on the original, says
+    /// nothing here either.
+    #[test]
+    fn md007_measures_the_children_of_a_tab_indented_bullet_from_its_real_column() {
+        let found = lint_md007("- a\n  - b\n\t- c\n      - d\n");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// Review of PR 419, finding 2: whether a line is code does not depend on
+    /// how many other rules are on. The rewritten line is silent; the others
+    /// are judged against the original tree whether MD007 runs alone (and
+    /// would otherwise parse its view) or shares the tree with other rules.
+    ///
+    /// The second body is the one that tells the two trees apart: upstream
+    /// counts ` \t ` as six columns where CommonMark counts five, so in the
+    /// view line 3 is an indented code block that swallows line 4, and in the
+    /// note it is a nested list.
+    #[test]
+    fn md007_gives_the_same_findings_alone_and_beside_other_rules() {
+        use crate::config::RuleOverride;
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("MD007".to_owned(), RuleOverride::Enabled(true));
+        let engine = HyaloLintEngine::create().unwrap();
+        for (body, line) in [
+            ("Para\n\t- b\n        - c\n", 3),
+            ("- a\n\n \t - b\n        - c\n", 4),
+        ] {
+            let alone = engine
+                .lint_body(body, "t.md", None, false, &config, &["MD007".to_owned()])
+                .unwrap();
+            let beside: Vec<_> = engine
+                .lint_body(body, "t.md", None, false, &config, &[])
+                .unwrap()
+                .into_iter()
+                .filter(|d| d.rule_id == "MD007")
+                .collect();
+            assert_eq!(format!("{alone:?}"), format!("{beside:?}"), "{body:?}");
+            assert_eq!(alone.len(), 1, "{body:?}: {alone:?}");
+            assert_eq!(alone[0].line, line, "{body:?}");
         }
     }
 
