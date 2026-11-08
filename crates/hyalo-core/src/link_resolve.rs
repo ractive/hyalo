@@ -93,6 +93,9 @@ impl<'a> LinkResolver<'a> {
             &span.link.target,
             crate::catalog::ResolutionOptions {
                 aliases: self.aliases,
+                // A writer: a link naming a redirect value is never a link
+                // to the file being moved (DEC-415).
+                redirects: false,
                 site_prefix: self.site_prefix,
             },
         )
@@ -127,6 +130,9 @@ impl<'a> LinkResolver<'a> {
             &span.link.target,
             crate::catalog::ResolutionOptions {
                 aliases: self.aliases,
+                // A writer: a link naming a redirect value is never a link
+                // to the file being moved (DEC-415).
+                redirects: false,
                 site_prefix: self.site_prefix,
             },
         )

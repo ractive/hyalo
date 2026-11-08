@@ -392,21 +392,37 @@ impl ScannedIndex {
             // resolves an alias-named wikilink to the same file
             // `find --fields links` reports, and `backlinks` / `--orphan` /
             // `--dead-end` / `summary.links` all agree with it.
-            let aliases: Vec<(String, Vec<String>)> = if crate::discovery::link_aliases_enabled() {
-                entries
-                    .iter()
-                    .filter_map(|e| {
-                        let declared = crate::filter::extract_aliases(&e.properties);
-                        (!declared.is_empty()).then(|| (e.rel_path.clone(), declared))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            //
+            // DEC-415: the redirect declarations ride the same list, read
+            // from the same parsed properties.
+            let aliases_enabled = crate::discovery::link_aliases_enabled();
+            let redirect_property = crate::discovery::link_redirect_property();
+            let declared: Vec<(String, crate::discovery::DeclaredNames)> =
+                if aliases_enabled || redirect_property.is_some() {
+                    entries
+                        .iter()
+                        .filter_map(|e| {
+                            let names = crate::discovery::DeclaredNames {
+                                aliases: if aliases_enabled {
+                                    crate::filter::extract_aliases(&e.properties)
+                                } else {
+                                    Vec::new()
+                                },
+                                redirects: redirect_property.map_or_else(Vec::new, |property| {
+                                    crate::filter::extract_redirects(&e.properties, property)
+                                }),
+                            };
+                            (names != crate::discovery::DeclaredNames::default())
+                                .then(|| (e.rel_path.clone(), names))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             let graph_build = LinkGraph::from_file_links_with_case_policy(
                 file_links_vec,
                 site_prefix,
-                &aliases,
+                &declared,
                 case_insensitive,
             );
             graph_build.graph
@@ -1664,15 +1680,26 @@ impl SnapshotIndex {
         for path in self.note_paths() {
             lookup.insert(path);
         }
+        // DEC-415: the redirect map is built here from the entries'
+        // properties, under this run's setting, so no snapshot cache depends
+        // on `[links] redirect_property`.
+        let redirect_property = crate::discovery::link_redirect_property();
         for entry in &self.entries {
             lookup.insert_aliases(
                 &entry.rel_path,
                 crate::filter::extract_aliases(&entry.properties),
             );
+            if let Some(property) = redirect_property {
+                lookup.insert_redirects(
+                    &entry.rel_path,
+                    crate::filter::extract_redirects(&entry.properties, property),
+                );
+            }
         }
         for path in &self.header.attachments {
             lookup.insert(path);
         }
+        let redirects = lookup.redirects_enabled();
         let catalog = crate::catalog::VaultCatalog::new(lookup, self.live.generation);
         self.graph_builds
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1685,6 +1712,7 @@ impl SnapshotIndex {
             &catalog,
             crate::catalog::ResolutionOptions {
                 aliases: self.live.aliases,
+                redirects,
                 site_prefix: self.header.site_prefix.as_deref(),
             },
         )

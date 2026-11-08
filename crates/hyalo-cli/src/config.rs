@@ -133,6 +133,12 @@ struct LinksConfig {
     /// `aliases: [Leah]`.
     #[serde(default)]
     aliases: Option<bool>,
+    /// The frontmatter property whose values declare the site-absolute URL
+    /// paths that resolve to a note (`[links] redirect_property`, DEC-415).
+    /// Unset by default: nothing is read and nothing changes. Typical value
+    /// for a static-site corpus: `"redirect_from"`.
+    #[serde(default)]
+    redirect_property: Option<String>,
     /// Default confidence floor for `hyalo links fix --apply-fuzzy`
     /// (`[links] fuzzy_min_confidence`, iter-212).
     ///
@@ -427,6 +433,10 @@ pub(crate) struct ResolvedDefaults {
     /// Effective `[links] aliases` — whether a frontmatter `aliases:` value
     /// resolves a wikilink (DEC-296, amended by DEC-308). Default `false`.
     pub(crate) alias_links_enabled: bool,
+    /// Effective `[links] redirect_property` (DEC-415): the frontmatter
+    /// property whose values are URL paths that resolve to the declaring note.
+    /// `None` (the default) means no redirect map is read.
+    pub(crate) redirect_property: Option<String>,
     /// When `true`, schema validation is applied on every `set`/`append` operation.
     /// From `validate_on_write = true` in `.hyalo.toml`.
     pub(crate) validate_on_write: bool,
@@ -569,6 +579,7 @@ impl PartialEq for ResolvedDefaults {
             && self.frontmatter_link_props == other.frontmatter_link_props
             && self.frontmatter_links_enabled == other.frontmatter_links_enabled
             && self.alias_links_enabled == other.alias_links_enabled
+            && self.redirect_property == other.redirect_property
             && self.validate_on_write == other.validate_on_write
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
@@ -594,6 +605,7 @@ impl ResolvedDefaults {
             frontmatter_links_enabled: true,
             // DEC-308: Obsidian does not resolve a bare `[[alias]]`.
             alias_links_enabled: false,
+            redirect_property: None,
             validate_on_write: false,
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
@@ -1161,13 +1173,21 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
     // `hyalo config` reports it, a plain write is unaffected.
     let schema_only_invalid = schema_invalid;
-    let schema_invalid = match (
-        schema_only_invalid.as_deref(),
-        invalid_lint_severity(cfg.lint.as_ref()),
-    ) {
-        (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
-        (Some(schema), None) => Some(schema.to_owned()),
-        (None, severity) => severity,
+    // DEC-415 (review of PR #422): a blank `[links] redirect_property` is the
+    // same kind of broken promise as a bad severity: the setting is ignored, but
+    // a gate must not answer as if it had been read.
+    let (redirect_property, redirect_property_invalid) =
+        resolve_redirect_property(cfg.links.as_ref());
+    let schema_invalid = {
+        let diagnostics: Vec<String> = [
+            schema_only_invalid.clone(),
+            invalid_lint_severity(cfg.lint.as_ref()),
+            redirect_property_invalid,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!diagnostics.is_empty()).then(|| diagnostics.join("; "))
     };
 
     // Parse [links] fields — borrow before moving.
@@ -1238,6 +1258,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .and_then(|l| l.frontmatter)
             .unwrap_or(true),
         alias_links_enabled: cfg.links.as_ref().and_then(|l| l.aliases).unwrap_or(false),
+        redirect_property,
         validate_on_write,
         lint_ignore: cfg
             .lint
@@ -1377,6 +1398,29 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
             crate::warn::warn(&e);
             (SchemaConfig::default(), Some(e))
         }
+    }
+}
+
+/// `[links] redirect_property` (DEC-415): the property name, trimmed, and the
+/// diagnostic for a blank one. A blank name is ignored (a plain read warns and
+/// carries on), and the diagnostic makes the gates refuse and `hyalo config`
+/// report `malformed: true`, like an invalid `[lint.rules.X] severity` (DEC-399).
+fn resolve_redirect_property(links: Option<&LinksConfig>) -> (Option<String>, Option<String>) {
+    match links.and_then(|l| l.redirect_property.as_deref()) {
+        Some(name) if !name.trim().is_empty() => (Some(name.trim().to_owned()), None),
+        Some(name) => {
+            crate::warn::warn(
+                "invalid [links] redirect_property in .hyalo.toml: the name is empty — ignoring",
+            );
+            (
+                None,
+                Some(format!(
+                    "[links] redirect_property must name a frontmatter property, found {name:?}; \
+                     repair with `redirect_property = \"redirect_from\"` or remove the key"
+                )),
+            )
+        }
+        None => (None, None),
     }
 }
 

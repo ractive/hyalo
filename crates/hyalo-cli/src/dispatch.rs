@@ -86,10 +86,20 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
     // iter-272 Part B: the snapshot already carries every note's frontmatter,
     // so the alias map is built at load from indexed properties — no on-disk
     // format change, and `--index` parity with a disk scan for free.
+    // DEC-415: the redirect map is built the same way, from the properties
+    // the snapshot already holds, under this run's `[links] redirect_property`
+    // — so the setting is never cached in the file.
+    let redirect_property = hyalo_core::discovery::link_redirect_property();
     for entry in snap.entries() {
         let aliases = hyalo_core::filter::extract_aliases(&entry.properties);
         if !aliases.is_empty() {
             idx.insert_aliases(&entry.rel_path, aliases);
+        }
+        if let Some(property) = redirect_property {
+            idx.insert_redirects(
+                &entry.rel_path,
+                hyalo_core::filter::extract_redirects(&entry.properties, property),
+            );
         }
     }
     // Successful metadata coverage and skipped filename identities jointly

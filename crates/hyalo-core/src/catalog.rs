@@ -9,6 +9,12 @@ use std::path::Path;
 pub struct ResolutionOptions<'a> {
     /// Permit declared aliases after all filename candidates fail.
     pub aliases: bool,
+    /// Permit a site-absolute target to resolve to the note declaring its URL
+    /// path under `[links] redirect_property`, after everything else fails
+    /// (DEC-415). Readers set it from the index; a writer (`mv`, `links fix`,
+    /// `links auto`) leaves it off, so a link that names a redirect value is
+    /// never attributed to a note it would be rewritten for.
+    pub redirects: bool,
     /// Prefix stripped from site-absolute targets.
     pub site_prefix: Option<&'a str>,
 }
@@ -70,6 +76,41 @@ impl VaultCatalog {
     ) -> Resolution {
         resolve(&self.index, source, kind, target, options)
     }
+}
+
+/// Whether `target` resolves to a note only because that note declares its URL
+/// path under `[links] redirect_property` (DEC-415): the redirect step is on,
+/// exactly one note claims the path, and the same link resolves to no file with
+/// the step off. Cheap for the common link: it returns after one hash lookup
+/// unless the path is claimed.
+#[must_use]
+pub fn resolves_via_redirect(
+    index: &CaseInsensitiveIndex,
+    source: &str,
+    kind: LinkKind,
+    target: &str,
+    options: ResolutionOptions<'_>,
+) -> bool {
+    if !options.redirects || !index.redirects_enabled() {
+        return false;
+    }
+    let raw = TargetParts::split(target).resolution_path();
+    if index.lookup_redirect(&raw, options.site_prefix).len() != 1 {
+        return false;
+    }
+    matches!(
+        resolve(
+            index,
+            source,
+            kind,
+            target,
+            ResolutionOptions {
+                redirects: false,
+                ..options
+            },
+        ),
+        Resolution::Missing | Resolution::Attachment(None)
+    )
 }
 
 /// Shared resolver for catalog owners and compatibility case-index callers.
@@ -217,6 +258,20 @@ fn resolve_core(
             return hit(only.to_owned());
         }
     }
+    // DEC-415: the last resort, for a site-absolute target only. A real file
+    // at the path, its `.md` and directory-index forms have all been tried
+    // above, so a claim on a URL never shadows a file; two claimants are
+    // ambiguous, never tie-broken.
+    if absolute && options.redirects {
+        let claimants: Vec<String> = index
+            .lookup_redirect(raw, options.site_prefix)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if !claimants.is_empty() {
+            return candidates_result(&claimants);
+        }
+    }
     if crate::discovery::has_non_md_extension(raw) || crate::discovery::has_hidden_component(raw) {
         Resolution::Attachment(None)
     } else {
@@ -317,6 +372,7 @@ mod tests {
         index.set_complete(true);
         let options = ResolutionOptions {
             aliases: false,
+            redirects: false,
             site_prefix: None,
         };
         for target in [".gitignore", ".hidden/note.md", ".github/lint.yml"] {
@@ -354,6 +410,7 @@ mod tests {
         let catalog = VaultCatalog::new(index, 7);
         let options = ResolutionOptions {
             aliases: true,
+            redirects: false,
             site_prefix: Some("docs"),
         };
         for (kind, target, expected) in [
@@ -396,6 +453,7 @@ mod tests {
         index.set_complete(true);
         let options = ResolutionOptions {
             aliases: false,
+            redirects: false,
             site_prefix: None,
         };
         assert_eq!(
@@ -416,6 +474,7 @@ mod tests {
         index.set_complete(true);
         let options = ResolutionOptions {
             aliases: false,
+            redirects: false,
             site_prefix: None,
         };
         assert_eq!(
@@ -439,6 +498,7 @@ mod tests {
         index.insert_aliases("two/b.md", ["Nick"]);
         let options = ResolutionOptions {
             aliases: true,
+            redirects: false,
             site_prefix: None,
         };
         for target in ["b", "Nick"] {
@@ -464,6 +524,7 @@ mod tests {
         for aliases in [false, true] {
             let options = ResolutionOptions {
                 aliases,
+                redirects: false,
                 site_prefix: None,
             };
             for target in ["note", "Twin", "Solo", "nowhere"] {
@@ -487,6 +548,7 @@ mod tests {
         }
         let on = ResolutionOptions {
             aliases: true,
+            redirects: false,
             site_prefix: None,
         };
         let off = ResolutionOptions {
@@ -521,6 +583,7 @@ mod tests {
         index.set_complete(true);
         let options = ResolutionOptions {
             aliases: false,
+            redirects: false,
             site_prefix: None,
         };
         let wiki = |source: &str, target: &str| {
@@ -542,5 +605,57 @@ mod tests {
         let strict = |target: &str| resolve(&exact, "s.md", LinkKind::Wikilink, target, options);
         assert_eq!(strict("y/note").path(), Some("b/y/note.md"));
         assert_eq!(strict("Y/Note"), Resolution::Missing);
+    }
+
+    /// DEC-415: the redirect map is the last resort, answers a site-absolute
+    /// target only, never shadows a file, and two claimants are ambiguous.
+    #[test]
+    fn a_redirect_is_the_last_resort_for_a_site_absolute_target() {
+        let mut index = CaseInsensitiveIndex::new();
+        index.set_case_insensitive_paths(true);
+        for path in ["real.md", "dir/index.md", "claim.md", "one.md", "two.md"] {
+            index.insert(path);
+        }
+        index.insert_redirects("claim.md", ["/real", "/dir", "/via"]);
+        index.insert_redirects("one.md", ["/dup"]);
+        index.insert_redirects("two.md", ["/dup"]);
+        let on = ResolutionOptions {
+            aliases: false,
+            redirects: true,
+            site_prefix: None,
+        };
+        let off = ResolutionOptions {
+            redirects: false,
+            ..on
+        };
+        let md =
+            |target: &str, options| resolve(&index, "src.md", LinkKind::Markdown, target, options);
+        assert_eq!(md("/via", on).path(), Some("claim.md"));
+        assert_eq!(md("/VIA/", on).path(), Some("claim.md"));
+        assert_eq!(md("/via", off), Resolution::Missing);
+        // A real file, or a directory index, outranks a claim on its path.
+        assert_eq!(md("/real", on).path(), Some("real.md"));
+        assert_eq!(md("/dir", on).path(), Some("dir/index.md"));
+        // Two claimants: ambiguous, never tie-broken.
+        assert_eq!(
+            md("/dup", on),
+            Resolution::Ambiguous(vec!["one.md".to_owned(), "two.md".to_owned()])
+        );
+        assert_eq!(md("/dup", off), Resolution::Missing);
+        // A relative or bare target names a file, not a URL.
+        assert_eq!(md("via", on), Resolution::Missing);
+        let wiki = resolve(&index, "src.md", LinkKind::Wikilink, "via", on);
+        assert_eq!(wiki, Resolution::Missing);
+        let wiki_abs = resolve(&index, "src.md", LinkKind::Wikilink, "/via", on);
+        assert_eq!(wiki_abs.path(), Some("claim.md"));
+        // The label `via: "redirect"` is for a link only the map resolved.
+        let via = |target: &str, options| {
+            resolves_via_redirect(&index, "src.md", LinkKind::Markdown, target, options)
+        };
+        assert!(via("/via", on));
+        assert!(!via("/via", off));
+        assert!(!via("/real", on));
+        assert!(!via("/dup", on));
+        assert!(!via("/nope", on));
     }
 }

@@ -103,6 +103,10 @@ pub(crate) struct ConfigReport {
     /// Effective `[links] aliases` (iter-272, DEC-296): whether a frontmatter
     /// `aliases:` value resolves a `[[wikilink]]`.
     pub alias_links: bool,
+    /// Effective `[links] redirect_property` (DEC-415): the frontmatter
+    /// property whose values declare the URL paths that resolve to a note;
+    /// `None` when unset.
+    pub redirect_property: Option<String>,
     /// Effective `[links] case_insensitive` (iter-274, BUG-19): `"auto"`,
     /// `"true"` or `"false"`. Reported because it decides whether
     /// `[[AidenLx]]` resolves to `People/aidenlx.md`, and a vault that pinned
@@ -316,6 +320,7 @@ pub(crate) fn collect_config_report(
         exempt: resolved.schema.exempt.patterns().to_vec(),
         frontmatter_links: resolved.frontmatter_links_enabled,
         alias_links: resolved.alias_links_enabled,
+        redirect_property: resolved.redirect_property.clone(),
         case_insensitive: match resolved.case_insensitive_mode {
             hyalo_core::CaseInsensitiveMode::Auto => "auto",
             hyalo_core::CaseInsensitiveMode::On => "true",
@@ -436,6 +441,7 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
                 frontmatter: report.frontmatter_links,
                 frontmatter_properties: report.frontmatter_link_properties.as_deref(),
                 aliases: report.alias_links,
+                redirect_property: report.redirect_property.as_deref(),
                 case_insensitive: report.case_insensitive,
             },
             scan: &report.scan,
@@ -605,7 +611,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let mut out = format!(
         "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nsnapshot_format_version: {snapshot_format_version}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
-         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n{case_insensitive_note}\
+         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.redirect_property: {redirect_property}\nlinks.case_insensitive: {case_insensitive}\n{case_insensitive_note}\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n\
          search.language: {search_language}\nsearch.code_blocks: {search_code_blocks}\nsearch.weights: title={w_title} headings={w_headings} tags={w_tags} body={w_body}\nsearch.proximity_bonus: {proximity_bonus}\n",
         cwd = report.cwd.display(),
@@ -617,6 +623,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         scan_verbose_skips = report.scan.verbose_skips,
         fm_links = report.frontmatter_links,
         alias_links = report.alias_links,
+        redirect_property = report.redirect_property.as_deref().unwrap_or("(none)"),
         case_insensitive = report.case_insensitive,
         case_insensitive_note = case_insensitive_note,
         fm_link_props = report
@@ -733,6 +740,8 @@ pub(crate) struct ConfigLinksResult<'a> {
     frontmatter_properties: Option<&'a [String]>,
     /// Whether authored aliases resolve links.
     aliases: bool,
+    /// Frontmatter property declaring URL paths that resolve to a note, or null.
+    redirect_property: Option<&'a str>,
     /// Effective case resolution mode.
     case_insensitive: &'a str,
 }

@@ -1260,6 +1260,13 @@ pub(crate) enum Commands {
             null; the counts of --broken-links, summary and HYALO006 do not change): the remedy is \
             to write [[sub/note]], not to create a note. `mv`'s skipped_ambiguous, HYALO006 and \
             `links fix`'s ambiguous_links name the same candidates. \
+            REDIRECTS (DEC-415): with `[links] redirect_property = \"redirect_from\"` set, a \
+            site-absolute target (/old/url) that no file, directory index or stem answers resolves to \
+            the note listing that URL path under the property and carries via: \"redirect\" (`(via \
+            redirect)` in text mode); a path two notes list is ambiguous like any other, and a real \
+            file at the path always wins. It is a graph edge; `links fix` rewrites no target for it \
+            (a broken #fragment still gets the usual anchor repair) and `mv` leaves it alone. \
+            Unset by default. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
             also carries suggested_fragment, the full heading to write instead (the GFM slug for a \
             markdown link; never applied automatically). -, _ and a space are one character class both for that prefix test and \

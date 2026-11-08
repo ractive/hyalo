@@ -154,3 +154,4 @@ mod iteration327_whole_change_followups;
 mod iteration329_reader_honours_protected_regions;
 mod iteration338_unresolved_backlinks;
 mod iteration339_create_index_early_noop;
+mod iteration340_redirect_property;

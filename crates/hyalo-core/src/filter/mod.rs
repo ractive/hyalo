@@ -6,7 +6,7 @@ mod tasks;
 
 pub use fields::{DEFAULT_FIELD_NAMES, Fields};
 pub use match_props::{
-    ALIASES_PROPERTY, extract_aliases, extract_tags, matches_filters_with_tags,
+    ALIASES_PROPERTY, extract_aliases, extract_redirects, extract_tags, matches_filters_with_tags,
     matches_frontmatter_filters, resolve_prop, resolve_prop_in_object, tag_matches,
 };
 pub use parse::{FilterOp, PropertyFilter, parse_property_filter};

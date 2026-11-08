@@ -406,6 +406,7 @@ pub struct FailedFix {
 pub fn site_prefix_plausible_resolution_stats(
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> (usize, usize) {
     // PR #251 review N13: `split('/').next()` on any `&str` (including
     // empty) always yields `Some`, so `filter_map` never actually filters
@@ -440,7 +441,19 @@ pub fn site_prefix_plausible_resolution_stats(
             absolute += 1;
             let stripped = strip_site_prefix(&link.target.replace('\\', "/"), site_prefix);
             let first_segment = stripped.split('/').next().unwrap_or("");
-            if top_level.contains(&first_segment.to_lowercase()) {
+            // DEC-415 (review of PR #422): a link only the redirect map resolves
+            // names a URL no top-level entry carries, yet the prefix stripped it
+            // correctly; counting it as implausible told a vault whose links all
+            // resolve that its `site_prefix` matched nothing.
+            if top_level.contains(&first_segment.to_lowercase())
+                || crate::discovery::resolves_via_redirect(
+                    &entry.rel_path,
+                    link.kind,
+                    &link.target,
+                    site_prefix,
+                    case_index,
+                )
+            {
                 plausible += 1;
             }
         }
@@ -600,12 +613,26 @@ pub fn detect_broken_links_from_index(
                 &link.target,
                 crate::catalog::ResolutionOptions {
                     aliases: idx.aliases_enabled(),
+                    redirects: idx.redirects_enabled(),
                     site_prefix,
                 },
             )
             .path()
             .is_some()
         })
+    };
+
+    // DEC-415 (review of PR #422): a link only the redirect map resolves is not
+    // broken, and `reader` is off under `--expand-short-form`, so this is asked
+    // on its own: the fuzzy matcher must never offer to repoint it.
+    let redirect_resolves = |source: &str, link: &crate::links::Link| {
+        crate::discovery::resolves_via_redirect(
+            source,
+            link.kind,
+            &link.target,
+            site_prefix,
+            case_index,
+        )
     };
 
     for entry in index.entries() {
@@ -730,8 +757,23 @@ pub fn detect_broken_links_from_index(
                 }
                 // `[[note?]]`, `[[my%20note]]`, `[[x/note]]` name a note the
                 // reader finds; the classifier's literal probes did not.
+                LinkResolution::Broken if redirect_resolves(&entry.rel_path, link) => {}
                 LinkResolution::Broken if reader_resolves(&entry.rel_path, link) => {}
                 LinkResolution::Broken => {
+                    // DEC-415: a site-absolute target two notes declare as
+                    // their redirect path is ambiguous, not missing — the
+                    // remedy is to point the link at one of them.
+                    if let Some(candidates) =
+                        case_index.and_then(|idx| idx.redirect_ambiguity(&link.target, site_prefix))
+                    {
+                        ambiguous.push(BrokenLinkInfo {
+                            source: entry.rel_path.clone(),
+                            line: *line,
+                            target: link.target.clone(),
+                            candidates,
+                        });
+                        continue;
+                    }
                     // ALIAS-2 (iter-275, DEC-308): a bare target exactly one
                     // note declares as an alias is broken *and* exactly
                     // fixable. Planned here, before the fuzzy matcher ever
@@ -2205,6 +2247,7 @@ fn build_replacements_for_file(
                             &emitted,
                             crate::catalog::ResolutionOptions {
                                 aliases: false,
+                                redirects: false,
                                 site_prefix,
                             },
                         )
@@ -4040,7 +4083,8 @@ See [broken](old-name.md) here.
         );
 
         // Under-stripped: `docs` is not a real top-level vault entry.
-        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-us"), None);
         assert_eq!(absolute, 2, "two site-absolute links, one relative");
         assert_eq!(
             plausible, 0,
@@ -4050,7 +4094,7 @@ See [broken](old-name.md) here.
         // The correct multi-segment prefix leaves `Web/...`, which matches
         // the real top-level `web/` entry case-insensitively.
         let (absolute, plausible) =
-            site_prefix_plausible_resolution_stats(&index, Some("en-US/docs"));
+            site_prefix_plausible_resolution_stats(&index, Some("en-US/docs"), None);
         assert_eq!(absolute, 2);
         assert_eq!(plausible, 2);
     }
@@ -4076,12 +4120,55 @@ See [broken](old-name.md) here.
             )],
             &[],
         );
-        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-us"), None);
         assert_eq!(
             absolute, 0,
             "a vault with no site-absolute links must not be flagged"
         );
         assert_eq!(plausible, 0);
+    }
+
+    /// DEC-415 (review of PR #422): a site-absolute link that resolves only
+    /// through the redirect map is plausibly resolved, so a vault whose links
+    /// all resolve that way is not told its `site_prefix` stripped nothing.
+    #[test]
+    fn site_prefix_plausible_resolution_counts_a_redirect_resolved_link() {
+        use crate::links::{Link, LinkKind};
+
+        let link = |target: &str| Link {
+            target: target.to_string(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: None,
+            query: None,
+            embed: false,
+            external: false,
+            property: None,
+        };
+        let index = mock_index(
+            "source.md",
+            vec![(1, link("/old/url")), (2, link("/nowhere/at/all"))],
+            &["guides/setup.md"],
+        );
+        let mut catalog = CaseInsensitiveIndex::new();
+        catalog.set_case_insensitive_paths(true);
+        catalog.insert("source.md");
+        catalog.insert("guides/setup.md");
+        catalog.insert_redirects("guides/setup.md", ["/old/url"]);
+        catalog.set_complete(true);
+
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("docs"), None);
+        assert_eq!(
+            (absolute, plausible),
+            (2, 0),
+            "without the map nothing is plausible"
+        );
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("docs"), Some(&catalog));
+        assert_eq!(absolute, 2);
+        assert_eq!(plausible, 1, "only the link the map resolves");
     }
 
     // --- NEW-15 / UX-2 (dogfood pre3): count_broken_anchors ---
@@ -4948,6 +5035,7 @@ See [broken](old-name.md) here.
                         &span.link.target,
                         crate::catalog::ResolutionOptions {
                             aliases: false,
+                            redirects: false,
                             site_prefix: None
                         }
                     )

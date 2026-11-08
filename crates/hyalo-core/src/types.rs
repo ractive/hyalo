@@ -278,8 +278,10 @@ pub struct LinkInfo {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub out_of_vault: bool,
     /// How the target resolved when a plain path or filename lookup was not
-    /// what answered — currently only `"alias"`, for a target matched against
-    /// a note's frontmatter `aliases:` (iter-272 Part B, DEC-296).
+    /// what answered: `"alias"`, for a target matched against a note's
+    /// frontmatter `aliases:` (iter-272 Part B, DEC-296), or `"redirect"`, for a
+    /// site-absolute target matched against the URL path a note declares under
+    /// `[links] redirect_property` (DEC-415).
     ///
     /// Absent for every link that resolves by path or filename, so a report of
     /// an alias-free vault keeps today's shape byte for byte. `kind` stays
@@ -289,7 +291,9 @@ pub struct LinkInfo {
     #[cfg_attr(test, ts(optional))]
     pub via: Option<String>,
     /// `true` when a bare `[[stem]]` target names more than one vault file
-    /// (or an alias two notes both declare) and so resolves to none of them
+    /// (or an alias, or a site-absolute URL path under `[links]
+    /// redirect_property`, that two notes both declare, DEC-415) and so
+    /// resolves to none of them
     /// (iter-319, DEC-374). Implies `path: None` and a non-empty
     /// `candidates`: the remedy is for the author to disambiguate
     /// (`[[sub/stem]]`), not to create a note or fix a typo. Still counted as
@@ -308,6 +312,10 @@ pub struct LinkInfo {
 /// Value of [`LinkInfo::via`] for a target resolved through a frontmatter
 /// `aliases:` entry (iter-272 Part B, DEC-296).
 pub const LINK_VIA_ALIAS: &str = "alias";
+
+/// Value of [`LinkInfo::via`] for a site-absolute target resolved through the
+/// URL path a note declares under `[links] redirect_property` (DEC-415).
+pub const LINK_VIA_REDIRECT: &str = "redirect";
 
 /// A single backlink: another file that links to this one.
 /// Used by `find` (backlinks field).

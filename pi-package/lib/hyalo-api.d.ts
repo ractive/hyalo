@@ -396,6 +396,10 @@ type ConfigLinksResult = {
      */
     aliases: boolean;
     /**
+     * Frontmatter property declaring URL paths that resolve to a note, or null.
+     */
+    redirect_property: string | null;
+    /**
      * Effective case resolution mode.
      */
     case_insensitive: string;
@@ -821,8 +825,10 @@ type LinkInfo = {
     out_of_vault?: boolean;
     /**
      * How the target resolved when a plain path or filename lookup was not
-     * what answered — currently only `"alias"`, for a target matched against
-     * a note's frontmatter `aliases:` (iter-272 Part B, DEC-296).
+     * what answered: `"alias"`, for a target matched against a note's
+     * frontmatter `aliases:` (iter-272 Part B, DEC-296), or `"redirect"`, for a
+     * site-absolute target matched against the URL path a note declares under
+     * `[links] redirect_property` (DEC-415).
      *
      * Absent for every link that resolves by path or filename, so a report of
      * an alias-free vault keeps today's shape byte for byte. `kind` stays
@@ -832,7 +838,9 @@ type LinkInfo = {
     via?: string;
     /**
      * `true` when a bare `[[stem]]` target names more than one vault file
-     * (or an alias two notes both declare) and so resolves to none of them
+     * (or an alias, or a site-absolute URL path under `[links]
+     * redirect_property`, that two notes both declare, DEC-415) and so
+     * resolves to none of them
      * (iter-319, DEC-374). Implies `path: None` and a non-empty
      * `candidates`: the remedy is for the author to disambiguate
      * (`[[sub/stem]]`), not to create a note or fix a typo. Still counted as

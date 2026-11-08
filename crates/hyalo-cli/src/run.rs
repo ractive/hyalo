@@ -1489,6 +1489,10 @@ fn run_inner() -> Result<(), AppError> {
     // answer without threading it through their signatures.
     hyalo_core::discovery::set_link_aliases(config.alias_links_enabled);
 
+    // Install `[links] redirect_property` (DEC-415) the same way: the case
+    // index and graph builders read it, so no snapshot has to record it.
+    hyalo_core::discovery::set_link_redirect_property(config.redirect_property.as_deref());
+
     // Install `[search]` tokenization and scoring settings (iter-304,
     // DEC-336/337/338) the same way: scanners, index builders and scorers
     // all read them without signature threading.

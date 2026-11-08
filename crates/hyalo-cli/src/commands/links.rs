@@ -210,7 +210,11 @@ pub fn links_fix(
     let mut site_prefix_misconfigured = false;
     if let Some(prefix) = site_prefix {
         let (site_absolute_links, plausibly_resolved) =
-            hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
+            hyalo_core::link_fix::site_prefix_plausible_resolution_stats(
+                index,
+                site_prefix,
+                case_index,
+            );
         if site_absolute_links > 0 && plausibly_resolved == 0 {
             site_prefix_misconfigured = true;
             // UX-9 (iter-277): say when the offending value was never
