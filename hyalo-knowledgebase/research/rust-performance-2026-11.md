@@ -41,7 +41,8 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
 - The release profile already has fat LTO, `codegen-units = 1` and `panic = "abort"`;
   there is no build-flag win left.
 - Out of scope here, and needing this iteration as their baseline: `LinkGraph`'s
-  public types, string interning, a different allocator, skipping teardown at exit.
+  public types, string interning, a different allocator. (Skipping teardown at exit
+  was tried afterwards and discarded: see "Skipping teardown at exit" below.)
 
 ## External reading
 
@@ -160,6 +161,24 @@ Wall time, same runs, indicative only: `tags --index` 0.35 s to 0.20 s,
   guard). It could hold the bytes in memory instead of a temp file and keep the
   guarantee; it could not be dropped without losing it. The audit's "80% of
   lint-floor samples" therefore belongs to `--fix`, if to anything.
+
+## Skipping teardown at exit
+
+Experiment 1, run on 2026-11-08 against criteria fixed beforehand; the full table is
+in [[iterations/iteration-332-skip-teardown-at-exit]]. Verdict: **discarded**.
+
+- `mem::forget` of the snapshot after the output is flushed: `backlinks --index` on
+  MDN 0.26 s to 0.24 s (-7.7%), `find --index` 0.20 s to 0.18 s (-10%), `summary
+  --index` -2%, ranked `find --index` and the disk scan unchanged, peak RSS -1%.
+- The ceiling, `process::exit(0)` right after the flush so that no destructor runs:
+  -11% and -10%. No version of the idea reaches the 20% bar, and peak memory cannot
+  move because teardown follows the peak.
+- The brief's 25% of samples on the free side was profiled before iteration 330, when
+  `backlinks --index` still decoded BM25. [[research/snapshot-load-floor-2026-09-01]]
+  measured teardown directly at 59 ms: 43 ms freeing the BM25 index, 16 ms entries
+  plus graph. Without the BM25 decode about 16 ms of 0.26 s (about 6%) is left, in line
+  with the 8 to 11% measured here. A profile and a wall time from different code
+  states do not compare.
 
 ## Method note
 
