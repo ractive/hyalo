@@ -212,7 +212,9 @@ and this project adheres to
   barrier fails (a full disk, say), and a note edited since it was read, or whose
   rename failed, stays as it was and is reported. The phase needs room for every
   rewritten note at once, and Ctrl-C, SIGTERM and SIGHUP remove the
-  unrenamed temp files, say what was written and exit 130; a kill leaves them,
+  unrenamed temp files and the `$TMPDIR` copies, say what was written and then die
+  by that signal, so a calling script stops; an ignored signal stays ignored and a
+  signal outside a phase takes the default action; a kill leaves the temp files,
   named `.hyalo-tmp-*`. `lint --fix` no longer lists or counts a fix that was
   queued and not written, and exits 1 for it (DEC-409). The first eight notes no longer get special treatment: two or
   more notes take one path, one note keeps the per-file path. The Obsidian Hub's

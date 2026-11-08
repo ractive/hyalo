@@ -50,6 +50,7 @@ notes may be a mix. Decision: DEC-408 (amends DEC-404, DEC-317, DEC-323). Backlo
 - [x] The lost-update guard keeps a size-and-hash fingerprint, not a copy of each original in `$TMPDIR`
 - [x] Directory fences on the pool, one barrier per device; every staged file flushed on the pool in `finish_staged`; `syncfs` dropped
 - [x] `into_result` reports both failures; an effect that cannot be matched against the report is an error, not "written"; the Windows comment reworded
+- [x] A signal mid-phase ends the process by that signal, not exit 130, so a calling script stops; ignored signals stay ignored; hooks exist only while a phase has files; the `$TMPDIR` copies are removed on a signal
 - [x] Mutation checks (20 of 20 runs each side), both signal probes, the 16-cell differential with a control, and the timings rerun
 
 ### Documentation

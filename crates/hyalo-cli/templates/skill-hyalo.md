@@ -718,7 +718,7 @@ Flags that only `--help` mentions, worth knowing:
   them all with one barrier, then rename them, so after power loss each note is whole, old or
   new. A note edited since it was read stays as it was and is reported; a full disk renames
   nothing. The phase needs room for every rewritten note at once, and Ctrl-C removes the unrenamed temp files and
-  exits 130; a kill leaves `.hyalo-tmp-*` files beside the notes. The Obsidian Hub's `lint --fix` takes about 4 s. Past a few hundred
+  ends the process by the signal; a kill leaves `.hyalo-tmp-*` files beside the notes. The Obsidian Hub's `lint --fix` takes about 4 s. Past a few hundred
   files the phase reports progress on stderr; `-q` silences it.
 - **The reader skips raw HTML, `$$` math and code-like elements** (DEC-402; the owner's
   decision, Obsidian documents none of it). A link, heading or task inside a raw HTML block

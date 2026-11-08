@@ -703,7 +703,6 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
- "ctrlc",
  "dunce",
  "globset",
  "hyalo-core",

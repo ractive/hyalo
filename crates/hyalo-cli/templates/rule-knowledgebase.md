@@ -502,8 +502,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   only then rename them and fence the directories. After power loss every note is whole, old or
   new, never empty; a phase may end as a mix. A note edited since it was read, or whose rename
   failed, stays as it was and is reported; a full disk renames nothing. The phase needs room for
-  every rewritten note at once, and Ctrl-C and SIGTERM remove the unrenamed temp files and exit 130, while a kill
-  leaves them beside the notes, named `.hyalo-tmp-*`. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
+  every rewritten note at once, and Ctrl-C and SIGTERM remove the unrenamed temp files and then die by that
+  signal (so a calling script stops), while a kill leaves them beside the notes,
+  named `.hyalo-tmp-*`. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
   past a few hundred files reports progress on stderr; `-q` silences it. A single-file mutation
   keeps the per-file path.
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and

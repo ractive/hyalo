@@ -101,25 +101,44 @@ fn a_multi_note_write_leaves_no_temporary_file() {
     }
 }
 
-/// DEC-409: Ctrl-C in the middle of a phase removes every temp file not yet
-/// renamed, renames nothing more, says what was written and exits 130; every
-/// note is whole, old or new.
 #[cfg(unix)]
-#[test]
-fn an_interrupt_mid_phase_leaves_no_temporary_file_and_no_damaged_note() {
-    use std::process::Stdio;
+mod signals {
+    use super::{hyalo_no_hints, leftovers, vault_of};
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
+
     const NOTES: usize = 6000;
-    let tmp = vault_of(NOTES);
-    let program = hyalo_no_hints().get_program().to_owned();
-    let mut child = std::process::Command::new(program)
-        .current_dir(tmp.path())
-        .args(["--no-hints", "lint", "--fix", "--rule", "MD047"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let staged = |dir: &std::path::Path| {
+
+    fn lint_fix(
+        dir: &std::path::Path,
+        tmpdir: &std::path::Path,
+        pre_exec: impl Fn() + Send + Sync + 'static,
+    ) -> Child {
+        let program = hyalo_no_hints().get_program().to_owned();
+        let mut command = Command::new(program);
+        command
+            .current_dir(dir)
+            .env("TMPDIR", tmpdir)
+            .args(["--no-hints", "lint", "--fix", "--rule", "MD047"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        // SAFETY: only async-signal-safe calls (`signal`) run between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                // A shell background job hands SIGINT over ignored: the child
+                // under test starts from the default, like a terminal's.
+                for signal in [libc::SIGINT, libc::SIGTERM] {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
+                pre_exec();
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    fn any_temp(dir: &std::path::Path) -> bool {
         (0..4).any(|i| {
             std::fs::read_dir(dir.join(format!("d{i}")))
                 .into_iter()
@@ -127,42 +146,195 @@ fn an_interrupt_mid_phase_leaves_no_temporary_file_and_no_damaged_note() {
                 .flatten()
                 .any(|e| e.file_name().to_string_lossy().starts_with(".hyalo-tmp-"))
         })
-    };
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !staged(tmp.path()) {
-        assert!(Instant::now() < deadline, "the phase never staged a note");
-        assert!(
-            child.try_wait().unwrap().is_none(),
-            "finished before staging"
-        );
-        std::thread::sleep(Duration::from_millis(1));
     }
-    let signalled = std::process::Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
-        .status()
-        .unwrap();
-    assert!(signalled.success());
-    let output = child.wait_with_output().unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(130), "{stderr}");
-    assert!(stderr.contains("hyalo: interrupted"), "{stderr}");
-    assert_eq!(
-        leftovers(tmp.path()).len(),
-        0,
-        "{:?}",
-        leftovers(tmp.path())
-    );
-    let (mut old, mut new) = (0, 0);
-    for i in 0..NOTES {
-        let content =
-            std::fs::read_to_string(tmp.path().join(format!("d{}/n{i}.md", i % 4))).unwrap();
-        if content.ends_with("body\n\n") {
-            old += 1;
-        } else if content.ends_with("body\n") {
-            new += 1;
-        } else {
-            panic!("n{i}.md is damaged: {content:?}");
+
+    fn wait_for_staging(dir: &std::path::Path, child: &mut Child) {
+        let staged = || any_temp(dir);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !staged() {
+            assert!(Instant::now() < deadline, "the phase never staged a note");
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "finished before staging"
+            );
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
-    assert_eq!(old + new, NOTES);
+
+    fn kill(pid: i32, signal: i32) {
+        // SAFETY: signals a live child (or its process group) of this test.
+        assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
+    }
+
+    fn assert_whole(dir: &std::path::Path) {
+        let mut total = 0;
+        for i in 0..NOTES {
+            let content = std::fs::read_to_string(dir.join(format!("d{}/n{i}.md", i % 4))).unwrap();
+            assert!(
+                content.ends_with("body\n\n") || content.ends_with("body\n"),
+                "n{i}.md is damaged: {content:?}"
+            );
+            total += 1;
+        }
+        assert_eq!(total, NOTES);
+    }
+
+    /// DEC-409: a signal in the middle of a phase removes every temp file not
+    /// yet renamed, renames nothing more, says what was written and then dies
+    /// by that signal, so a calling shell script stops.
+    #[test]
+    fn a_signal_mid_phase_cleans_up_and_dies_by_that_signal() {
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            let tmp = vault_of(NOTES);
+            let scratch = tempfile::tempdir().unwrap();
+            let mut child = lint_fix(tmp.path(), scratch.path(), || {
+                // SAFETY: as above.
+                unsafe { libc::signal(libc::SIGHUP, libc::SIG_DFL) };
+            });
+            wait_for_staging(tmp.path(), &mut child);
+            kill(i32::try_from(child.id()).unwrap(), signal);
+            let output = child.wait_with_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.signal(),
+                Some(signal),
+                "signal {signal}, status {:?}: {}",
+                output.status,
+                stderr.chars().take(400).collect::<String>()
+            );
+            assert_eq!(output.status.code(), None, "{stderr}");
+            assert!(stderr.contains("hyalo: interrupted"), "{stderr}");
+            assert_eq!(
+                leftovers(tmp.path()).len(),
+                0,
+                "{:?}",
+                leftovers(tmp.path())
+            );
+            // The copies of the notes the workers took are gone too.
+            let copies = std::fs::read_dir(scratch.path()).unwrap().count();
+            assert_eq!(copies, 0, "signal {signal}: copies left in $TMPDIR");
+            assert_whole(tmp.path());
+        }
+    }
+
+    /// A terminal's Ctrl-C reaches a shell script's whole process group. The
+    /// shell stops the script only if the child it was waiting for died by the
+    /// signal; a child that exits 130 lets the loop go on.
+    #[test]
+    fn ctrl_c_on_a_script_calling_a_bulk_write_stops_the_script() {
+        let tmp = vault_of(NOTES);
+        let log = tmp.path().join("log.txt");
+        let program = hyalo_no_hints().get_program().to_owned();
+        let script = format!(
+            "for i in 1 2 3; do \"{}\" --no-hints lint --fix --rule MD047 >/dev/null 2>&1; \
+             echo \"iter $i rc=$?\" >> \"{}\"; done; echo finished >> \"{}\"",
+            program.to_string_lossy(),
+            log.display(),
+            log.display()
+        );
+        let mut shell = Command::new("bash");
+        shell.current_dir(tmp.path()).arg("-c").arg(script);
+        // SAFETY: `setpgid` and `signal` are async-signal-safe.
+        unsafe {
+            shell.pre_exec(|| {
+                libc::setpgid(0, 0);
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        let mut shell = shell.spawn().unwrap();
+        wait_for_staging(tmp.path(), &mut shell);
+        kill(-i32::try_from(shell.id()).unwrap(), libc::SIGINT);
+        let status = shell.wait().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let log = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!log.contains("finished"), "the script went on: {log:?}");
+        assert!(!log.contains("iter 2"), "the script went on: {log:?}");
+        // The shell ends by the signal or with 130, whichever it gets to first.
+        assert!(
+            status.signal() == Some(libc::SIGINT) || status.code() == Some(130),
+            "{status:?} {log:?}"
+        );
+        assert_eq!(leftovers(tmp.path()).len(), 0);
+    }
+
+    /// `nohup` hands SIGHUP over ignored, and a background job SIGINT: an
+    /// ignored signal stays ignored and the run completes.
+    #[test]
+    fn an_ignored_signal_mid_phase_changes_nothing() {
+        for signal in [libc::SIGHUP, libc::SIGINT] {
+            let tmp = vault_of(NOTES);
+            let scratch = tempfile::tempdir().unwrap();
+            let mut child = lint_fix(tmp.path(), scratch.path(), move || {
+                // SAFETY: as above.
+                unsafe { libc::signal(signal, libc::SIG_IGN) };
+            });
+            wait_for_staging(tmp.path(), &mut child);
+            kill(i32::try_from(child.id()).unwrap(), signal);
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "{signal}");
+            for i in 0..NOTES {
+                let content =
+                    std::fs::read_to_string(tmp.path().join(format!("d{}/n{i}.md", i % 4)))
+                        .unwrap();
+                assert!(content.ends_with("body\n") && !content.ends_with("\n\n"));
+            }
+            assert_eq!(leftovers(tmp.path()).len(), 0);
+        }
+    }
+
+    /// After the phase the signal takes the default action, with no report of
+    /// an interrupted phase: stdout is a pipe nobody reads, so the process
+    /// waits in its output write.
+    #[test]
+    fn a_signal_after_the_phase_takes_the_default_action() {
+        let tmp = vault_of(NOTES);
+        let program = hyalo_no_hints().get_program().to_owned();
+        let mut command = Command::new(program);
+        command
+            .current_dir(tmp.path())
+            .args([
+                "--no-hints",
+                "lint",
+                "--fix",
+                "--rule",
+                "MD047",
+                "--format",
+                "json",
+                "--limit",
+                "0",
+                "--max-per-rule",
+                "0",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: as above.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let last = tmp
+            .path()
+            .join(format!("d{}/n{}.md", (NOTES - 1) % 4, NOTES - 1));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !std::fs::read_to_string(&last).unwrap().ends_with("body\n") || any_temp(tmp.path()) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Every fix is renamed, but `lint` is still writing its listing.
+        std::thread::sleep(Duration::from_millis(1500));
+        let early = child.try_wait().unwrap();
+        assert!(early.is_none(), "finished before the signal: {early:?}");
+        kill(i32::try_from(child.id()).unwrap(), libc::SIGINT);
+        let stdout = child.stdout.take();
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+        drop(stdout);
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGINT), "{stderr}");
+        assert!(!stderr.contains("interrupted"), "{stderr}");
+    }
 }

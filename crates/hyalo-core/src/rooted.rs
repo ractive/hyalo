@@ -250,6 +250,8 @@ pub struct CapturedInput {
     /// `None` once the capture was reduced to its fingerprint for a staged
     /// replacement (DEC-408): the phase then keeps no copy of the note.
     original: Option<Arc<TempPath>>,
+    /// Registers `original` with the signal handler, which removes it.
+    scratch: Option<crate::interrupt::Scratch>,
     /// What the file on disk must still be (size and hash of its bytes), once
     /// computed. On a capture of a replacement that is staged but not yet
     /// renamed, `original` holds the staged bytes, which the file on disk does
@@ -349,7 +351,10 @@ impl CapturedInput {
         if metadata.len() > limit {
             return Err(oversized());
         }
+        let flight = crate::interrupt::flight();
         let mut original = NamedTempFile::new()?;
+        let scratch = crate::interrupt::Scratch::new(original.path());
+        drop(flight);
         let size = std::io::copy(&mut Read::by_ref(&mut file).take(limit + 1), &mut original)?;
         if size > limit {
             return Err(oversized());
@@ -361,6 +366,7 @@ impl CapturedInput {
             exact_identity,
             identity,
             original: Some(Arc::new(original.into_temp_path())),
+            scratch: Some(scratch),
             base: None,
             permissions: metadata.permissions(),
             size,
@@ -456,11 +462,15 @@ impl CapturedInput {
 
     pub fn prepare(self, bytes: &[u8], session: &WriteSession) -> Result<PreparedReplacement> {
         session.fault(FaultPoint::Prepare)?;
+        let flight = crate::interrupt::flight();
         let mut data = NamedTempFile::new()?;
+        let scratch = crate::interrupt::Scratch::new(data.path());
+        drop(flight);
         data.write_all(bytes)?;
         Ok(PreparedReplacement {
             source: self,
             data: data.into_temp_path(),
+            _scratch: scratch,
         })
     }
 
@@ -540,6 +550,7 @@ impl CapturedInput {
                 return Err(error);
             }
             self.original = None;
+            self.scratch = None;
             session.stage(
                 path.to_path_buf(),
                 Staged {
@@ -593,6 +604,8 @@ impl NewEntry {
 pub struct PreparedReplacement {
     source: CapturedInput,
     data: TempPath,
+    /// Registers `data` with the signal handler, which removes it.
+    _scratch: crate::interrupt::Scratch,
 }
 
 /// Exact ownership receipt for bytes published by this operation.
@@ -650,6 +663,7 @@ impl OwnedPublication {
             captured.size = expected.len() as u64;
             captured.base = Some(staged.base);
             captured.original = Some(Arc::new(staged_bytes.into_temp_path()));
+            captured.scratch = None;
             return Ok(captured);
         }
         bail!(SourceConflict(
