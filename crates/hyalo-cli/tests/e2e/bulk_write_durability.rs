@@ -210,7 +210,8 @@ mod signals {
                 "{:?}",
                 leftovers(tmp.path())
             );
-            // The copies of the notes the workers took are gone too.
+            // The copies of the notes the workers took are removed too, the
+            // ones a receipt still holds included (DEC-409).
             let copies = std::fs::read_dir(scratch.path()).unwrap().count();
             assert_eq!(copies, 0, "signal {signal}: copies left in $TMPDIR");
             assert_whole(tmp.path());

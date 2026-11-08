@@ -1023,3 +1023,29 @@ fn a_name_that_cannot_be_matched_is_unknown_not_written() {
     let clean = FinishReport::default();
     assert!(matches!(clean.settlement().of("../x.md"), Settled::Written));
 }
+
+/// A receipt keeps the prepared bytes (or the moved note's captured copy) in
+/// `$TMPDIR` for as long as it lives, so it keeps them registered with the
+/// signal handler too; a copy that is only unregistered is left by a signal.
+#[test]
+fn a_receipt_keeps_its_tmpdir_copy_registered() {
+    let (dir, root, names) = vault_of_notes(2, 1);
+    let mut session = WriteSession::new(Durability::PerFile);
+    let (_, replaced) = root
+        .capture(&RelativeName::new(names[0].as_str()).unwrap())
+        .unwrap()
+        .prepare(b"new", &session)
+        .unwrap()
+        .commit_with_receipt(&mut session)
+        .unwrap();
+    assert!(replaced.registration.is_some());
+    let source = root
+        .capture(&RelativeName::new(names[1].as_str()).unwrap())
+        .unwrap();
+    let destination = root
+        .destination(RelativeName::new("d0/moved.md").unwrap())
+        .unwrap();
+    let (_, moved) = move_no_replace_with_receipt(source, destination, &mut session).unwrap();
+    assert!(moved.registration.is_some());
+    drop(dir);
+}

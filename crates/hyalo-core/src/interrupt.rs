@@ -1,14 +1,15 @@
 //! Signal handling for a bulk write phase and the `--jq` worker (DEC-409).
 //!
 //! A bulk phase keeps its staged temporary files (and the scratch copies of
-//! the notes it read) in a [`Registry`]. While that registry is not empty,
+//! the notes it read) in a [`Registry`]. While that registry is not empty or a
+//! file is being created,
 //! SIGINT, SIGTERM and SIGHUP are hooked, each one only if its disposition is
 //! the default: an ignored signal (`nohup`, a shell background job, DEC-369)
 //! stays ignored and the phase runs without cleanup. On a signal the files
 //! not yet renamed are removed, what was written is reported on stderr and the
 //! process then **dies by that signal** with the default action restored, so a
-//! calling shell sees WIFSIGNALED and stops its script. Once the registry is
-//! empty the hooks are removed, so a signal outside a phase behaves exactly as
+//! calling shell sees WIFSIGNALED and stops its script. Once nothing is
+//! registered and nothing is in flight the hooks are removed, so a signal outside a phase behaves exactly as
 //! without this module. The `--jq` worker (DEC-369) polls [`flag`]; it hooks
 //! all three signals, only if all three are default, for the rest of the run,
 //! and a signal then ends in the worker's cancellation, not in death.
@@ -61,7 +62,7 @@ fn ensure_hooked() {
 /// Nothing left to protect: give the signals back, unless a worker polls.
 fn release_hooks_if_idle() {
     let _guard = HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
-    if !POLLED.load(Ordering::Relaxed) && GLOBAL.is_empty() {
+    if !POLLED.load(Ordering::Relaxed) && GLOBAL.is_idle() {
         sys::unhook_all();
     }
 }
@@ -326,6 +327,10 @@ impl Registry {
         let state = self.lock();
         state.temps.is_empty() && state.scratch.is_empty()
     }
+    /// Nothing registered and no file being created.
+    pub fn is_idle(&self) -> bool {
+        self.in_flight.load(Ordering::SeqCst) == 0 && self.is_empty()
+    }
     /// Mark a temp file as about to be created and registered.
     ///
     /// After a signal a worker that has not started yet stops here for good
@@ -420,8 +425,26 @@ impl Drop for Flight<'_> {
 
 /// Hold while creating and tracking a temporary file of a bulk phase.
 #[must_use]
-pub fn flight() -> Flight<'static> {
-    GLOBAL.flight()
+pub fn flight() -> HookedFlight {
+    // Hooked before the file exists, and kept hooked until it is registered:
+    // with the signals at their default, a signal in that window kills the
+    // process with the file on disk and nobody to remove it.
+    // The count goes up first: a release that comes after sees it and keeps
+    // the hooks, and one that came before is followed by `ensure_hooked`.
+    let flight = GLOBAL.flight();
+    ensure_hooked();
+    HookedFlight(Some(flight))
+}
+
+/// [`flight`]'s guard; ends the flight, then gives the signals back if idle.
+#[derive(Debug)]
+pub struct HookedFlight(Option<Flight<'static>>);
+
+impl Drop for HookedFlight {
+    fn drop(&mut self) {
+        drop(self.0.take());
+        release_hooks_if_idle();
+    }
 }
 
 /// A temporary file registered with the process registry until dropped.
@@ -574,5 +597,16 @@ mod tests {
             assert_eq!(registry.interrupt(true), None);
             assert!(!copy.exists(), "the copy survived the signal");
         });
+    }
+
+    #[test]
+    fn a_registry_with_a_file_in_flight_is_not_idle() {
+        let registry = Registry::new();
+        assert!(registry.is_idle());
+        let flight = registry.flight();
+        assert!(registry.is_empty());
+        assert!(!registry.is_idle());
+        drop(flight);
+        assert!(registry.is_idle());
     }
 }

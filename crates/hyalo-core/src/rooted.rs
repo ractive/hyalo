@@ -470,7 +470,7 @@ impl CapturedInput {
         Ok(PreparedReplacement {
             source: self,
             data: data.into_temp_path(),
-            _scratch: scratch,
+            scratch,
         })
     }
 
@@ -605,7 +605,7 @@ pub struct PreparedReplacement {
     source: CapturedInput,
     data: TempPath,
     /// Registers `data` with the signal handler, which removes it.
-    _scratch: crate::interrupt::Scratch,
+    scratch: crate::interrupt::Scratch,
 }
 
 /// Exact ownership receipt for bytes published by this operation.
@@ -617,6 +617,11 @@ pub struct OwnedPublication {
     entry: RelativeName,
     handle: same_file::Handle,
     expected: Arc<TempPath>,
+    /// Keeps `expected` registered with the signal handler for as long as the
+    /// receipt lives. Declared after `expected`, so the file is deleted
+    /// before it is unregistered.
+    #[allow(dead_code)] // held only for its Drop
+    registration: Option<crate::interrupt::Scratch>,
     /// Set while the replacement is staged and the file on disk is still the
     /// one it replaces (DEC-408).
     staged_over: Option<StagedOver>,
@@ -707,6 +712,7 @@ impl PreparedReplacement {
             entry: self.source.entry.clone(),
             handle,
             expected: Arc::new(self.data),
+            registration: Some(self.scratch),
             staged_over,
         };
         let effect = self.source.publish_replacement(&path, temp, session)?;
@@ -749,6 +755,7 @@ pub fn move_no_replace_with_receipt(
         entry: destination.name.clone(),
         handle,
         expected: source.original.context("the captured copy was released")?,
+        registration: source.scratch,
         staged_over: None,
     };
     session.fault(FaultPoint::Persist)?;
