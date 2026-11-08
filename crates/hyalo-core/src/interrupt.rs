@@ -61,7 +61,7 @@ fn ensure_hooked() {
 /// Nothing left to protect: give the signals back, unless a worker polls.
 fn release_hooks_if_idle() {
     let _guard = HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
-    if !POLLED.load(Ordering::Relaxed) && GLOBAL.is_empty() {
+    if !POLLED.load(Ordering::Relaxed) && GLOBAL.is_idle() {
         sys::unhook_all();
     }
 }
@@ -326,6 +326,10 @@ impl Registry {
         let state = self.lock();
         state.temps.is_empty() && state.scratch.is_empty()
     }
+    /// Nothing registered and no file being created.
+    pub fn is_idle(&self) -> bool {
+        self.in_flight.load(Ordering::SeqCst) == 0 && self.is_empty()
+    }
     /// Mark a temp file as about to be created and registered.
     ///
     /// After a signal a worker that has not started yet stops here for good
@@ -420,8 +424,23 @@ impl Drop for Flight<'_> {
 
 /// Hold while creating and tracking a temporary file of a bulk phase.
 #[must_use]
-pub fn flight() -> Flight<'static> {
-    GLOBAL.flight()
+pub fn flight() -> HookedFlight {
+    // Hooked before the file exists, and kept hooked until it is registered:
+    // with the signals at their default, a signal in that window kills the
+    // process with the file on disk and nobody to remove it.
+    ensure_hooked();
+    HookedFlight(Some(GLOBAL.flight()))
+}
+
+/// [`flight`]'s guard; ends the flight, then gives the signals back if idle.
+#[derive(Debug)]
+pub struct HookedFlight(Option<Flight<'static>>);
+
+impl Drop for HookedFlight {
+    fn drop(&mut self) {
+        drop(self.0.take());
+        release_hooks_if_idle();
+    }
 }
 
 /// A temporary file registered with the process registry until dropped.
