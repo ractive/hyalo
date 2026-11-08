@@ -4,7 +4,7 @@ type: research
 date: 2026-11-07
 tags: [research, performance, allocations, index, lint]
 status: completed
-related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]"]
+related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]", "[[iterations/iteration-335-fast-hasher]]"]
 ---
 
 # Rust performance audit, November 2026
@@ -76,6 +76,7 @@ change, and none is part of iteration 330.
   uses and none sets a hasher. The book's caveat: only worth it if hashing is hot,
   and only where HashDoS is not a concern. Notes are local files, but a hasher swap
   also changes iteration order, so any output that leaks map order would change.
+  Tried in iteration 335 and discarded (see "A faster hasher for the hot maps" below).
 - **`mimalloc` or `tikv-jemallocator`.** The allocator was 17-27% of samples, so
   there is room, but the book calls the gain workload-dependent; it also needs a
   check on all three platforms and on peak memory (`create-index` peaks at 850 MiB).
@@ -204,6 +205,35 @@ in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
   rose 36 to 37% (14 to 19 MB, 19 to 26 MB), which fails the 3% criterion.
 - Snapshot sizes identical, allocation counts identical to within 22 of 2.3 million.
   Cross-target builds and `cargo deny` were not checked: the first bar had failed.
+
+## A faster hasher for the hot maps
+
+Experiment 3, run on 2026-11-08 against criteria fixed beforehand; the full tables
+are in [[iterations/iteration-335-fast-hasher]]. Verdict: **discarded**.
+
+- Profile first (`sample`, MDN, main-thread samples): SipHash `write`/`hash_one` is
+  5.5% of `backlinks --index`, 0% of `find --index`, 11.5% of `summary --index` and
+  1.6% of ranked `find --index`. The hot maps are `CaseInsensitiveIndex`'s four
+  (probed per link), `LinkGraph::index`/`lower_index`, `heading_slugs`' `seen` and the
+  BM25 `postings` map (whose hash is inlined into its decoder and cannot be split out).
+- Prototype: those maps on `foldhash::fast::RandomState` (0.1.5, already in the lock
+  through `jaq-json`). Medians of 10, interleaved, load 7 to 10: `backlinks --index`
+  0.545 s to 0.540 s wall (-0.9%), `user` 0.250 s to 0.240 s (-4.0%); `find --index`
+  0.465 s to 0.450 s (-3.2%, `user` unchanged, and its code path hashes nothing);
+  `summary --index` `user` -7.1%, wall level; ranked `find --index` level; peak RSS
+  +0.1% to +0.5%. The bars were 20% faster or 25% less memory on both.
+- Wall time moved by up to 20% between two blocks of five on the same command, so only
+  `user` is readable, and it matches the profile share (a real hasher recovers part
+  of 5.5%, not 20%).
+- Correctness was not the problem: 156 of 156 JSON outputs and exit codes identical
+  between baseline and candidate on MDN, the Obsidian Hub and GitHub Docs, disk and
+  `--index`, once the hint text `Command took N ms` is masked. Iteration order does
+  not reach any output, which is expected because std's `RandomState` already orders
+  maps differently on every run. Snapshot size 141,795,837 bytes against 141,795,826
+  and 141,795,846 from two baseline builds: the baseline's own bytes vary by 20, and
+  each binary loaded the other's snapshot.
+- Not run, because the first bar had failed: disk commands, `create-index` and the
+  500-note vault against 3%, cross-target builds, `cargo deny check`.
 
 ## Method note
 
