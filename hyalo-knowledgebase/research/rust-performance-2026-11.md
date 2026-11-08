@@ -173,8 +173,12 @@ in [[iterations/iteration-332-skip-teardown-at-exit]]. Verdict: **discarded**.
 - The ceiling, `process::exit(0)` right after the flush so that no destructor runs:
   -11% and -10%. No version of the idea reaches the 20% bar, and peak memory cannot
   move because teardown follows the peak.
-- The audit's 25% of samples on the free side therefore overstates the wall-time
-  cost; treat sampled allocator share as an upper bound, not a saving.
+- The brief's 25% of samples on the free side was profiled before iteration 330, when
+  `backlinks --index` still decoded BM25. [[research/snapshot-load-floor-2026-09-01]]
+  measured teardown directly at 59 ms: 43 ms freeing the BM25 index, 16 ms entries
+  plus graph. Without the BM25 decode about 16 ms of 0.26 s (about 6%) is left, in line
+  with the 8 to 11% measured here. A profile and a wall time from different code
+  states do not compare.
 
 ## Method note
 
