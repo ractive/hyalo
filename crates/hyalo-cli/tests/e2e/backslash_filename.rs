@@ -24,6 +24,10 @@ use tempfile::TempDir;
 /// Builds a vault with a backslash-named file that both has an outbound
 /// link (for `--glob` coverage) and is linked *to* by another file (for
 /// `backlinks` coverage).
+///
+/// The inbound link spells the backslash `%5C`: a literal `\` in a link is a
+/// separator to the reader and names no note, so it is no backlink
+/// (iteration 338, DEC-413).
 fn build_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
     write_md(
@@ -34,7 +38,7 @@ fn build_vault() -> TempDir {
     write_md(
         tmp.path(),
         "other.md",
-        "---\ntitle: Other\n---\n[[notes/back\\slash]]\n",
+        "---\ntitle: Other\n---\n[[notes/back%5Cslash]]\n",
     );
     tmp
 }

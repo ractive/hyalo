@@ -45,9 +45,13 @@ pub struct LinkGraphBuild {
 
 /// In-memory reverse index mapping link targets to their sources.
 ///
-/// Keys are normalized target strings (as they appear in `[[target]]` or
-/// `[text](target)`, without fragment). Values are all files that link to
-/// that target.
+/// A link that resolves to a note is keyed by that note's vault-relative path
+/// without `.md`. A link that names two or more notes lives under
+/// [`ambiguous_key`] and a link that names no note under [`missing_key`]; both
+/// keys start with a NUL byte, which no path can contain, so neither can equal
+/// a note's path and neither is ever returned by [`LinkGraph::backlinks`] or
+/// [`LinkGraph::backlinks_ci`] for a real note (DEC-413). Values are all the
+/// links filed under the key.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LinkGraph {
     index: HashMap<String, Vec<BacklinkEntry>>,
@@ -619,6 +623,21 @@ pub(crate) fn ambiguous_key(stem: &str) -> String {
     format!("\u{0}ambiguous:{stem}")
 }
 
+/// The graph key of a link that resolves to no note (DEC-413).
+///
+/// `spelling` is the link's target as the author wrote it, normalised the way
+/// the old raw key was. Before this key existed such a link was filed under its
+/// spelling alone, so a spelling that merely *equalled* a real note's path
+/// (`[[back\slash]]` for `back\slash.md`, where the reader resolves `\` as a
+/// separator and misses, or `[p](my%20file.md)` for `my%20file.md`, where it
+/// percent-decodes and misses) made that note's `backlinks` list a link
+/// `find --fields links` reports as unresolved. The NUL byte keeps the key out
+/// of every note's namespace, like [`ambiguous_key`]; the spelling stays in it
+/// so the number of keys, and with it memory, is what it was.
+fn missing_key(spelling: &str) -> String {
+    format!("\u{0}missing:{spelling}")
+}
+
 fn basename_stem(path: &str) -> &str {
     let name = path.rsplit('/').next().unwrap_or(path);
     name.strip_suffix(".md").unwrap_or(name)
@@ -665,9 +684,9 @@ fn insert_file_links_with_options(
                 if let Some(stem) = ambiguous_stem {
                     ambiguous_key(&stem)
                 } else if link.kind == LinkKind::Markdown && !link.target.starts_with('/') {
-                    normalize_target(&file_links.source, &link.target)
+                    missing_key(&normalize_target(&file_links.source, &link.target))
                 } else {
-                    strip_site_prefix(link.target.trim(), options.site_prefix)
+                    missing_key(&strip_site_prefix(link.target.trim(), options.site_prefix))
                 }
             }
         };
@@ -1094,6 +1113,26 @@ mod tests {
         assert_eq!(sources, vec!["a.md", "z.md"]);
     }
 
+    /// DEC-413: a link that resolves to no note is filed in its own namespace,
+    /// so a note whose file name equals the link's raw spelling
+    /// (`my%20file.md` vs `[p](my%20file.md)`, which the reader percent-decodes
+    /// and misses) has no backlink — while the linking file stays an outbound
+    /// source, so a note with only broken links is still not an orphan.
+    #[test]
+    fn unresolved_link_is_not_a_backlink_of_the_note_it_spells() {
+        let vault = create_vault(&[
+            ("my%20file.md", "# Spelled\n"),
+            ("src.md", "[p](my%20file.md) and [[ghost]]\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        for query in ["my%20file.md", "my%20file"] {
+            assert!(graph.backlinks(query).is_empty(), "{query}");
+            assert!(graph.backlinks_ci(query).is_empty(), "{query}");
+        }
+        assert!(graph.all_sources().contains("src.md"));
+        assert_eq!(graph.total_edges(), 2);
+    }
+
     fn create_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         for (name, content) in files {
@@ -1261,7 +1300,7 @@ mod tests {
 
     #[test]
     fn build_graph_with_alias() {
-        let vault = create_vault(&[("a.md", "See [[b|my note B]]\n")]);
+        let vault = create_vault(&[("a.md", "See [[b|my note B]]\n"), ("b.md", "# B\n")]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
@@ -1275,6 +1314,7 @@ mod tests {
         let vault = create_vault(&[
             ("a.md", "Link to [[notes]]\n"),
             ("b.md", "Link to [text](notes.md)\n"),
+            ("notes.md", "# Notes\n"),
         ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
@@ -1290,7 +1330,11 @@ mod tests {
 
     #[test]
     fn links_inside_code_blocks_ignored() {
-        let vault = create_vault(&[("a.md", "---\ntitle: A\n---\n```\n[[b]]\n```\nReal [[c]]\n")]);
+        let vault = create_vault(&[
+            ("a.md", "---\ntitle: A\n---\n```\n[[b]]\n```\nReal [[c]]\n"),
+            ("b.md", "# B\n"),
+            ("c.md", "# C\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
@@ -1300,7 +1344,11 @@ mod tests {
 
     #[test]
     fn links_inside_inline_code_ignored() {
-        let vault = create_vault(&[("a.md", "Use `[[b]]` syntax and [[c]]\n")]);
+        let vault = create_vault(&[
+            ("a.md", "Use `[[b]]` syntax and [[c]]\n"),
+            ("b.md", "# B\n"),
+            ("c.md", "# C\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
@@ -1314,7 +1362,10 @@ mod tests {
         // to extract wikilinks from configured frontmatter properties.
         // As a result, a file with malformed YAML is skipped entirely (warning issued)
         // rather than partially indexed for body links.
-        let vault = create_vault(&[("a.md", "---\n: bad yaml [[\n---\n[[b]]\n")]);
+        let vault = create_vault(&[
+            ("a.md", "---\n: bad yaml [[\n---\n[[b]]\n"),
+            ("b.md", "# B\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         // The file was skipped due to malformed frontmatter — no body links indexed.
         assert_eq!(build.graph.backlinks("b").len(), 0);
@@ -1327,6 +1378,7 @@ mod tests {
         // Unclosed frontmatter triggers an error even with needs_frontmatter=false.
         // The link graph builder should warn-and-skip, not fatally error.
         let vault = create_vault(&[
+            ("target.md", "# Target\n"),
             ("good.md", "---\ntitle: Good\n---\n[[target]]\n"),
             (
                 "bad.md",
@@ -1356,7 +1408,11 @@ mod tests {
         // No closing ---, so scanner bails with "frontmatter too large"
         huge_fm.push_str("[[target]]\n");
 
-        let vault = create_vault(&[("good.md", "[[target]]\n"), ("huge.md", &huge_fm)]);
+        let vault = create_vault(&[
+            ("target.md", "# Target\n"),
+            ("good.md", "[[target]]\n"),
+            ("huge.md", &huge_fm),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
@@ -1658,11 +1714,13 @@ mod tests {
             bad.backlinks("tables/x.md").is_empty(),
             "an auto-derived colliding prefix mis-strips the path (hence OKF vaults set site_prefix = \"\")"
         );
-        assert_eq!(
-            bad.backlinks("x.md").len(),
-            1,
-            "the colliding prefix strips `tables/`, pointing at the wrong path"
+        // The mis-stripped `x.md` names no note, so the link is unresolved
+        // (DEC-413): filed in its own namespace, not under any note's path.
+        assert!(
+            bad.backlinks("x.md").is_empty(),
+            "the colliding prefix strips `tables/`, pointing at a path that is no note"
         );
+        assert_eq!(bad.total_edges(), 1, "the unresolved link is still an edge");
     }
 
     #[test]
@@ -1913,6 +1971,8 @@ mod tests {
         let vault = create_vault(&[
             ("source.md", "See [[a]], [link](b.md), and [[source]].\n"),
             ("other.md", "See [[a]]\n"),
+            ("a.md", "# A\n"),
+            ("b.md", "# B\n"),
         ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let mut graph = build.graph;
@@ -2122,7 +2182,10 @@ mod tests {
     #[test]
     fn frontmatter_related_wikilink_indexed() {
         // A file with `related: [[target]]` should produce a backlink to "target".
-        let vault = create_vault(&[("source.md", "---\nrelated: '[[target]]'\n---\nBody text\n")]);
+        let vault = create_vault(&[
+            ("source.md", "---\nrelated: '[[target]]'\n---\nBody text\n"),
+            ("target.md", "# Target\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("target");
         assert_eq!(
@@ -2137,10 +2200,14 @@ mod tests {
     fn frontmatter_related_list_of_wikilinks_indexed() {
         // A file with `related: [[[a]], [[b]]]` — list of wikilinks — should produce
         // backlinks for both "a" and "b".
-        let vault = create_vault(&[(
-            "source.md",
-            "---\nrelated:\n  - '[[a]]'\n  - '[[b]]'\n---\nBody\n",
-        )]);
+        let vault = create_vault(&[
+            (
+                "source.md",
+                "---\nrelated:\n  - '[[a]]'\n  - '[[b]]'\n---\nBody\n",
+            ),
+            ("a.md", "# A\n"),
+            ("b.md", "# B\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl_a = build.graph.backlinks("a");
         let bl_b = build.graph.backlinks("b");
@@ -2152,7 +2219,10 @@ mod tests {
     fn frontmatter_any_prop_indexed_by_default() {
         // iter-262 (BUG-1): every frontmatter value is scanned, not just the
         // four legacy link properties. This test asserted the opposite before.
-        let vault = create_vault(&[("source.md", "---\ncustom_ref: '[[target]]'\n---\nBody\n")]);
+        let vault = create_vault(&[
+            ("source.md", "---\ncustom_ref: '[[target]]'\n---\nBody\n"),
+            ("target.md", "# Target\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("target");
         assert_eq!(
@@ -2172,10 +2242,14 @@ mod tests {
             .iter()
             .map(|s| (*s).to_owned())
             .collect();
-        let vault = create_vault(&[(
-            "source.md",
-            "---\ncustom_ref: '[[skipped]]'\nrelated: '[[kept]]'\n---\nBody\n",
-        )]);
+        let vault = create_vault(&[
+            (
+                "source.md",
+                "---\ncustom_ref: '[[skipped]]'\nrelated: '[[kept]]'\n---\nBody\n",
+            ),
+            ("skipped.md", "# Skipped\n"),
+            ("kept.md", "# Kept\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, Some(&legacy)).unwrap();
         assert_eq!(build.graph.backlinks("skipped").len(), 0);
         assert_eq!(build.graph.backlinks("kept").len(), 1);
@@ -2183,10 +2257,14 @@ mod tests {
 
     #[test]
     fn frontmatter_link_line_numbers_are_file_absolute() {
-        let vault = create_vault(&[(
-            "source.md",
-            "---\ntitle: A\nrelated:\n  - '[[one]]'\n  - '[[two]]'\n---\nBody\n",
-        )]);
+        let vault = create_vault(&[
+            (
+                "source.md",
+                "---\ntitle: A\nrelated:\n  - '[[one]]'\n  - '[[two]]'\n---\nBody\n",
+            ),
+            ("one.md", "# One\n"),
+            ("two.md", "# Two\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         assert_eq!(build.graph.backlinks("one")[0].line, 4);
         assert_eq!(build.graph.backlinks("two")[0].line, 5);
@@ -2196,10 +2274,14 @@ mod tests {
     fn frontmatter_custom_props_configured() {
         // With `frontmatter_link_props = Some(&["custom_ref"])`, the custom property
         // IS indexed, and the default properties are NOT.
-        let vault = create_vault(&[(
-            "source.md",
-            "---\ncustom_ref: '[[target]]'\nrelated: '[[skipped]]'\n---\nBody\n",
-        )]);
+        let vault = create_vault(&[
+            (
+                "source.md",
+                "---\ncustom_ref: '[[target]]'\nrelated: '[[skipped]]'\n---\nBody\n",
+            ),
+            ("target.md", "# Target\n"),
+            ("skipped.md", "# Skipped\n"),
+        ]);
         let props: Vec<String> = vec!["custom_ref".to_owned()];
         let build = LinkGraph::build(vault.path(), None, Some(&props)).unwrap();
         // custom_ref should be indexed
@@ -2367,7 +2449,10 @@ mod tests {
     #[test]
     fn frontmatter_depends_on_wikilink_indexed() {
         // `depends-on` is a default property.
-        let vault = create_vault(&[("source.md", "---\ndepends-on: '[[dep]]'\n---\nBody\n")]);
+        let vault = create_vault(&[
+            ("source.md", "---\ndepends-on: '[[dep]]'\n---\nBody\n"),
+            ("dep.md", "# Dep\n"),
+        ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("dep");
         assert_eq!(bl.len(), 1, "`depends-on` should be indexed by default");

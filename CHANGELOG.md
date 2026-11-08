@@ -202,6 +202,15 @@ and this project adheres to
 
 ### Fixed
 
+- `backlinks`, `find --fields backlinks`, `--orphan`, `--dead-end` and `summary`
+  no longer count a link that `find --fields links` reports as unresolved
+  (`path: null`) as an inbound link of the note whose file name equals the
+  link's raw spelling: `back\slash.md` for `[[back\slash]]` or
+  `[y](back\slash.md)` (the reader reads `\` as a separator and misses), and
+  `my%20file.md` for `[p](my%20file.md)` (percent-decoded, it misses). Such a
+  note was listed as linked, and kept out of `orphans`, by a link that names no
+  note; a link that does resolve (`[[back%5Cslash]]`) still counts. The reader,
+  `mv` and the snapshot format are unchanged (DEC-413).
 - `lint` with MD007 enabled (`[lint.rules.MD007] enabled = true`) no longer
   aborts the whole run (exit 134, no output) on a tab-indented bullet whose text
   starts with a multibyte character, and no longer proposes a fix that drops
