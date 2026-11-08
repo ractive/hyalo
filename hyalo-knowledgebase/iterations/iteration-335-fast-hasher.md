@@ -113,7 +113,10 @@ twice these. Cause, reproduced afterwards: my harness wrote the three snapshots
 (141 MB each) *into the vault directory*. With two extra 141 MB files copied in,
 `backlinks` went from 0.26 s real, 0.15 s `user`, 0.10 s `sys` to 0.53 to 0.70 s real,
 about 0.25 s `user` and 1.8 to 3.0 s `sys` on the same binary. Why the extra files cost
-that much `sys` time was not investigated. Those figures are withdrawn and the table above is a re-run with
+that much `sys` time was not investigated, and a large file in a vault is not by itself
+the cause: on an Obsidian Hub clone, a 150 MB `.mp4` or `.idx` file added to the vault and
+re-indexed left `backlinks --index` at 0.12 s real, 0.07 to 0.08 s `user` and 0.04 s `sys`,
+the same as without it, and disk `find` was unchanged too. Those figures are withdrawn and the table above is a re-run with
 the snapshots outside the vault (`create-index -o <dir> --allow-outside-vault`), where
 `sys` is 0.10 to 0.14 s and cannot exceed wall. The first run's conclusion did not
 change (candidate level or within a few percent), but its ratios were taken on a
