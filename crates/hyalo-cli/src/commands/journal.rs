@@ -444,6 +444,10 @@ mod tests {
     fn update_entry_refreshes_entry_and_link_graph() {
         let tmp = tempfile::tempdir().unwrap();
         let rel = make_vault(tmp.path(), "note");
+        // The link target must exist: a link that names no note is not filed
+        // under its spelling, so it would never show up as `other`'s backlink
+        // (iteration 338, DEC-413).
+        make_vault(tmp.path(), "other");
         let full = tmp.path().join(&rel);
         let idx = build_snapshot(tmp.path());
         // Simulate a `set related` mutation changing the frontmatter and
