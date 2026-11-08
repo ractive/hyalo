@@ -4743,6 +4743,13 @@ fn md007_tab_vault() -> TempDir {
         "tabs-ascii.md",
         "---\ntitle: T\n---\n- a\n\t- keep every character\n",
     );
+    // `c` is a tab-indented bullet at the four columns MD007 expects, `d` is
+    // its child: MD007 says nothing, and a fix must not make `d` a sibling.
+    write_md(
+        tmp.path(),
+        "children.md",
+        "---\ntitle: C\n---\n- a\n  - b\n\t- c\n      - d\n",
+    );
     write_md(tmp.path(), "other.md", "---\ntitle: O\n---\n- a\n   - b\n");
     tmp
 }
@@ -4779,6 +4786,7 @@ fn lint_md007_enabled_does_not_abort_on_a_tab_indented_multibyte_bullet() {
     assert!(has("tabs-multibyte.md", "MD010"), "{found:?}");
     assert!(!has("tabs-multibyte.md", "MD007"), "{found:?}");
     assert!(!has("tabs-ascii.md", "MD007"), "{found:?}");
+    assert!(!has("children.md", "MD007"), "{found:?}");
 }
 
 #[test]
@@ -4793,6 +4801,9 @@ fn lint_fix_md007_leaves_a_tab_indented_bullet_untouched() {
     assert!(multibyte.ends_with("\t- \u{26a0} b\n"), "{multibyte:?}");
     let ascii = std::fs::read_to_string(tmp.path().join("tabs-ascii.md")).unwrap();
     assert!(ascii.ends_with("\t- keep every character\n"), "{ascii:?}");
+    // A child of a tab-indented bullet is not pulled out to its sibling's level.
+    let children = std::fs::read_to_string(tmp.path().join("children.md")).unwrap();
+    assert!(children.ends_with("\t- c\n      - d\n"), "{children:?}");
     // The space-indented violation is still fixed.
     let other = std::fs::read_to_string(tmp.path().join("other.md")).unwrap();
     assert!(other.ends_with("- a\n  - b\n"), "{other:?}");
