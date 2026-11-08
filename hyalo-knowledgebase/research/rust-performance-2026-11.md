@@ -4,7 +4,7 @@ type: research
 date: 2026-11-07
 tags: [research, performance, allocations, index, lint]
 status: completed
-related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]"]
+related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]", "[[iterations/iteration-335-fast-hasher]]"]
 ---
 
 # Rust performance audit, November 2026
@@ -76,6 +76,7 @@ change, and none is part of iteration 330.
   uses and none sets a hasher. The book's caveat: only worth it if hashing is hot,
   and only where HashDoS is not a concern. Notes are local files, but a hasher swap
   also changes iteration order, so any output that leaks map order would change.
+  Tried in iteration 335 and discarded (see "A faster hasher for the hot maps" below).
 - **`mimalloc` or `tikv-jemallocator`.** The allocator was 17-27% of samples, so
   there is room, but the book calls the gain workload-dependent; it also needs a
   check on all three platforms and on peak memory (`create-index` peaks at 850 MiB).
@@ -196,7 +197,7 @@ in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
 - User CPU time did drop 17 to 21% in every row, matching the audit's allocator share
   of samples. Wall time did not follow because wall time also holds kernel time
   (snapshot read, page faults) that the allocator barely moves; `sys` exceeded
-  `user` in the runs I looked at, though load inflates it.
+  `user` in the runs I looked at, though load inflates it (the `sys` claim is unconfirmed: see "A faster hasher for the hot maps" below.)
 - A five-run pass at load 15 to 18 reported -57% and -60%; the baseline's `sys` time
   varied 2x between identical runs, so it measured machine contention. Compare ratios
   from interleaved runs, and look at `user` when the machine is not idle.
@@ -204,6 +205,45 @@ in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
   rose 36 to 37% (14 to 19 MB, 19 to 26 MB), which fails the 3% criterion.
 - Snapshot sizes identical, allocation counts identical to within 22 of 2.3 million.
   Cross-target builds and `cargo deny` were not checked: the first bar had failed.
+
+## A faster hasher for the hot maps
+
+Experiment 3, run on 2026-11-08 against criteria fixed beforehand; the full tables
+are in [[iterations/iteration-335-fast-hasher]]. Verdict: **discarded**.
+
+- Profile first (`sample`, MDN, main-thread samples): out-of-line SipHash
+  `write`/`hash_one` frames are 5.5% of `backlinks --index`, 11.5% of `summary
+  --index`, 1.6% of ranked `find --index`, and `find --index` shows no such frame on the
+  main thread. These are lower bounds on the cost of hashing (fat LTO inlines the
+  rest, rayon workers were not counted), not ceilings on a saving. The hot maps are
+  `CaseInsensitiveIndex`'s four (probed per link), `LinkGraph::index`/`lower_index`,
+  `heading_slugs`' `seen` and the BM25 `postings` map (whose hash is inlined into its
+  decoder and cannot be split out).
+- Prototype: those maps on `foldhash::fast::RandomState` (0.1.5, already in the lock
+  through `jaq-json`). Medians of 10, interleaved, clean vault, load 7 to 10:
+  `backlinks --index` 0.280 s to 0.270 s wall (-3.6%), `user` 0.160 s to 0.150 s
+  (-6.2%); `find --index` 0.190 s level (`user` +6.2%, one 10 ms step); `summary
+  --index` 0.460 s to 0.440 s (-4.3%), `user` -7.4%; ranked `find --index` level
+  (-0.9%); peak RSS +0.4% to +0.5%. The bars were 20% faster or 25% less memory on both.
+  Best wall figure 16 points short of the bar, noise a few percent: not a NOT SHOWN case.
+- Measurement error found in review: the first run wrote its three snapshots into the
+  vault, and with extra 141 MB files there `backlinks` read 1.8 to 3.0 s `sys` against
+  0.53 to 0.70 s real (0.10 s `sys`, 0.26 s real without them). Those numbers, and the
+  20% wall noise they implied, are withdrawn; the table above is the re-run with the
+  snapshots outside the vault. The cause of the extra `sys` time was not investigated.
+  Iteration 334's remark that `sys` exceeded `user` was measured with the same tool
+  and is **unconfirmed**: it may have the same cause (snapshots inside the vault), and
+  I did not re-run that experiment to find out.
+- Correctness was not the problem: 78 of 78 baseline-against-candidate comparisons
+  (one command on one corpus in one mode: stdout and exit code) identical on MDN, the
+  Obsidian Hub and GitHub Docs, disk and `--index`, once the hint text `Command took N
+  ms` is masked; 39 of 39 disk-against-`--index` pairs equal within each binary. Iteration
+  order does not reach any output, which is expected because std's `RandomState`
+  already orders maps differently on every run. Snapshot size 141,795,837 bytes against
+  141,795,826 and 141,795,846 from two baseline builds: the baseline's own bytes vary by
+  20, and each binary loaded the other's snapshot.
+- Not run, because the first bar had failed: disk commands, `create-index` and the
+  500-note vault against 3%, cross-target builds, `cargo deny check`.
 
 ## Method note
 
