@@ -377,8 +377,8 @@ fn autolinks_are_inventoried_as_external() {
 // Parts A and B — write phase and snapshot parity
 // ---------------------------------------------------------------------------
 
-/// DEC-317: a bulk write phase trades the per-file durability fsync for one
-/// per directory, and must still replace every file atomically and completely.
+/// DEC-317, DEC-408: a bulk write phase flushes once instead of per file, and
+/// must still replace every file atomically and completely.
 #[test]
 fn a_bulk_set_writes_every_file_completely() {
     let tmp = TempDir::new().unwrap();

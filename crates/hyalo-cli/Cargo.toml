@@ -28,7 +28,6 @@ anyhow = { workspace = true }
 indexmap = { workspace = true }
 clap = { workspace = true, features = ["derive", "string"] }
 clap_complete = { workspace = true }
-ctrlc = { workspace = true }
 dunce = { workspace = true }
 jaq-core = { workspace = true }
 jaq-json = { workspace = true }

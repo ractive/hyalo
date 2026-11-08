@@ -219,23 +219,55 @@ pub(super) fn lint_files_extended_observed(
         }
     }
 
-    // Finish the shared session exactly once, after every worker's directory
-    // fences have been absorbed. On failure, every write this run committed
-    // without yet reporting a finalization error is retroactively marked
-    // `CommittedWithFinalizationError` — mirroring `PreparedChangeSet::apply_with`
-    // (`commands/apply.rs`), which does the same for its own single shared
-    // session.
+    // Finish the shared session exactly once, after every worker's staged
+    // writes and directory fences have been absorbed (DEC-408): the barrier,
+    // the renames and the fences run here. A write the workers queued and
+    // `finish_staged` did not rename is untouched and becomes
+    // `FailedBeforeCommit`; one whose fence failed becomes
+    // `CommittedWithFinalizationError`, as in `PreparedChangeSet::apply_with`
+    // (`commands/apply.rs`), which settles its own single session the same way.
     on_session_before_finish(
         write_session.pending_directories(),
         write_session.durability(),
     );
-    if let Err(error) = write_session.finish() {
-        for effect in &mut mutation_effects {
-            if effect.state == crate::commands::apply::EffectState::Committed {
-                effect.state = crate::commands::apply::EffectState::CommittedWithFinalizationError;
-                effect.error = Some(error.to_string());
-                effect.category = Some(crate::commands::apply::EffectFailure::Finalization);
+    let not_written = crate::commands::apply::settle_effects(
+        &mut mutation_effects,
+        &write_session.finish_staged(),
+    );
+    // A fix that was queued and not renamed did not happen (DEC-409): take the
+    // claim back out of the listing and the totals and say so as an error, as a
+    // write that failed at once always did.
+    if !not_written.is_empty() {
+        let reasons: std::collections::HashMap<String, &str> = not_written
+            .iter()
+            .map(|(file, reason)| {
+                (
+                    hyalo_core::rooted::entry_key(file).unwrap_or_else(|| file.clone()),
+                    reason.as_str(),
+                )
+            })
+            .collect();
+        for result in &mut all_results {
+            let key = hyalo_core::rooted::entry_key(&result.rel_path)
+                .unwrap_or_else(|| result.rel_path.clone());
+            let Some(reason) = reasons.get(&key) else {
+                continue;
+            };
+            result.fix_actions.clear();
+            result.body_modified = false;
+            for violation in result.violations_by_rule.values_mut().flatten() {
+                violation.fixed = false;
             }
+            for (_, _, outcome) in &mut result.body_fix_outcomes {
+                if matches!(outcome, FixOutcome::Applied) {
+                    *outcome = FixOutcome::NoFix;
+                }
+            }
+            push_fix_write_error_violation(
+                &mut result.violations_by_rule,
+                &format!("could not write fixes to {}: {reason}", result.rel_path),
+            );
+            result.total_violations += 1;
         }
     }
 

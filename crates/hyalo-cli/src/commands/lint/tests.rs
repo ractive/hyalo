@@ -1673,3 +1673,103 @@ fn lint_fix_batches_more_than_eight_files_into_one_shared_per_directory_session(
         );
     }
 }
+
+/// DEC-408: `lint --fix` queues every write and renames at the end, so a note
+/// edited after its fix was queued must stay as the user left it, and the
+/// report must say that fix did not land while the others did.
+#[test]
+fn lint_fix_does_not_overwrite_a_note_edited_while_its_fix_was_queued() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    for i in 0..6 {
+        let rel = format!("note{i}.md");
+        let path = dir.path().join(&rel);
+        std::fs::write(&path, format!("---\ntitle: Note {i}\n---\nbody\n\n")).unwrap();
+        files.push((path, rel));
+    }
+    let engine = hyalo_mdlint::HyaloLintEngine::create().unwrap();
+    let md_config = hyalo_mdlint::LintConfig::default();
+    let schema = SchemaConfig::default();
+    let mut snapshot: Option<hyalo_core::index::SnapshotIndex> = None;
+    let mut opts = ExtLintOptions {
+        fix: FixMode::Apply,
+        detailed: false,
+        rule_filter: Some("MD047"),
+        rule_prefix: None,
+        max_per_rule: 100,
+        max_files: 100,
+        fix_rules: &[],
+        snapshot_index: &mut snapshot,
+        index_path: None,
+        vault_dir: dir.path(),
+        strict: false,
+        okf_profile: false,
+        madr_profile: false,
+        skills_profile: false,
+        changelog_profile: false,
+        case_insensitive: false,
+        link_lint_ctx: None,
+        files_ignored: 0,
+    };
+    let edited = dir.path().join("note3.md");
+    let edit = "---\ntitle: Note 3\n---\nEDIT\n\n";
+    let (outcome, counts) =
+        lint_files_extended_observed(&files, &schema, &engine, &md_config, &mut opts, |_, _| {
+            std::fs::write(&edited, edit).unwrap();
+        })
+        .unwrap();
+    let crate::output::CommandOutcome::Success {
+        effects: Some(report),
+        output,
+        ..
+    } = outcome
+    else {
+        panic!("expected a Success outcome with an effects report");
+    };
+    assert_eq!(std::fs::read_to_string(&edited).unwrap(), edit);
+    for i in [0, 1, 2, 4, 5] {
+        let content = std::fs::read_to_string(dir.path().join(format!("note{i}.md"))).unwrap();
+        assert!(
+            content.ends_with("body\n") && !content.ends_with("\n\n"),
+            "{content:?}"
+        );
+    }
+    let state_of = |name: &str| {
+        report
+            .paths
+            .iter()
+            .find(|p| p.file == name)
+            .map(|p| p.state.clone())
+    };
+    assert_eq!(
+        state_of("note3.md"),
+        Some(crate::commands::apply::EffectState::FailedBeforeCommit)
+    );
+    assert_eq!(
+        state_of("note0.md"),
+        Some(crate::commands::apply::EffectState::Committed)
+    );
+    // The listing, the totals and the exit status do not claim the fix that
+    // never landed, and the note carries the error a failed write always did.
+    assert_eq!(output["total_fixed"], 5, "{output}");
+    assert_eq!(output["rules_fixed"]["MD047"], 5, "{output}");
+    let files = output["files"].as_array().unwrap();
+    let note3 = files.iter().find(|f| f["file"] == "note3.md").unwrap();
+    assert!(
+        note3["fixed_groups"].as_array().is_none_or(Vec::is_empty),
+        "{note3}"
+    );
+    assert!(
+        note3
+            .to_string()
+            .contains("could not write fixes to note3.md"),
+        "{note3}"
+    );
+    assert!(
+        counts.errors >= 1,
+        "the run must fail: errors = {}",
+        counts.errors
+    );
+    let leftovers = std::fs::read_dir(dir.path()).unwrap().count();
+    assert_eq!(leftovers, 6, "no temporary file may survive");
+}

@@ -969,9 +969,10 @@ fn write_plans_in_parallel(
 /// input plan so the caller can emit an honest envelope — files written before
 /// a failure are reported as `applied`, not silently kept and unreported.
 ///
-/// Up to eight plans retain per-file content and directory flushes. Larger
-/// batches retain atomic replacement but defer one directory flush per touched
-/// directory; published content can be lost on power loss or kernel panic.
+/// More than one plan is a bulk phase (DEC-408): every rewrite is staged and
+/// flushed, one barrier runs, then all are renamed and the touched directories
+/// are fenced, so after power loss each note is whole, old or new. A rewrite
+/// that is not renamed is reported as not `applied`.
 /// Finalization is observed before returning and its failures retain `applied`.
 /// A plan outside the vault is refused without preventing other plans' outcomes.
 pub fn execute_plans_partial(
@@ -1039,9 +1040,30 @@ fn execute_plans_with_session(
     }
     // Observe finalization after collecting every worker, even after partial
     // writes. An aggregate failure never erases committed paths or receipts.
-    if let Err(error) = session.finish() {
-        for outcome in outcomes.iter_mut().filter(|outcome| outcome.applied) {
-            let reason = format!("rewrite finalization failed: {error:#}");
+    // A queued rewrite is renamed by `finish_staged`, so only now is it known
+    // which notes changed (DEC-408): one that was not renamed is untouched.
+    let report = session.finish_staged();
+    let settlement = report.settlement();
+    for outcome in outcomes.iter_mut().filter(|outcome| outcome.applied) {
+        let reason = match settlement.of(&outcome.rel_path) {
+            crate::rooted::Settled::NotWritten(note) => {
+                Some(format!("rewrite not written: {}", note.reason()))
+            }
+            crate::rooted::Settled::Unknown => Some(
+                "rewrite not written: the note cannot be matched against the phase report"
+                    .to_owned(),
+            ),
+            crate::rooted::Settled::Written => None,
+        };
+        if let Some(reason) = reason {
+            outcome.applied = false;
+            receipts.remove(&outcome.rel_path);
+            outcome.error = Some(match outcome.error.take() {
+                Some(existing) => format!("{existing}; {reason}"),
+                None => reason,
+            });
+        } else if let Some(error) = report.finalization_error() {
+            let reason = format!("rewrite finalization failed: {error}");
             outcome.error = Some(match outcome.error.take() {
                 Some(existing) => format!("{existing}; {reason}"),
                 None => reason,
@@ -4258,9 +4280,12 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_eight_files_flush_content_and_a_ninth_candidate_flushes_only_the_first_eight() {
+    fn a_staging_fault_in_a_rewrite_phase_writes_none_of_the_notes() {
         use crate::rooted::{FaultPoint, WriteSession};
-        for count in [8, 9] {
+        // Any phase of two or more rewrites stages first and renames at its
+        // end (DEC-408), so a flush that fails on the second note changes
+        // no note, the first included.
+        for count in [2, 9] {
             let vault = create_vault(&[]);
             let plans: Vec<_> = (0..count)
                 .map(|i| {
@@ -4273,26 +4298,75 @@ mod tests {
                 vault.path(),
                 &plans,
                 &[],
-                WriteSession::with_fault(rewrite_durability(count), FaultPoint::SyncFile),
+                WriteSession::with_fault_after(rewrite_durability(count), FaultPoint::SyncFile, 1),
             )
             .unwrap();
-            // The first eight writes flush (and fail on the fault); a ninth
-            // note is the only one that skips the flush.
             assert!(execution.report.has_failures());
-            let applied = execution
-                .report
-                .outcomes
-                .iter()
-                .filter(|outcome| outcome.applied)
-                .count();
-            assert_eq!(applied, count - 8);
+            assert!(execution.report.applied_paths().is_empty(), "{count}");
             for outcome in execution.report.outcomes {
                 assert_eq!(
                     fs::read_to_string(vault.path().join(outcome.rel_path)).unwrap(),
-                    if outcome.applied { "new\n" } else { "old\n" }
+                    "old\n"
                 );
             }
+            let leftovers = fs::read_dir(vault.path()).unwrap().count();
+            assert_eq!(leftovers, count, "no temporary file may survive");
         }
+    }
+
+    #[test]
+    fn a_rewrite_that_is_not_renamed_is_not_applied_and_leaves_its_note_alone() {
+        use crate::rooted::{FaultPoint, WriteSession};
+        let vault = create_vault(&[]);
+        let plans: Vec<_> = (0..4)
+            .map(|i| {
+                let name = format!("{i}.md");
+                fs::write(vault.path().join(&name), "old\n").unwrap();
+                simple_plan(vault.path(), &name, "new\n")
+            })
+            .collect();
+        // The rename of the third note fails; renames run in path order.
+        let receipt_paths = vec!["2.md".to_owned(), "3.md".to_owned()];
+        let execution = execute_plans_with_session(
+            vault.path(),
+            &plans,
+            &receipt_paths,
+            WriteSession::with_fault_after(rewrite_durability(4), FaultPoint::Persist, 2),
+        )
+        .unwrap();
+        let applied: Vec<_> = execution
+            .report
+            .outcomes
+            .iter()
+            .map(|o| (o.rel_path.as_str(), o.applied))
+            .collect();
+        assert_eq!(
+            applied,
+            [
+                ("0.md", true),
+                ("1.md", true),
+                ("2.md", false),
+                ("3.md", false)
+            ]
+        );
+        let reason = execution.report.outcomes[2].error.as_deref().unwrap();
+        assert!(reason.contains("rewrite not written"), "{reason}");
+        for (name, expected) in [
+            ("0.md", "new\n"),
+            ("1.md", "new\n"),
+            ("2.md", "old\n"),
+            ("3.md", "old\n"),
+        ] {
+            assert_eq!(
+                fs::read_to_string(vault.path().join(name)).unwrap(),
+                expected
+            );
+        }
+        assert!(
+            execution.receipts.is_empty(),
+            "a note that was not written has no receipt"
+        );
+        assert_eq!(fs::read_dir(vault.path()).unwrap().count(), 4);
     }
 
     #[test]

@@ -198,16 +198,28 @@ and this project adheres to
 ### Fixed
 
 - `lint --fix`, `set`/`append`/`remove --glob`, `properties rename` and
-  `tags rename`, `task` and `types set --default` over more than eight
-  candidates no longer flush every note. DEC-317 promised one fence per
+  `tags rename`, `task` and `types set --default` over several notes no longer
+  flush every note with a full-device barrier. DEC-317 promised one fence per
   directory, but since 0.24.0 only `mv` and `links fix` kept it: these paid a
-  per-file full-device barrier on macOS. The first eight notes really written
-  still flush, so a big candidate set that changes one note keeps the full
-  guarantee. Past that, a rewrite is atomic against a crash of the process but
-  not guaranteed against power loss until the OS has flushed (on XFS or NTFS a
-  rename can outlive its content), as DEC-317 intended; DEC-404 says so. The Obsidian
-  Hub's `lint --fix` took 39 s whatever the load and now takes 4.8 s at a load
-  average of 10 to 14 (DEC-404).
+  per-file `F_FULLFSYNC` on macOS. The Obsidian Hub's `lint --fix` took 39 s
+  whatever the load and now takes about 4 s (DEC-404, DEC-408).
+- A bulk write phase can no longer leave an empty note after power loss. It
+  writes every replacement to a hidden sibling temp file and flushes them all
+  with one barrier per device (macOS: `fsync` per file and one `F_FULLFSYNC`;
+  Linux and Windows: `fsync`/`FlushFileBuffers` per file), then renames them
+  all and fences the directories, so each note is whole afterwards, the old bytes
+  or the new; a phase may end as a mix. Nothing is renamed if staging or the
+  barrier fails (a full disk, say), and a note edited since it was read, or whose
+  rename failed, stays as it was and is reported. The phase needs room for every
+  rewritten note at once, and Ctrl-C, SIGTERM and SIGHUP remove the
+  unrenamed temp files and the `$TMPDIR` copies, say what was written and then die
+  by that signal, so a calling script stops; an ignored signal stays ignored and a
+  signal outside a phase takes the default action; a kill leaves the temp files,
+  named `.hyalo-tmp-*`. `lint --fix` no longer lists or counts a fix that was
+  queued and not written, and exits 1 for it (DEC-409). The first eight notes no longer get special treatment: two or
+  more notes take one path, one note keeps the per-file path. The Obsidian Hub's
+  `lint --fix` stays at 4 s (4.12 s to 3.95 s, median of 5); a phase of 8 notes
+  takes half as long (DEC-408).
 - A did-you-mean candidate finds documents. A word typed exactly as `hyalo terms`
   lists it (`respons`, `promis`, `databas`) matches that dictionary term when its stem
   does not occur, so `find responce` -> `-- respons` returns the 1,365 documents `terms`

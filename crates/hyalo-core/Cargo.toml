@@ -42,6 +42,7 @@ ts-rs = { workspace = true, optional = true }
 ts = ["dep:ts-rs"]
 
 [target.'cfg(windows)'.dependencies]
+ctrlc = { workspace = true }
 winapi-util = { workspace = true }
 windows-sys = { workspace = true }
 

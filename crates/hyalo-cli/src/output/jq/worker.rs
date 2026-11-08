@@ -6,7 +6,7 @@ use super::{
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{OnceLock, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const WORKER_ENV: &str = "HYALO_INTERNAL_JQ_WORKER";
@@ -19,24 +19,19 @@ const ERROR: u8 = 5;
 const SOURCE_CAP: usize = 64 * 1024;
 const INPUT_CAP: usize = 64 * 1024 * 1024;
 const ERROR_CAP: usize = 4096;
-static CANCELLED: AtomicBool = AtomicBool::new(false);
-static SIGNAL_HANDLER: OnceLock<()> = OnceLock::new();
 
 /// The flag Ctrl-C raises to cancel a running jq worker (DEC-369).
 ///
-/// Installing the handler is best effort. `ctrlc` refuses when SIGINT, SIGTERM
-/// or SIGHUP already has a non-default disposition — notably `SIG_IGN`, which
-/// is what a shell background job (`cmd &` in a non-interactive shell, for
-/// SIGINT), `nohup` (for SIGHUP) and many job runners hand us. The filter then
-/// simply runs without cancellation; the 3 s deadline and the
-/// worker's resource limits still bound it. Failing the whole command there
-/// (iteration 295's behaviour) broke every `--jq` in a background job.
+/// The process has one signal handler, owned by `hyalo_core::interrupt`
+/// (DEC-409), which a bulk write phase shares. Installing it is best effort:
+/// `ctrlc` refuses when SIGINT, SIGTERM or SIGHUP already has a non-default
+/// disposition, notably `SIG_IGN`, which is what a shell background job,
+/// `nohup` and many job runners hand us. The filter then simply runs without
+/// cancellation; the 3 s deadline and the worker's resource limits still bound
+/// it. Failing the whole command there (iteration 295's behaviour) broke every
+/// `--jq` in a background job.
 fn cancellation() -> &'static AtomicBool {
-    SIGNAL_HANDLER.get_or_init(|| {
-        // Ignoring the error is deliberate: see the doc comment above.
-        let _ = ctrlc::try_set_handler(|| CANCELLED.store(true, Ordering::Relaxed));
-    });
-    &CANCELLED
+    hyalo_core::interrupt::flag()
 }
 
 // Header is magic/version, message kind, big-endian payload byte length. Each

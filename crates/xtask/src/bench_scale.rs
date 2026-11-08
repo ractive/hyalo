@@ -53,23 +53,24 @@ const LINKS_BUDGET: Duration = Duration::from_secs(15);
 /// once instead of every file before its rename, and claimed the win for
 /// `mv` — but the corpus that verified it (a copy of the Obsidian Hub) has no
 /// note with a large enough fan-out to reach the parallel path: its
-/// most-linked note rewrote 8 files, which is exactly the threshold at or
-/// below which hyalo deliberately keeps the full per-file guarantee. So the
+/// most-linked note rewrote 8 files, which was the threshold at or below which
+/// hyalo then kept the full per-file guarantee (DEC-408 removed it). So the
 /// claim was never measured where it applies. This case renames one note that
 /// [`FANOUT_BACKLINKS`] others link to, which puts the whole rewrite in one
 /// parallel phase.
 const FANOUT_BACKLINKS: usize = 2_000;
 
-/// Fan-out small enough to stay on the durable per-file path (`<= 8` files),
-/// timed beside the big one so the two costs are read off the same machine in
-/// the same run rather than compared against a remembered number.
+/// A small fan-out (8 files), timed beside the big one so the two costs are
+/// read off the same machine in the same run rather than compared against a
+/// remembered number. Since DEC-408 it takes the same staged path as the big
+/// one, with one barrier instead of eight.
 const FANOUT_SMALL: usize = 8;
 
 /// Budget for renaming a note with [`FANOUT_BACKLINKS`] backlinks.
 ///
 /// Measured at 0.52 s end to end on Apple Silicon (iter-278) — scan of 2 001
 /// files, link graph, and the 2 000-file rewrite — i.e. 0.26 ms per rewritten
-/// file, against 5.8 ms per file for the 8-file run that stays on the durable
+/// file, against 5.8 ms per file for the 8-file run that then took the durable
 /// per-file path. The same 2 000 files on that path would be ~2 000 × 5.5 ms
 /// ≈ 11 s, so a 5 s budget fails loudly if the bulk phase is ever lost without
 /// tripping on a slow shared runner.
