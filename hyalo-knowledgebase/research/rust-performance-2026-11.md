@@ -41,7 +41,8 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
 - The release profile already has fat LTO, `codegen-units = 1` and `panic = "abort"`;
   there is no build-flag win left.
 - Out of scope here, and needing this iteration as their baseline: `LinkGraph`'s
-  public types, string interning, a different allocator, skipping teardown at exit.
+  public types, string interning, a different allocator. (Skipping teardown at exit
+  was tried afterwards and discarded: see "Skipping teardown at exit" below.)
 
 ## External reading
 
@@ -160,6 +161,20 @@ Wall time, same runs, indicative only: `tags --index` 0.35 s to 0.20 s,
   guard). It could hold the bytes in memory instead of a temp file and keep the
   guarantee; it could not be dropped without losing it. The audit's "80% of
   lint-floor samples" therefore belongs to `--fix`, if to anything.
+
+## Skipping teardown at exit
+
+Experiment 1, run on 2026-11-08 against criteria fixed beforehand; the full table is
+in [[iterations/iteration-332-skip-teardown-at-exit]]. Verdict: **discarded**.
+
+- `mem::forget` of the snapshot after the output is flushed: `backlinks --index` on
+  MDN 0.26 s to 0.24 s (-7.7%), `find --index` 0.20 s to 0.18 s (-10%), `summary
+  --index` -2%, ranked `find --index` and the disk scan unchanged, peak RSS -1%.
+- The ceiling, `process::exit(0)` right after the flush so that no destructor runs:
+  -11% and -10%. No version of the idea reaches the 20% bar, and peak memory cannot
+  move because teardown follows the peak.
+- The audit's 25% of samples on the free side therefore overstates the wall-time
+  cost; treat sampled allocator share as an upper bound, not a saving.
 
 ## Method note
 
