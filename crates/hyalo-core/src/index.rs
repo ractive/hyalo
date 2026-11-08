@@ -2571,10 +2571,12 @@ impl SnapshotIndex {
     /// `create-index`'s early no-op does not decode the section, so this is
     /// the one integrity check it keeps. It sees what a torn or truncated copy
     /// does to the tail of the file and any damage that breaks the MessagePack
-    /// framing; it does not see a value that decodes but is wrong (a document
-    /// id out of range, a length that disagrees with its postings), which
-    /// [`validate_bm25`] reports to a reader at first use. `false` for a
-    /// snapshot without a BM25 section.
+    /// framing. It sees framing only: damage that keeps the framing intact
+    /// passes, whether the section then fails to deserialize (a flipped byte
+    /// in a field name) or deserializes and fails [`validate_bm25`] (a
+    /// document id out of range, a length that disagrees with its postings);
+    /// a reader reports either at first use, and `--force` rebuilds it.
+    /// `false` for a snapshot without a BM25 section.
     #[must_use]
     pub fn bm25_section_is_well_formed(&self) -> bool {
         self.bm25.is_well_formed()
