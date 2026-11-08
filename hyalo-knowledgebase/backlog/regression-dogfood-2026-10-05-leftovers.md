@@ -2,7 +2,7 @@
 title: Regression dogfood 2026-10-05 leftovers
 type: backlog
 date: 2026-10-05
-status: planned
+status: completed
 priority: low
 origin: regression dogfood 2026-10-05 (three explorers), deferred from iteration 318
 ---
@@ -25,6 +25,15 @@ target unconditionally (`discovery.rs`, DEC-363 only protects *selection* text).
 deciding whether a link target may name a literal backslash off Windows and
 touching the resolver shared by `find`, `backlinks`, `mv` and `links fix`: too
 risky to bundle with a cleanup pass; needs its own DEC and a corpus run.
+
+**Done, 2026-11-08 (iteration 338, DEC-413):** the diagnosis above was wrong.
+Resolution never disagreed between the commands. `backlinks` listed a link that
+did not resolve whenever its raw spelling equalled the queried path, and that held
+for `my%20file.md` too, with no backslash involved. An unresolved link now goes
+under a key no note path can equal, so `backlinks` never lists one. Resolution is
+unchanged and a literal `\` in a link target is still read as `/`, because Obsidian
+refuses `\` in file names. The `%5C` forms already resolved. The Obsidian Hub,
+GitHub Docs and MDN gave byte-identical `summary` and per-note backlinks.
 
 ## No-op `create-index` on MDN
 
