@@ -15,12 +15,15 @@ related:
 
 # Iteration 335: a faster hasher for the hot hash maps (experiment, discarded)
 
-Experiment 3 of the performance audit. The workspace has about 340 `HashMap`/`HashSet`
-uses outside tests, all on std's SipHash-1-3 with random keys; the Rust
+Experiment 3 of the performance audit. The workspace's hash maps (the audit counted 332;
+a grep for `HashMap|HashSet` in `crates/**/*.rs`, `tests/` directories excluded, returns
+353 lines on this commit, `use` lines and in-source unit tests included, so the figure
+counts mentions, not types, and does not matter to the verdict) all sit on std's
+SipHash-1-3 with random keys; the Rust
 Performance Book says a faster hasher pays only where hashing is hot. The prototype
 profiled first, then swapped only the maps the profile named, to
 `foldhash::fast::RandomState` (`foldhash` 0.1.5, already in `Cargo.lock` through
-`jaq-json`, licence Zlib, so `cargo deny` has nothing new to see). Verdict:
+`jaq-json`, licence Zlib, which `deny.toml` allows; `cargo deny check` was not run). Verdict:
 **DISCARD**. No code is merged; this note and [[research/rust-performance-2026-11]]
 record the numbers.
 
@@ -38,7 +41,13 @@ Docs and MDN. A result within noise of a threshold is NOT SHOWN, not KEEP.
 `sample` (1 ms) on a release build with symbols and line tables, MDN (14,375 notes),
 five runs per command, load 4 to 5. Hash frames counted are `Hasher::write` for
 SipHash-1-3 and `BuildHasher::hash_one`, attributed to their caller, as samples of the
-main thread (rayon workers not counted).
+main thread (rayon workers not counted). Only hash code that was not inlined shows up as
+a frame: with fat LTO the rest is inside its callers, and rayon workers were excluded.
+So each share below is a **lower bound** on the cost of hashing, not an upper bound on
+what a faster hasher could save; the conclusion rests on the measured `user` time
+further down, not on these shares. (The vault held one extra snapshot file, outside
+the notes, while profiling; the main-thread time of `backlinks --index`, about 130 ms a
+run, matches the clean-vault `user` time below.)
 
 | command | hash samples | main-thread samples | share |
 |---|---:|---:|---:|
@@ -58,14 +67,15 @@ The hot maps, by caller:
   `Deserialize` is the biggest single symbol of that command (297 self samples across
   five runs), but the hash is inlined into it and cannot be separated; the 29 above
   are only the out-of-line hash frames.
-- Nothing hashes in `find --index`: it has no hash-bound frame at all, so the bar
-  that `find --index` gets 20% faster had no mechanism behind it from the start.
+- `find --index` shows no out-of-line hash frame on the main thread, so the bar that it
+  gets 20% faster had no visible mechanism behind it from the start (inlined or
+  worker-side hashing is not excluded by this).
 
 ## Prototype
 
 `pub(crate) type FastMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>` and the
-maps above switched to it (about 40 changed lines, one new dependency edge for
-`hyalo-core`). `foldhash::fast::RandomState` keeps a per-map random seed, so
+maps above switched to it (32 lines added and 23 removed in seven files, plus a
+10-line module, one new dependency edge for `hyalo-core`). `foldhash::fast::RandomState` keeps a per-map random seed, so
 iteration order stays as unspecified as under std's `RandomState` and no new
 determinism is promised.
 
@@ -76,46 +86,63 @@ seed gives less protection than SipHash, not none.
 
 ## Numbers
 
-MDN, baseline `afe0d162` against the prototype, both release builds (fat LTO) from the
-same worktree, each binary reading the snapshot it wrote, runs interleaved, medians
-of 10 (two blocks of 5, same session) from `/usr/bin/time -l`, wall and `user` and
-`sys` in seconds, peak RSS in MB, 1-minute load average (median) beside it.
-`sys` exceeds wall because the load is multi-threaded; this machine's `sys` is the
-noisiest column (1.5 to 2.0 s for the same command).
+MDN (14,375 notes), baseline `afe0d162` against the prototype, both release builds (fat
+LTO) of the same sources apart from the prototype, each binary reading the snapshot it
+wrote (stored outside the vault, see below), runs interleaved, medians of 10 (two blocks
+of 5, same session) from `/usr/bin/time -l`, which reports wall, `user` and `sys` to
+10 ms. Peak RSS in MB, 1-minute load average (median) beside it.
 
 | command | wall base / cand | user base / cand | sys base / cand | RSS base / cand | load |
 |---|---|---|---|---|---:|
-| `backlinks web/css/index.md --index` | 0.545 / 0.540 (-0.9%) | 0.250 / 0.240 (-4.0%) | 1.77 / 1.86 | 264.1 / 264.4 (+0.1%) | 7.6 |
-| `find --index` | 0.465 / 0.450 (-3.2%) | 0.180 / 0.180 | 1.87 / 1.68 | 235.9 / 236.7 (+0.3%) | 8.8 |
-| `summary --index` | 0.705 / 0.705 (0%) | 0.425 / 0.395 (-7.1%) | 1.80 / 1.72 | 275.0 / 276.3 (+0.5%) | 8.7 |
-| ranked `find "flexbox grid layout" --index` | 0.830 / 0.830 (0%) | 0.555 / 0.555 | 1.62 / 1.63 | 421.1 / 422.2 (+0.3%) | 8.9 |
-| `tags --index` | 0.455 / 0.450 (-1.1%) | 0.180 / 0.180 | 1.55 / 1.49 | 235.9 / 236.4 (+0.2%) | 10.0 |
+| `backlinks web/css/index.md --index-file <snapshot>` | 0.280 / 0.270 s (-3.6%) | 0.160 / 0.150 s (-6.2%) | 0.110 / 0.110 s | 258.3 / 259.7 (+0.5%) | 7.4 |
+| `find --index-file <snapshot>` (no pattern, default fields and limit) | 0.190 / 0.190 s (0%) | 0.080 / 0.085 s (+6.2%, one 10 ms step) | 0.100 / 0.100 s | 229.1 / 230.1 (+0.4%) | 7.4 |
+| `summary --index-file <snapshot>` | 0.460 / 0.440 s (-4.3%) | 0.340 / 0.315 s (-7.4%) | 0.110 / 0.110 s | 272.2 / 273.4 (+0.4%) | 8.9 |
+| `find "flexbox grid layout" --index-file <snapshot>` (ranked) | 0.575 / 0.570 s (-0.9%) | 0.460 / 0.460 s (0%) | 0.140 / 0.145 s | 418.1 / 419.6 (+0.4%) | 9.3 / 10.0 |
 
-The two blocks of 5 disagree with each other by more than the effect: `backlinks`
-read +5.6% wall in the first (load 5.7) and -5.5% in the second (load 9.5);
-`find --index`, whose code path hashes nothing, read -20.0% in the first (0.600 s to
-0.480 s) and 0% in the second. That spread is the noise floor of this machine, about
-20% on wall, so only `user` is readable, and `user` agrees with the profile: -4% where
-the profile said 5.5% of samples, -7% where it said 11.5%.
+All four with `--dir mdn --site-prefix en-US/docs`. The `backlinks` target and the
+`find` form differ from [[iterations/iteration-334-mimalloc]] (which used
+`web/javascript/reference/global_objects/array/index.md` and `find --index --limit 0
+--fields file`), so only the ratios inside each experiment compare, not the absolute
+times. Noise on this run: the baseline `backlinks` wall ranged 0.26 to 0.52 s over 10
+runs with one slow outlier, the candidate 0.25 to 0.32 s; the other rows stayed within
+0.19 to 0.21, 0.44 to 0.50 and 0.55 to 0.66 s.
 
-Not measured, because the first criterion had already decided it: disk commands,
-`create-index` and the 500-note vault against the 3% bar, the cross-target builds and
-`cargo deny check`.
+**A measurement error, corrected.** The first version of this note reported `sys`
+times of 1.5 to 1.9 s against walls of 0.45 to 0.85 s, and walls and `user` about
+twice these. Cause, reproduced afterwards: my harness wrote the three snapshots
+(141 MB each) *into the vault directory*. With two extra 141 MB files copied in,
+`backlinks` went from 0.26 s real, 0.15 s `user`, 0.10 s `sys` to 0.53 to 0.70 s real,
+about 0.25 s `user` and 1.8 to 3.0 s `sys` on the same binary. Why the extra files cost
+that much `sys` time was not investigated. Those figures are withdrawn and the table above is a re-run with
+the snapshots outside the vault (`create-index -o <dir> --allow-outside-vault`), where
+`sys` is 0.10 to 0.14 s and cannot exceed wall. The first run's conclusion did not
+change (candidate level or within a few percent), but its ratios were taken on a
+vault where a constant, unrelated cost diluted any saving, so they are not used.
+
+Not measured, because the first criterion had already decided it: `tags --index`
+(only in the withdrawn run), disk commands, `create-index` and the 500-note vault
+against the 3% bar, the cross-target builds and `cargo deny check`.
 
 ## Iteration order and the snapshot
 
-Byte comparison, `find --fields all --limit 0`, `summary`, `tags`, `properties`,
-`backlinks` (three notes per corpus), five ranked queries (AND, `OR`, a `~3` phrase,
-a prefix with a negation under `--granularity section`, one with two `--facet`s),
-`lint --limit 0 --max-per-rule 0` and `find --broken-links --limit 0`, each on disk
-and under `--index`, on MDN, the Obsidian Hub and GitHub Docs, baseline against
-candidate: **156 of 156 stdout files and exit codes identical**. The one
-normalisation is the hint text `Command took N ms`, which differs in any two runs of
-the same binary; with it unmasked 15 disk-mode files differ and every difference is
-that number. Disk against `--index` was equal within each binary on 39 of 39 pairs
-(hints and the `source`/`index_format_version` fields stripped). The negative control
+Byte comparison. Commands: `find --fields all --limit 0`, `summary`, `tags`,
+`properties`, `backlinks` (up to three notes per corpus), five ranked queries (AND,
+`OR`, a `~3` phrase, a prefix with a negation under `--granularity section`, one with
+two `--facet`s), `lint --limit 0 --max-per-rule 0` and `find --broken-links --limit 0`:
+11 commands plus the backlinks targets. The unit is one *comparison* = one command on
+one corpus in one mode (disk or `--index`), with stdout and exit code both compared.
+MDN had 14 commands (three backlinks targets); the Obsidian Hub and GitHub Docs
+together supplied 3 backlinks targets, not 6 (the pick was the first three notes
+with no space in their path among the top 12 by backlinks; I did not recount which
+corpus fell short, and the output files are deleted). That gives 39 command-and-corpus
+cases in two modes: **78 of 78 baseline-against-candidate comparisons identical**
+(stdout and exit code). The one normalisation is the hint text `Command took N ms`,
+which differs in any two runs of the same binary; with it unmasked 15 disk-mode
+comparisons differ and every difference is that number. Disk against `--index` was
+equal within each binary on **39 of 39 pairs** (hints and the
+`source`/`index_format_version` fields stripped). The negative control
 (two different queries, and a one-byte mutation of a good output) is rejected by the
-same comparison. Stderr is identical on 76 of 78 files; the two that differ are
+same comparison. Stderr is identical in 76 of the 78 comparisons; the two that differ are
 `lint` warnings on GitHub Docs that arrive in a different order, and a baseline run
 twice against itself differs in that order too (350 lines each, equal after sorting).
 
@@ -132,23 +159,35 @@ other's snapshot and printed the same `backlinks` and `summary` output.
 
 ## Verdict: DISCARD
 
-- [x] The speed bar is missed: `backlinks --index` -0.9% wall (-4.0% `user`) and
-      `find --index` -3.2% wall (0% `user`), against 20% required on both.
-- [x] The memory bar is missed: peak RSS +0.1% and +0.3%, against -25%.
-- [x] `summary --index` and ranked `find --index` are not slower (0% wall on both,
-      `user` -7.1% and 0%), so that criterion holds; it does not rescue the first.
-- [x] Byte identity holds (156 of 156), so correctness was not the reason.
+- [x] The speed bar is missed: `backlinks --index` -3.6% wall (-6.2% `user`) and
+      `find --index` 0% wall (+6.2% `user`, one 10 ms step), against 20% required on
+      both.
+- [x] The memory bar is missed: peak RSS +0.5% and +0.4%, against -25%.
+- [x] `summary --index` (-4.3% wall) and ranked `find --index` (-0.9%) are not slower,
+      so that criterion holds; it does not rescue the first.
+- [x] Byte identity holds (78 of 78 comparisons, 39 of 39 disk-against-index pairs), so
+      correctness was not the reason.
 - [x] Code reverted; only this note and the research note are committed.
 
-Why it cannot work here: even a hasher that costs nothing could remove only the
-hash share of the profile, 5.5% of `backlinks --index`, 0% of `find --index`, against
-a 20% bar; a real hasher removes part of that, and the measured `user` change (-4%)
-is that part. The rest of the command is reading and decoding the snapshot, `stat`
-calls (the stale-index check) and freeing. The only command with a double-digit hash
-share is `summary --index` (11.5%), and it got 7% less `user` time and no wall-time
-change. The same lesson as in [[iterations/iteration-332-skip-teardown-at-exit]] and
-[[iterations/iteration-334-mimalloc]]: a sampled share is an upper bound on a saving,
-and here the share was small to begin with.
+Why this is DISCARD and not NOT SHOWN: the rule applies to a result within noise of a
+threshold. Here the best wall figure is -3.6% against a 20% bar, 16 points short, and
+the clean-vault noise is a few percent (one 10 ms step on 190 to 280 ms), so the
+effect and the noise are both far below the bar. The first run's 20% wall noise came
+from the vault pollution described above, not from the machine, and is not the
+argument. `user` time, the least contended column, carries the evidence: -6% on
+`backlinks --index`, level on `find --index` and ranked `find`, -7% on `summary
+--index`; no run comes near 20%.
+
+What the profile adds is a floor, not a ceiling: out-of-line SipHash frames are 5.5%
+of the main thread in `backlinks --index` and 11.5% in `summary --index`, a lower
+bound on the hashing cost because inlined hash code and worker threads are not
+counted, and the measured `user` savings (6% and 7%) are of that size. Whatever the
+hidden share is, the whole command changed by single-digit percent when the hashers
+of every map the profile named were replaced. The rest of the work is reading and
+decoding the snapshot, `stat` calls (the stale-index check) and freeing. The same
+lesson as in [[iterations/iteration-332-skip-teardown-at-exit]] and
+[[iterations/iteration-334-mimalloc]]: a sampled share does not turn into a wall-time
+saving of the same size.
 
 Left open: replacing the HashMap with a different structure where the map is
 decoded (the 297 self samples of the postings map's `Deserialize` in ranked `find`)

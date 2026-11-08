@@ -197,7 +197,7 @@ in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
 - User CPU time did drop 17 to 21% in every row, matching the audit's allocator share
   of samples. Wall time did not follow because wall time also holds kernel time
   (snapshot read, page faults) that the allocator barely moves; `sys` exceeded
-  `user` in the runs I looked at, though load inflates it.
+  `user` in the runs I looked at, though load inflates it (the `sys` claim is unconfirmed: see "A faster hasher for the hot maps" below.)
 - A five-run pass at load 15 to 18 reported -57% and -60%; the baseline's `sys` time
   varied 2x between identical runs, so it measured machine contention. Compare ratios
   from interleaved runs, and look at `user` when the machine is not idle.
@@ -211,27 +211,37 @@ in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
 Experiment 3, run on 2026-11-08 against criteria fixed beforehand; the full tables
 are in [[iterations/iteration-335-fast-hasher]]. Verdict: **discarded**.
 
-- Profile first (`sample`, MDN, main-thread samples): SipHash `write`/`hash_one` is
-  5.5% of `backlinks --index`, 0% of `find --index`, 11.5% of `summary --index` and
-  1.6% of ranked `find --index`. The hot maps are `CaseInsensitiveIndex`'s four
-  (probed per link), `LinkGraph::index`/`lower_index`, `heading_slugs`' `seen` and the
-  BM25 `postings` map (whose hash is inlined into its decoder and cannot be split out).
+- Profile first (`sample`, MDN, main-thread samples): out-of-line SipHash
+  `write`/`hash_one` frames are 5.5% of `backlinks --index`, 11.5% of `summary
+  --index`, 1.6% of ranked `find --index`, and `find --index` shows no such frame on the
+  main thread. These are lower bounds on the cost of hashing (fat LTO inlines the
+  rest, rayon workers were not counted), not ceilings on a saving. The hot maps are
+  `CaseInsensitiveIndex`'s four (probed per link), `LinkGraph::index`/`lower_index`,
+  `heading_slugs`' `seen` and the BM25 `postings` map (whose hash is inlined into its
+  decoder and cannot be split out).
 - Prototype: those maps on `foldhash::fast::RandomState` (0.1.5, already in the lock
-  through `jaq-json`). Medians of 10, interleaved, load 7 to 10: `backlinks --index`
-  0.545 s to 0.540 s wall (-0.9%), `user` 0.250 s to 0.240 s (-4.0%); `find --index`
-  0.465 s to 0.450 s (-3.2%, `user` unchanged, and its code path hashes nothing);
-  `summary --index` `user` -7.1%, wall level; ranked `find --index` level; peak RSS
-  +0.1% to +0.5%. The bars were 20% faster or 25% less memory on both.
-- Wall time moved by up to 20% between two blocks of five on the same command, so only
-  `user` is readable, and it matches the profile share (a real hasher recovers part
-  of 5.5%, not 20%).
-- Correctness was not the problem: 156 of 156 JSON outputs and exit codes identical
-  between baseline and candidate on MDN, the Obsidian Hub and GitHub Docs, disk and
-  `--index`, once the hint text `Command took N ms` is masked. Iteration order does
-  not reach any output, which is expected because std's `RandomState` already orders
-  maps differently on every run. Snapshot size 141,795,837 bytes against 141,795,826
-  and 141,795,846 from two baseline builds: the baseline's own bytes vary by 20, and
-  each binary loaded the other's snapshot.
+  through `jaq-json`). Medians of 10, interleaved, clean vault, load 7 to 10:
+  `backlinks --index` 0.280 s to 0.270 s wall (-3.6%), `user` 0.160 s to 0.150 s
+  (-6.2%); `find --index` 0.190 s level (`user` +6.2%, one 10 ms step); `summary
+  --index` 0.460 s to 0.440 s (-4.3%), `user` -7.4%; ranked `find --index` level
+  (-0.9%); peak RSS +0.4% to +0.5%. The bars were 20% faster or 25% less memory on both.
+  Best wall figure 16 points short of the bar, noise a few percent: not a NOT SHOWN case.
+- Measurement error found in review: the first run wrote its three snapshots into the
+  vault, and with extra 141 MB files there `backlinks` read 1.8 to 3.0 s `sys` against
+  0.53 to 0.70 s real (0.10 s `sys`, 0.26 s real without them). Those numbers, and the
+  20% wall noise they implied, are withdrawn; the table above is the re-run with the
+  snapshots outside the vault. The cause of the extra `sys` time was not investigated.
+  Iteration 334's remark that `sys` exceeded `user` was measured with the same tool
+  and is **unconfirmed**: it may have the same cause (snapshots inside the vault), and
+  I did not re-run that experiment to find out.
+- Correctness was not the problem: 78 of 78 baseline-against-candidate comparisons
+  (one command on one corpus in one mode: stdout and exit code) identical on MDN, the
+  Obsidian Hub and GitHub Docs, disk and `--index`, once the hint text `Command took N
+  ms` is masked; 39 of 39 disk-against-`--index` pairs equal within each binary. Iteration
+  order does not reach any output, which is expected because std's `RandomState`
+  already orders maps differently on every run. Snapshot size 141,795,837 bytes against
+  141,795,826 and 141,795,846 from two baseline builds: the baseline's own bytes vary by
+  20, and each binary loaded the other's snapshot.
 - Not run, because the first bar had failed: disk commands, `create-index` and the
   500-note vault against 3%, cross-target builds, `cargo deny check`.
 
