@@ -3234,10 +3234,16 @@ pub fn first_file_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> 
 /// not stale — the former is "unknown", the latter is the caller's deletion
 /// handling. Both keep the historic answer of the loop this was extracted from.
 fn entry_is_stale_on_disk(entry: &IndexEntry, dir: &Path) -> bool {
-    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
+    let Ok(meta) = std::fs::metadata(dir.join(&entry.rel_path)) else {
         return false;
     };
-    let Ok(meta) = std::fs::metadata(dir.join(&entry.rel_path)) else {
+    entry_is_stale_given(entry, &meta)
+}
+
+/// [`entry_is_stale_on_disk`] for a caller that already holds the file's
+/// metadata, so one drift pass costs one `stat` per entry, not two.
+fn entry_is_stale_given(entry: &IndexEntry, meta: &std::fs::Metadata) -> bool {
+    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
         return false;
     };
     let Ok(modified) = meta.modified() else {
@@ -3262,7 +3268,7 @@ pub fn snapshot_drift(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
         .iter()
         .filter(|e| match std::fs::metadata(dir.join(&e.rel_path)) {
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-            Ok(meta) => (e.size != 0 && meta.len() != e.size) || entry_is_stale_on_disk(e, dir),
+            Ok(meta) => (e.size != 0 && meta.len() != e.size) || entry_is_stale_given(e, &meta),
         })
         .map(|e| e.rel_path.clone())
         .collect();
@@ -3458,6 +3464,43 @@ mod iso_tests {
         std::fs::write(&file, "---\ntitle: a\n---\n\nbody v3\n").unwrap();
         let stale = files_modified_since_snapshot(&index, dir.path());
         assert_eq!(stale, vec!["a.md".to_owned()]);
+    }
+
+    /// DEC-302 through `snapshot_drift`: an overwrite that keeps the byte count
+    /// and moves only the mtime past the tolerance is drift, and one that stays
+    /// inside the tolerance is not.
+    #[test]
+    fn snapshot_drift_sees_a_same_size_overwrite_by_mtime_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, "# A\nkiwi\n").unwrap();
+        let files = vec![(file.clone(), "a.md".to_owned())];
+        let options = ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: None,
+        };
+        let build = ScannedIndex::build(&files, None, &options).unwrap();
+        let snap = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap, &vault, None, None).unwrap();
+        let index = SnapshotIndex::load(&snap).unwrap().unwrap();
+        assert_eq!(snapshot_drift(&index, dir.path()), Vec::<String>::new());
+
+        let set_mtime = |ahead: u64| {
+            let handle = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+            handle
+                .set_modified(SystemTime::now() + std::time::Duration::from_secs(ahead))
+                .unwrap();
+        };
+        // Same byte count, mtime inside the tolerance: not drift.
+        std::fs::write(&file, "# A\nplum\n").unwrap();
+        set_mtime(0);
+        assert_eq!(snapshot_drift(&index, dir.path()), Vec::<String>::new());
+        // Same byte count, mtime well past it: drift, with the size unchanged.
+        set_mtime(3_600);
+        assert_eq!(snapshot_drift(&index, dir.path()), vec!["a.md".to_owned()]);
     }
 
     /// DEC-339: a size change (even within the mtime tolerance) and a deleted
