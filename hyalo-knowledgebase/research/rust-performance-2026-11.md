@@ -42,7 +42,9 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
   there is no build-flag win left.
 - Out of scope here, and needing this iteration as their baseline: `LinkGraph`'s
   public types, string interning, a different allocator. (Skipping teardown at exit
-  was tried afterwards and discarded: see "Skipping teardown at exit" below.)
+  was tried afterwards and discarded: see "Skipping teardown at exit" below. A
+  different allocator was tried in iteration 334 and discarded: see "mimalloc as the
+  global allocator" below.)
 
 ## External reading
 
@@ -77,7 +79,9 @@ change, and none is part of iteration 330.
 - **`mimalloc` or `tikv-jemallocator`.** The allocator was 17-27% of samples, so
   there is room, but the book calls the gain workload-dependent; it also needs a
   check on all three platforms and on peak memory (`create-index` peaks at 850 MiB).
-  Listed as a separate experiment above.
+  Listed as a separate experiment above; `mimalloc` was tried in iteration 334 and
+  discarded (see "mimalloc as the global allocator" below), `tikv-jemallocator` was
+  not tried.
 - **PGO via `cargo-pgo`.** The book quotes "10% or more". It does not reach users who
   `cargo install`, so it would only help the prebuilt release binaries, and it adds a
   training-run step to the release pipeline.
@@ -179,6 +183,27 @@ in [[iterations/iteration-332-skip-teardown-at-exit]]. Verdict: **discarded**.
   plus graph. Without the BM25 decode about 16 ms of 0.26 s (about 6%) is left, in line
   with the 8 to 11% measured here. A profile and a wall time from different code
   states do not compare.
+
+## mimalloc as the global allocator
+
+Experiment 2, run on 2026-11-08 against criteria fixed beforehand; the full table is
+in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
+
+- `mimalloc` 0.1.52 (v2) under the counting allocator wrapper, MDN, interleaved
+  against the baseline, load 10 to 14: `backlinks --index` 0.54 s to 0.49 s (-9%),
+  `find --index` 0.47 s to 0.44 s (-6%), `summary --index` -10%, ranked `find --index`
+  -10%, peak RSS -4 to -6%. The bars were 20% faster or 25% less memory on both.
+- User CPU time did drop 17 to 21% in every row, matching the audit's allocator share
+  of samples. Wall time did not follow because wall time also holds kernel time
+  (snapshot read, page faults) that the allocator barely moves; `sys` exceeded
+  `user` in the runs I looked at, though load inflates it.
+- A five-run pass at load 15 to 18 reported -57% and -60%; the baseline's `sys` time
+  varied 2x between identical runs, so it measured machine contention. Compare ratios
+  from interleaved runs, and look at `user` when the machine is not idle.
+- A 500-note subset of GitHub Docs: wall time level, but peak RSS of the disk commands
+  rose 36 to 37% (14 to 19 MB, 19 to 26 MB), which fails the 3% criterion.
+- Snapshot sizes identical, allocation counts identical to within 22 of 2.3 million.
+  Cross-target builds and `cargo deny` were not checked: the first bar had failed.
 
 ## Method note
 
