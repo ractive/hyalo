@@ -30,6 +30,7 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
 ## Not worth doing (the audit's list)
 
 - Interning in `IndexEntry`, `Link` and `OutlineSection`: about 20 ms (estimated).
+  Skipped, see "The end of the experiment series" below.
 - The scanner and YAML parser: disk CPU is 78% kernel time, so there is little user
   code to win back (estimated from samples).
 - Fuzzy scoring, `find` JSON output and `--jq`, token interning: below the noise.
@@ -41,7 +42,8 @@ of 5) or **estimated** (the audit, or arithmetic from a measurement).
 - The release profile already has fat LTO, `codegen-units = 1` and `panic = "abort"`;
   there is no build-flag win left.
 - Out of scope here, and needing this iteration as their baseline: `LinkGraph`'s
-  public types, string interning, a different allocator. (Skipping teardown at exit
+  public types, string interning (skipped, see "The end of the experiment series"
+  below), a different allocator. (Skipping teardown at exit
   was tried afterwards and discarded: see "Skipping teardown at exit" below. A
   different allocator was tried in iteration 334 and discarded: see "mimalloc as the
   global allocator" below.)
@@ -85,10 +87,12 @@ change, and none is part of iteration 330.
   not tried.
 - **PGO via `cargo-pgo`.** The book quotes "10% or more". It does not reach users who
   `cargo install`, so it would only help the prebuilt release binaries, and it adds a
-  training-run step to the release pipeline.
+  training-run step to the release pipeline. Skipped, see "The end of the experiment
+  series" below.
 - **Hot types over 128 bytes.** The book notes they are `memcpy`d; check
   `IndexEntry`, `Link` and `OutlineSection` with `-Zprint-type-sizes` or
   `top-type-sizes`. The audit already put interning those types at about 20 ms.
+  Interning is skipped, see "The end of the experiment series" below.
 - **`dhat-rs`-style heap tests** as a regression guard for allocation counts. The
   `HYALO_INTERNAL_ALLOC_REPORT` counter already gives the numbers; a test that
   asserts a ceiling on a fixed fixture would stop a repeat of the work removed here.
@@ -244,6 +248,55 @@ are in [[iterations/iteration-335-fast-hasher]]. Verdict: **discarded**.
   20, and each binary loaded the other's snapshot.
 - Not run, because the first bar had failed: disk commands, `create-index` and the
   500-note vault against 3%, cross-target builds, `cargo deny check`.
+
+## The end of the experiment series
+
+The owner's bar was 20% faster wall time on both `backlinks --index` and `find --index`.
+Iterations 332, 334 and 335 tested it and were discarded. PGO and interning, the two
+remaining candidates, are **skipped on a measured bound, not run**:
+
+- On MDN, `backlinks web/javascript/index.md --index` measured real 0.25 s, user 0.15 s
+  and sys 0.10 s with default threads and with `RAYON_NUM_THREADS=1`, 3 runs each, load
+  about 7 on 2026-11-08 (rechecked on `224f2dd9` at load 5.6 to 6.0: real 0.25 to
+  0.27 s, user 0.14 to 0.15 s, sys 0.09 to 0.11 s, both thread settings). The read is
+  effectively single-threaded, wall is about user plus sys, and a wall saving cannot
+  exceed the user saving.
+- 20% of wall needs user time to fall about 33% on `backlinks --index` (0.05 s of
+  0.15 s). On `find --index` it needs about 47%, from iteration 335's clean run: 0.19 s
+  wall, 0.08 s user (0.038 s of 0.08 s).
+- PGO reduces user-space work only. The Rust Performance Book quotes "10% or more", and
+  a 33 to 47% cut in user time would be far beyond published PGO results for comparable
+  workloads. Interning attacks the allocation cost that `mimalloc` already attacked: it
+  saved about 20% of user time and still missed, and the audit estimated interning at
+  about 20 ms. Interning would also shrink the heap, and so part of the page reclaims
+  behind the sys share, but the sys-side effect is expected to be small: `mimalloc`
+  lowered peak RSS by only 4 to 6%, and the 141 MB snapshot dominates what is loaded.
+  Neither candidate is expected to reach the bar. This is a bound from those
+  measurements, not a measurement of PGO or interning.
+- About 40% of the read is sys time (0.10 s of 0.25 s, about 15,800 page reclaims,
+  255 MB maximum RSS in the recheck), consistent with loading the 141 MB snapshot. Any
+  further gain has to come mainly from reading less of the snapshot, not from faster
+  user code.
+
+### The one saving that was left: a second `stat` per file
+
+Not an experiment against the bar, a plain fix ([[iterations/iteration-336-snapshot-drift-single-stat]]).
+`snapshot_drift`, the per-file drift check (DEC-302, DEC-339), run by unscoped or graph-reading `--index`
+reads (`find`, `backlinks`, `summary`) whether or not anything drifted,
+called `std::fs::metadata` on each indexed file to compare the size and then again,
+inside `entry_is_stale_on_disk`, to compare the mtime: 14,375 extra `stat` calls on MDN.
+It now reuses the first `Metadata`. Interleaved, median of 5, snapshot outside the vault,
+load about 5.8 to 6.0:
+
+| Command | Wall before | after | User before | after | Sys before | after |
+|---------|------------:|------:|------------:|------:|-----------:|------:|
+| `backlinks web/javascript/index.md --index-file` | 0.25 s | 0.23 s | 0.15 s | 0.14 s | 0.10 s | 0.08 s |
+| `find --count --index-file` | 0.21 s | 0.18 s | 0.10 s | 0.10 s | 0.10 s | 0.08 s |
+
+The saving is sys time, about 0.02 s, which matches the order of magnitude of 14,375
+`stat` calls. Wall falls about 8% on `backlinks` and about 14% on `find`, short of the
+bar, and the `find` command measured here (`--count`) is not iteration 335's. Output was
+byte-identical on both commands.
 
 ## Method note
 

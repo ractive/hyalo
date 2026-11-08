@@ -26,6 +26,11 @@ and this project adheres to
 
 ### Changed
 
+- Faster, with identical answers: the per-file drift check that unscoped or
+  graph-reading `--index` reads (`find`, `backlinks`, `summary`) run, drifted or not
+  (DEC-302), now calls `stat` once per indexed file instead of twice, about 0.02 s
+  less system time on MDN's 14,375 notes.
+
 - **Breaking: the reader skips raw HTML, `$$` math and code-like elements.**
   `[[x]]` or `[x](y.md)` inside a raw HTML block (`<pre>`, a `<div>` or
   `<details>` with no blank line after its first line), a `$$` block or span,
