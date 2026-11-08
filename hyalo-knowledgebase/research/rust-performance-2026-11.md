@@ -180,6 +180,25 @@ in [[iterations/iteration-332-skip-teardown-at-exit]]. Verdict: **discarded**.
   with the 8 to 11% measured here. A profile and a wall time from different code
   states do not compare.
 
+## mimalloc as the global allocator
+
+Experiment 2, run on 2026-11-08 against criteria fixed beforehand; the full table is
+in [[iterations/iteration-334-mimalloc]]. Verdict: **discarded**.
+
+- `mimalloc` 0.1.52 (v2) under the counting allocator wrapper, MDN, interleaved
+  against the baseline, load 10 to 14: `backlinks --index` 0.54 s to 0.49 s (-9%),
+  `find --index` 0.47 s to 0.44 s (-6%), `summary --index` -10%, ranked `find --index`
+  -10%, peak RSS -4 to -7%. The bars were 20% faster or 25% less memory on both.
+- User CPU time did drop 17 to 21% in every row, matching the audit's allocator share
+  of samples. Wall time did not follow because wall time also holds kernel time
+  (snapshot read, page faults) that the allocator does not change; `sys` exceeded
+  `user` in every run, though load inflates it.
+- A five-run pass at load 15 to 18 reported -57% and -60%; the baseline's `sys` time
+  varied 2x between identical runs, so it measured machine contention. Compare ratios
+  from interleaved runs, and look at `user` when the machine is not idle.
+- Snapshot sizes identical, allocation counts identical to within 22 of 2.3 million.
+  Cross-target builds and `cargo deny` were not checked: the first bar had failed.
+
 ## Method note
 
 Differential testing against a baseline binary caught nothing this time, and the
