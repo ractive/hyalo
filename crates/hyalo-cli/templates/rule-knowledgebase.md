@@ -328,10 +328,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   note listing that path under the property (a string or a list). The `site_prefix`, trailing `/`,
   `.md` and a final `/index` are dropped from value and link alike, case folds as `[links]
   case_insensitive` says, and a value with a `#fragment` is ignored. A real file at the path always
-  wins; a path two notes list is ambiguous (`ambiguous: true`, `candidates`, still broken,
-  HYALO006 "matches N candidates"). The link carries `via: "redirect"` and is a graph edge;
-  `links fix` and `mv` leave it alone, and `--index` builds the map from the properties it holds,
-  so changing the setting needs no rebuild. `hyalo config --jq '.results.links.redirect_property'`
+  wins (a file created or moved onto a claimed path takes over its links); a path two notes list
+  is ambiguous (`ambiguous: true`, `candidates`, still broken, HYALO006 "matches N candidates").
+  The link carries `via: "redirect"` and is a graph edge; `links fix` rewrites no target for it
+  (a broken `#fragment` still gets the usual anchor repair against the declaring note) and `mv`
+  leaves it alone; `--index` builds the map from the properties it holds, so changing the setting
+  needs no rebuild. A blank name is a config error like a bad lint severity: the gates refuse and
+  `hyalo config` says `malformed`. `hyalo config --jq '.results.links.redirect_property'`
   reports it.
 - **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
   on every platform, not only on a case-insensitive filesystem. Opt out with

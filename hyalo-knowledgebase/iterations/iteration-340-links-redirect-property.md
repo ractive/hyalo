@@ -108,3 +108,31 @@ step changes nothing, because that step runs for a bare target (`!absolute`) and
 step for a site-absolute one (`absolute`); the two cannot both apply to one link. The precedence
 that can differ is against the literal path and the directory index, which the first mutation
 covers.
+
+## Review of PR #422 (five findings, one commit)
+
+- **`links fix --expand-short-form` offered to repoint a redirect link** (target.md declares
+  `/guide/setup`, `guides/setup.md` exists, the fuzzy matcher proposed `/guides/setup` at 0.772).
+  The flag turns the reader guard off, so the broken-link pass now asks the map on its own
+  (`resolves_via_redirect`) whatever the flag says; the ambiguous classification is unchanged.
+  e2e `expand_short_form_does_not_offer_to_repoint_a_redirect_link` (with a control vault);
+  removing the new arm fails it.
+- **Wording: "`links fix` proposes nothing"** was wrong. The anchor pass resolves with the step on,
+  so a broken `#fragment` is repaired against the declaring note (`#success-metrics` to
+  `#6-success-metrics`), the target text untouched. Reworded in DEC-415 point 7, the docs, both
+  templates, `find --help`, the CHANGELOG and `.claude/CLAUDE.md`; pinned by
+  `links_fix_repairs_the_fragment_of_a_redirect_link_and_keeps_its_target`.
+- **The `site_prefix` "stripped 0 of N" warning ignored redirects**, so a vault whose site-absolute
+  links all resolve through the map was told its prefix was wrong.
+  `site_prefix_plausible_resolution_stats` takes the case index and counts a link the map resolves
+  as plausible; a unit test and an e2e test with a control.
+- **A file moved onto a claimed path takes over its links.** Decided, not changed: no new `mv`
+  logic. "A real file wins" cuts both ways, and an alias under `[links] aliases = true` behaves
+  the same. The docs no longer say a claim "never repoints an existing link"; DEC-415 point 4 states
+  the rule and DEC-388's scope (a move never changes what a link it *rewrites* names).
+- **A blank `redirect_property` is now a config error**, as DEC-415 said: it joins the diagnostics
+  that make the config unloadable for the gates (`lint`, `find --strict`, `views run` exit 1) and
+  `hyalo config` reports `malformed: true`, like an invalid `[lint.rules.X] severity` (DEC-399);
+  a read that is not a gate keeps the warning, and `new`, `types` and a plain write are unaffected.
+  e2e `a_blank_redirect_property_stops_the_gates_like_an_invalid_severity`; replacing the
+  diagnostic with `None` fails it.

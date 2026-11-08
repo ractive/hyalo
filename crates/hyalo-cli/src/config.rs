@@ -1173,13 +1173,21 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // of broken promise as an unloadable `[schema]` (DEC-362): the gates refuse,
     // `hyalo config` reports it, a plain write is unaffected.
     let schema_only_invalid = schema_invalid;
-    let schema_invalid = match (
-        schema_only_invalid.as_deref(),
-        invalid_lint_severity(cfg.lint.as_ref()),
-    ) {
-        (Some(schema), Some(severity)) => Some(format!("{schema}; {severity}")),
-        (Some(schema), None) => Some(schema.to_owned()),
-        (None, severity) => severity,
+    // DEC-415 (review of PR #422): a blank `[links] redirect_property` is the
+    // same kind of broken promise as a bad severity: the setting is ignored, but
+    // a gate must not answer as if it had been read.
+    let (redirect_property, redirect_property_invalid) =
+        resolve_redirect_property(cfg.links.as_ref());
+    let schema_invalid = {
+        let diagnostics: Vec<String> = [
+            schema_only_invalid.clone(),
+            invalid_lint_severity(cfg.lint.as_ref()),
+            redirect_property_invalid,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!diagnostics.is_empty()).then(|| diagnostics.join("; "))
     };
 
     // Parse [links] fields — borrow before moving.
@@ -1203,23 +1211,6 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             crate::warn::warn(format!(
                 "invalid [links] fuzzy_min_confidence in .hyalo.toml: {v} is outside 0.0-1.0 — ignoring"
             ));
-            None
-        }
-        None => None,
-    };
-
-    // `[links] redirect_property` (DEC-415) — a name is required; an empty one
-    // is a config error the user should see, so warn and treat it as unset.
-    let redirect_property = match cfg
-        .links
-        .as_ref()
-        .and_then(|l| l.redirect_property.as_deref())
-    {
-        Some(name) if !name.trim().is_empty() => Some(name.trim().to_owned()),
-        Some(_) => {
-            crate::warn::warn(
-                "invalid [links] redirect_property in .hyalo.toml: the name is empty — ignoring",
-            );
             None
         }
         None => None,
@@ -1407,6 +1398,29 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
             crate::warn::warn(&e);
             (SchemaConfig::default(), Some(e))
         }
+    }
+}
+
+/// `[links] redirect_property` (DEC-415): the property name, trimmed, and the
+/// diagnostic for a blank one. A blank name is ignored (a plain read warns and
+/// carries on), and the diagnostic makes the gates refuse and `hyalo config`
+/// report `malformed: true`, like an invalid `[lint.rules.X] severity` (DEC-399).
+fn resolve_redirect_property(links: Option<&LinksConfig>) -> (Option<String>, Option<String>) {
+    match links.and_then(|l| l.redirect_property.as_deref()) {
+        Some(name) if !name.trim().is_empty() => (Some(name.trim().to_owned()), None),
+        Some(name) => {
+            crate::warn::warn(
+                "invalid [links] redirect_property in .hyalo.toml: the name is empty — ignoring",
+            );
+            (
+                None,
+                Some(format!(
+                    "[links] redirect_property must name a frontmatter property, found {name:?}; \
+                     repair with `redirect_property = \"redirect_from\"` or remove the key"
+                )),
+            )
+        }
+        None => (None, None),
     }
 }
 

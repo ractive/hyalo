@@ -243,16 +243,21 @@ rules (DEC-415):
 - Only a **site-absolute** target (`/old/url`, markdown or `[[/old/url]]`) asks the map; a relative
   link or a bare `[[stem]]` names a file.
 - **A real file always wins.** The map is the last resort, after the path, `.md`, directory-index,
-  stem and alias steps, so a claim never repoints an existing link.
+  stem and alias steps, so a claim never shadows an existing file. The same rule means a file
+  created or moved onto a claimed path takes over the links that resolved through the claim.
 - A path declared by **two** notes is ambiguous (`ambiguous: true`, sorted `candidates`, `path: null`,
   still counted broken, HYALO006 "matches 2 candidates"). One note listing a path twice is not two
   claimants.
 - A link resolved this way reports `via: "redirect"` and keeps its `kind`. It is a graph edge, so
   `backlinks`, `--orphan`, `--dead-end`, `summary.links` and HYALO006 agree with
   `find --fields links`; its `#fragment` is checked against the declaring note's headings.
-- `links fix` proposes nothing for it, and `mv` neither rewrites a link that names a redirect value
-  nor touches the moved note's own `redirect_from`; the declaration travels with the note, so the
-  link keeps resolving at the new path.
+- `links fix` rewrites no target for it (also under `--expand-short-form`), though a broken
+  `#fragment` gets the usual anchor repair against the declaring note, and `mv` neither rewrites a
+  link that names a redirect value nor touches the moved note's own `redirect_from`; the
+  declaration travels with the note, so the link keeps resolving at the new path.
+- A blank `redirect_property` is a config error like an invalid `[lint.rules.X] severity`:
+  `lint`, `find --strict` and `views run` refuse, `hyalo config` reports `malformed: true`, other
+  commands warn and ignore the setting.
 - A snapshot (`--index`) builds the map from the properties it already stores, so it needs no
   rebuild when the setting changes.
 

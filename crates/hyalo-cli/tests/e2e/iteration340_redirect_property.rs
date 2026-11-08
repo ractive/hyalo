@@ -3,8 +3,9 @@
 //!
 //! GitHub Docs notes list every URL they used to live at in `redirect_from:`,
 //! and links elsewhere still use those URLs. With the setting on, such a link
-//! resolves (`via: "redirect"`), counts as a graph edge, and `links fix` and
-//! `mv` leave it alone; with it off (the default) nothing changes.
+//! resolves (`via: "redirect"`), counts as a graph edge, `links fix` rewrites no
+//! target for it (a broken `#fragment` still gets the usual anchor repair) and
+//! `mv` leaves it alone; with the setting off (the default) nothing changes.
 
 use super::common::{hyalo_no_hints, write_md};
 use serde_json::Value;
@@ -264,7 +265,7 @@ fn unset_means_nothing_changes() {
 }
 
 #[test]
-fn a_redirect_link_is_a_graph_edge_and_links_fix_proposes_nothing() {
+fn a_redirect_link_is_a_graph_edge_and_links_fix_does_not_rewrite_its_target() {
     let tmp = vault();
     let d = tmp.path();
     write_md(d, "src.md", "[a](/old/page) [b](/OLD/PAGE)\n");
@@ -450,4 +451,159 @@ fn a_move_that_touches_only_a_redirect_link_rewrites_nothing() {
     );
     assert_eq!(out["results"]["total_links_updated"], 0, "{out}");
     assert_eq!(fs::read(d.join("src.md")).unwrap(), before);
+}
+
+/// A target that only the redirect map answers, next to a decoy the fuzzy
+/// matcher likes better than nothing (`/guides/setup` for `/guide/setup`).
+fn redirect_vault_with_a_decoy(redirect: bool) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    config(d, if redirect { SETTING } else { "" });
+    write_md(d, "target.md", &note(&["/guide/setup"], "t"));
+    write_md(d, "guides/setup.md", "# Setup\n");
+    write_md(d, "src.md", "[a](/guide/setup)\n");
+    tmp
+}
+
+#[test]
+fn expand_short_form_does_not_offer_to_repoint_a_redirect_link() {
+    // Control: without the setting the link is broken, so the test below can
+    // fail.
+    let control = redirect_vault_with_a_decoy(false);
+    let plain = run(
+        control.path(),
+        &["links", "fix", "--expand-short-form", "--format", "json"],
+    );
+    assert_eq!(plain["results"]["broken"], 1, "{plain}");
+
+    let tmp = redirect_vault_with_a_decoy(true);
+    let d = tmp.path();
+    let before = fs::read(d.join("src.md")).unwrap();
+    for args in [
+        vec!["links", "fix", "--expand-short-form", "--format", "json"],
+        vec![
+            "links",
+            "fix",
+            "--expand-short-form",
+            "--apply",
+            "--apply-fuzzy",
+            "--format",
+            "json",
+        ],
+    ] {
+        let out = run(d, &args);
+        for bucket in ["broken", "fixable", "fuzzy_below_floor"] {
+            assert_eq!(out["results"][bucket], 0, "{args:?} {bucket}: {out}");
+        }
+        for bucket in [
+            "fixes",
+            "fuzzy_fixes",
+            "relocation_fixes",
+            "unfixable_links",
+        ] {
+            let v = &out["results"][bucket];
+            assert!(
+                v.as_array().is_none_or(Vec::is_empty) && v.as_u64().is_none_or(|n| n == 0),
+                "{args:?} {bucket}: {out}"
+            );
+        }
+        assert_eq!(fs::read(d.join("src.md")).unwrap(), before);
+    }
+}
+
+#[test]
+fn links_fix_repairs_the_fragment_of_a_redirect_link_and_keeps_its_target() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    config(d, SETTING);
+    write_md(
+        d,
+        "docs/page.md",
+        &note(&["/old/page"], "# Page\n\n## 6. Success metrics"),
+    );
+    write_md(d, "src.md", "[x](/old/page#success-metrics)\n");
+    let preview = run(d, &["links", "fix", "--format", "json"]);
+    assert_eq!(preview["results"]["broken"], 0, "{preview}");
+    assert_eq!(
+        preview["results"]["anchor_fixes"][0]["new_fragment"], "6-success-metrics",
+        "{preview}"
+    );
+    run(d, &["links", "fix", "--apply", "--format", "json"]);
+    // No target rewrite; the usual anchor repair against the declaring note.
+    assert_eq!(
+        fs::read_to_string(d.join("src.md")).unwrap(),
+        "[x](/old/page#6-success-metrics)\n"
+    );
+}
+
+#[test]
+fn the_site_prefix_warning_counts_a_redirect_resolved_link_as_plausible() {
+    let warned = |redirect: bool| {
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path();
+        config(
+            d,
+            &format!(
+                "site_prefix = \"zzz\"\n{}",
+                if redirect { SETTING } else { "" }
+            ),
+        );
+        write_md(d, "guides/setup.md", &note(&["/old/url"], "s"));
+        write_md(d, "src.md", "[a](/old/url)\n");
+        let out = output(d, &["links", "fix", "--format", "json"]);
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stderr).contains("stripped 0 of")
+    };
+    assert!(warned(false), "control: nothing resolves the link");
+    assert!(
+        !warned(true),
+        "the map resolves it, so the prefix is not to blame"
+    );
+}
+
+#[test]
+fn a_blank_redirect_property_stops_the_gates_like_an_invalid_severity() {
+    let tmp = TempDir::new().unwrap();
+    let d = tmp.path();
+    config(d, "[links]\nredirect_property = \"  \"\n");
+    write_md(d, "a.md", "# A\n");
+    for args in [
+        vec!["lint"],
+        vec!["find", "--strict"],
+        vec!["views", "run", "nope"],
+    ] {
+        let out = output(d, &args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {err}");
+        assert!(
+            err.contains("redirect_property must name a frontmatter property"),
+            "{args:?}: {err}"
+        );
+    }
+    // `hyalo config` reports it as malformed, with the diagnostic.
+    let cfg = run(d, &["config", "--format", "json"]);
+    assert_eq!(cfg["results"]["malformed"], true, "{cfg}");
+    assert!(
+        cfg["results"]["parse_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("redirect_property")),
+        "{cfg}"
+    );
+    assert_eq!(cfg["results"]["links"]["redirect_property"], Value::Null);
+    // A read that is not a gate keeps the warning and answers; so do a plain
+    // write and the commands that only read the schema.
+    for args in [
+        vec!["find", "--file", "a.md", "--format", "json"],
+        vec!["set", "--property", "k=v", "--file", "a.md"],
+        vec!["types", "list"],
+    ] {
+        let out = output(d, &args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let warned = output(d, &["find", "--file", "a.md", "--format", "json"]);
+    assert!(String::from_utf8_lossy(&warned.stderr).contains("redirect_property"));
 }

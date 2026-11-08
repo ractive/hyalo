@@ -28,13 +28,16 @@ and this project adheres to
   that lists that URL path under the property, as a last resort after every
   file, directory-index, stem and alias match, so a real file always wins. The
   link carries `via: "redirect"` and is a graph edge; a path two notes list is
-  ambiguous (DEC-374); `links fix` and `mv` leave such a link alone. A value
-  with a `#fragment` or `?query` names part of a page and is ignored. On GitHub
-  Docs it resolves 5,535 of the 6,082 broken markdown links (broken links 7,406
-  to 1,871; 237 of those now report a broken `#anchor`). `--index` builds the
-  map from the properties a snapshot already holds, so changing the setting
-  needs no rebuild and no format bump. `hyalo config` reports
-  `links.redirect_property` (DEC-415).
+  ambiguous (DEC-374); `links fix` rewrites no target for such a link (a broken
+  `#fragment` still gets the usual anchor repair against the declaring note) and
+  `mv` leaves it alone, and a file created or moved onto a claimed path takes
+  over the links that resolved through the claim. A value with a `#fragment` or
+  `?query` names part of a page and is ignored. On GitHub Docs it resolves 5,535
+  of the 6,082 broken markdown links (broken links 7,406 to 1,871; 237 of those
+  now report a broken `#anchor`). `--index` builds the map from the properties a
+  snapshot already holds, so changing the setting needs no rebuild and no format
+  bump. `hyalo config` reports `links.redirect_property`; a blank name is a
+  config error like an invalid lint severity (the gates refuse; DEC-415).
 
 ### Changed
 

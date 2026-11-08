@@ -1264,7 +1264,8 @@ pub(crate) enum Commands {
             site-absolute target (/old/url) that no file, directory index or stem answers resolves to \
             the note listing that URL path under the property and carries via: \"redirect\" (`(via \
             redirect)` in text mode); a path two notes list is ambiguous like any other, and a real \
-            file at the path always wins. It is a graph edge; `links fix` and `mv` leave it alone. \
+            file at the path always wins. It is a graph edge; `links fix` rewrites no target for it \
+            (a broken #fragment still gets the usual anchor repair) and `mv` leaves it alone. \
             Unset by default. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
             also carries suggested_fragment, the full heading to write instead (the GFM slug for a \
