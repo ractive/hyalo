@@ -6,6 +6,7 @@ use hyalo_core::index::{
     IndexEntry, STALENESS_TOLERANCE_SECS, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex,
     find_stale_indexes, format_mtime,
 };
+use rayon::prelude::*;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,7 +30,10 @@ use crate::output::{CommandOutcome, Format, output_value};
 /// changed nothing at all — every entry reused, nothing removed, attachments
 /// unchanged — the snapshot file itself is left untouched rather than
 /// rewritten byte-for-byte identical content (`results.written: false`,
-/// iter-313).
+/// iter-313). That is decided by [`early_no_op`] before the postings are
+/// decoded or the entries cloned (DEC-414): a no-op therefore does not
+/// re-validate the postings beyond their MessagePack framing, and
+/// `--force` is the cure for a damaged section it cannot see.
 #[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
 pub fn create_index(
     dir: &Path,
@@ -113,6 +117,29 @@ pub fn create_index(
     // Serialize vault_dir as a canonical string (fall back to raw display)
     let vault_dir_str = crate::config::snapshot_vault_dir(dir);
 
+    // iter-261 (BUG-5, BUG-6): record the vault's attachments alongside the
+    // notes so an `--index` run resolves `![[img.png]]` and `[[Books.base]]`
+    // exactly as a disk run does. A failed walk degrades to "no attachments",
+    // which is the pre-iter-261 behaviour, not an error.
+    //
+    // DEC-414: walked before the previous snapshot is loaded, together with
+    // the counters the walks leave behind, so the early no-op check and the
+    // late one read the same facts. Only walks write the counters, never the
+    // scan, so reading them here equals reading them after the build.
+    let attachments = discovery::discover_attachments(dir).unwrap_or_default();
+    let current_scan_exclude = discovery::scan_exclude_patterns();
+    let walked = Walked {
+        dir,
+        files: &files,
+        attachments: &attachments,
+        vault_dir: &vault_dir_str,
+        site_prefix,
+        frontmatter_link_props,
+        scan_excluded: discovery::scan_excluded_count() as u64,
+        scan_exclude: current_scan_exclude,
+        gitignore_dropped: discovery::gitignore_dropped_count() as u64,
+    };
+
     // DEC-339: reuse the previous snapshot's unchanged entries and postings.
     let mut previous = if force || !replacing_existing {
         None
@@ -128,6 +155,13 @@ pub fn create_index(
                 )
             })
     };
+    // DEC-414: decide a no-op before the postings are decoded, the entries
+    // cloned or the graph built.
+    if let Some(prev) = previous.as_ref()
+        && let Some(no_op) = early_no_op(prev, &walked, default_language)
+    {
+        return Ok(no_op_outcome(&index_path, &no_op));
+    }
     let mut old_bm25 = previous.as_mut().and_then(SnapshotIndex::take_bm25_index);
     if old_bm25.is_none() {
         previous = None;
@@ -143,7 +177,7 @@ pub fn create_index(
     let reuse = |full: &Path, rel: &str| -> Option<IndexEntry> {
         let entry = reusable_entry(previous.as_ref()?, full, rel, default_language)?;
         reused.fetch_add(1, Ordering::Relaxed);
-        Some(entry)
+        Some(entry.clone())
     };
 
     // Build the scanned index
@@ -164,14 +198,7 @@ pub fn create_index(
     // Collect, rather than stream, the per-file diagnostics (iter-265,
     // DEC-278): `results.warnings` already carries the count, and the
     // end-of-run summary line names where to see the details.
-    for w in &build.warnings {
-        let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
-            hyalo_core::warn::SkipKind::InvalidUtf8
-        } else {
-            hyalo_core::warn::SkipKind::Frontmatter
-        };
-        hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
-    }
+    record_warnings(&build.warnings);
 
     // Build the BM25 inverted index from tokenized entries (if any have
     // tokens), or patch the previous postings with the re-scanned documents.
@@ -197,110 +224,11 @@ pub fn create_index(
         None => Bm25InvertedIndex::build_from_entries(build.index.entries()),
     };
 
-    // iter-261 (BUG-5, BUG-6): record the vault's attachments alongside the
-    // notes so an `--index` run resolves `![[img.png]]` and `[[Books.base]]`
-    // exactly as a disk run does. A failed walk degrades to "no attachments",
-    // which is the pre-iter-261 behaviour, not an error.
-    let attachments = discovery::discover_attachments(dir).unwrap_or_default();
     let file_count = build.index.entries().len();
 
-    // iter-313: a rerun that changed nothing — every entry reused verbatim,
-    // nothing removed, and the attachment list unchanged — used to rewrite
-    // the whole snapshot anyway (141 MB on MDN, 1.8-4.6 s for zero new
-    // information). `force` already skips loading the previous snapshot
-    // (short-circuited above), so this is the complementary half: skip the
-    // *write* when reusing it produced byte-for-byte the same set of
-    // documents it already held. `previous` is only `Some` here when its
-    // entries and BM25 postings were actually reused (see the `old_bm25`
-    // fallback to `None` above), so this cannot fire on a first build or a
-    // forced rebuild.
-    //
-    // Review round (PR #379): `reused == file_count` alone is not enough —
-    // it is also true when a file silently dropped out of `entries` (broken
-    // frontmatter: still "discovered" on disk, so not counted in `removed`,
-    // but no longer scannable), which would keep a stale entry under a
-    // skipped write. `prev.entries().len() == file_count` catches that: a
-    // dropped entry always shrinks `file_count` below what the previous
-    // snapshot held. The current run's own frontmatter-skip list, and the
-    // `[scan] exclude`/gitignore counters this walk just computed, must also
-    // match the previous header's — each is replayed verbatim by `summary
-    // --index` and friends instead of being recomputed, so a header a
-    // skipped write left behind must still describe the vault exactly, not
-    // just its entry count. And the cheap directory-mtime probe (DEC-280)
-    // must itself be clean: if a directory moved (a file added/removed/
-    // renamed anywhere, even one that nets back to the same entry set, e.g.
-    // `mkdir x; rmdir x`) since this snapshot's `created_at`, skip the
-    // no-op and fall through to a real write instead — otherwise `created_at`
-    // would never advance, `snapshot_drift`'s tree-moved check would stay
-    // permanently tripped (an extra missing-files walk on every future
-    // `--index` read, forever), and the on-disk file's own mtime would stay
-    // behind the vault's, making the stale-index hint fire forever even
-    // though every rerun keeps correctly finding nothing to do.
-    let current_skipped: BTreeSet<&str> = build
-        .warnings
-        .iter()
-        .filter(|w| w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE)
-        .map(|w| w.rel_path.as_str())
-        .collect();
-    let current_scan_excluded = discovery::scan_excluded_count() as u64;
-    let current_scan_exclude = discovery::scan_exclude_patterns();
-    let current_gitignore_dropped = discovery::gitignore_dropped_count() as u64;
-    let no_op = !force
-        && replacing_existing
-        && !rebuilt
-        && removed == 0
-        && reused == file_count
-        && previous.as_ref().is_some_and(|prev| {
-            let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
-            prev.entries().len() == file_count
-                && prev.attachments() == attachments.as_slice()
-                && prev_skipped == current_skipped
-                && prev.scan_excluded() == current_scan_excluded
-                && prev.scan_exclude() == current_scan_exclude
-                && prev.gitignore_dropped() == current_gitignore_dropped
-                // W2 (iter-327): the file set is what the `[scan] include`
-                // globs and the ignore files say, so a header written under
-                // others must be rewritten even when every entry matches.
-                && prev
-                    .build_info()
-                    .refusal(&hyalo_core::index::RunBuild {
-                        vault_dir: &vault_dir_str,
-                        site_prefix,
-                        skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
-                        frontmatter_link_props,
-                        scan_include: &discovery::scan_include_patterns(),
-                    })
-                    .is_none()
-                // DEC-368: the shared rule, so a slow publish tail is not a
-                // moved tree on every later run.
-                && !hyalo_core::index::tree_moved(prev, dir)
-        });
-
-    if no_op {
-        let report = crate::commands::apply::ApplyReport {
-            paths: vec![crate::commands::apply::PathEffect {
-                file: index_path.display().to_string(),
-                state: crate::commands::apply::EffectState::Unchanged,
-                error: None,
-                category: None,
-            }],
-            index: crate::commands::apply::IndexDisposition::NotUsed,
-            index_error: None,
-        };
-        let result = CreateIndexResult {
-            path: index_path.display().to_string(),
-            files_indexed: file_count,
-            warnings: build.warnings.len(),
-            note: Some("nothing changed since the last create-index — snapshot left untouched"),
-            reused,
-            refreshed: 0,
-            skipped: files.len().saturating_sub(file_count),
-            removed,
-            rebuilt,
-            written: false,
-        };
-        return Ok(CommandOutcome::success(output_value(&result)).with_apply_report(report));
-    }
+    // A rerun that changed nothing never gets here: `early_no_op` (iter-313,
+    // DEC-361, DEC-414) answered it before any of the work above. Everything
+    // that reaches this point wrote something new, so the snapshot is saved.
 
     // Save the snapshot (with the persisted BM25 index when available).
     let publication = SnapshotIndex::save_with_attachments_observed(
@@ -413,12 +341,15 @@ struct CreateIndexResult<'a> {
 /// The previous snapshot's entry for `rel` when it still describes the file:
 /// same size and mtime, and — for a tokenized entry — the current tokenizer
 /// and the language this run would stem it with.
-fn reusable_entry(
-    previous: &SnapshotIndex,
+///
+/// Borrowed (DEC-414): the early no-op asks this of every file and must not
+/// clone the answer; the incremental build clones it only when it reuses it.
+fn reusable_entry<'a>(
+    previous: &'a SnapshotIndex,
     full: &Path,
     rel: &str,
     default_language: Option<&str>,
-) -> Option<IndexEntry> {
+) -> Option<&'a IndexEntry> {
     let entry = previous.get(rel)?;
     let meta = std::fs::metadata(full).ok()?;
     let mtime = meta.modified().ok()?;
@@ -446,7 +377,223 @@ fn reusable_entry(
             return None;
         }
     }
-    Some(entry.clone())
+    Some(entry)
+}
+
+/// What this run found on disk. Both no-op checks compare the previous
+/// snapshot against exactly this, so they cannot disagree about a fact.
+struct Walked<'a> {
+    dir: &'a Path,
+    /// Every discovered note, `(full path, vault-relative path)`.
+    files: &'a [(PathBuf, String)],
+    attachments: &'a [String],
+    vault_dir: &'a str,
+    site_prefix: Option<&'a str>,
+    frontmatter_link_props: Option<&'a [String]>,
+    scan_excluded: u64,
+    scan_exclude: &'a [String],
+    gitignore_dropped: u64,
+}
+
+/// The figures a no-op rerun reports.
+struct NoOp {
+    file_count: usize,
+    warnings: usize,
+    skipped: usize,
+    reused: usize,
+    removed: usize,
+    rebuilt: bool,
+}
+
+/// The result of a rerun that left the snapshot untouched.
+fn no_op_outcome(index_path: &Path, no_op: &NoOp) -> CommandOutcome {
+    let report = crate::commands::apply::ApplyReport {
+        paths: vec![crate::commands::apply::PathEffect {
+            file: index_path.display().to_string(),
+            state: crate::commands::apply::EffectState::Unchanged,
+            error: None,
+            category: None,
+        }],
+        index: crate::commands::apply::IndexDisposition::NotUsed,
+        index_error: None,
+    };
+    let result = CreateIndexResult {
+        path: index_path.display().to_string(),
+        files_indexed: no_op.file_count,
+        warnings: no_op.warnings,
+        note: Some("nothing changed since the last create-index — snapshot left untouched"),
+        reused: no_op.reused,
+        refreshed: 0,
+        skipped: no_op.skipped,
+        removed: no_op.removed,
+        rebuilt: no_op.rebuilt,
+        written: false,
+    };
+    CommandOutcome::success(output_value(&result)).with_apply_report(report)
+}
+
+/// Whether `prev`'s header still describes the vault this run walked, given
+/// the unparsable notes `current_skipped` and the entry count `file_count`
+/// the run would write (DEC-361, DEC-368, iter-327 W2).
+///
+/// Review round (PR #379): `reused == file_count` alone is not enough — a
+/// file that silently dropped out of the entries (broken frontmatter: still
+/// "discovered", so not `removed`, but no longer scannable) keeps a stale
+/// entry under a skipped write; `prev.entries().len() == file_count` catches
+/// it. The run's own frontmatter-skip list and the `[scan] exclude`/gitignore
+/// counters must match the previous header's too: each is replayed verbatim
+/// by `summary --index` and friends instead of being recomputed, so a header a
+/// skipped write leaves behind must still describe the vault exactly. And the
+/// cheap directory-mtime probe (DEC-280) must be clean: if a directory moved
+/// since this snapshot's `created_at` — even one that nets back to the same
+/// entry set, e.g. `mkdir x; rmdir x` — a no-op would leave `created_at`
+/// behind the vault forever, tripping the stale-index hint on every read.
+fn header_still_describes(
+    prev: &SnapshotIndex,
+    walked: &Walked<'_>,
+    current_skipped: &BTreeSet<&str>,
+    file_count: usize,
+) -> bool {
+    let prev_skipped: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
+    prev.entries().len() == file_count
+        && prev.attachments() == walked.attachments
+        && prev_skipped == *current_skipped
+        && prev.scan_excluded() == walked.scan_excluded
+        && prev.scan_exclude() == walked.scan_exclude
+        && prev.gitignore_dropped() == walked.gitignore_dropped
+        // W2 (iter-327): the file set is what the `[scan] include` globs and
+        // the ignore files say, so a header written under others must be
+        // rewritten even when every entry matches.
+        && prev
+            .build_info()
+            .refusal(&hyalo_core::index::RunBuild {
+                vault_dir: walked.vault_dir,
+                site_prefix: walked.site_prefix,
+                skip_code_blocks: hyalo_core::bm25::search_settings().skip_code_blocks,
+                frontmatter_link_props: walked.frontmatter_link_props,
+                scan_include: &discovery::scan_include_patterns(),
+            })
+            .is_none()
+        // DEC-368: the shared rule, so a slow publish tail is not a moved
+        // tree on every later run.
+        && !hyalo_core::index::tree_moved(prev, walked.dir)
+}
+
+/// DEC-414: decide that nothing changed before doing any of the work that only
+/// a change needs — decoding the postings, cloning every entry into a new
+/// index, resolving the link graph. `None` means "not provably a no-op": the
+/// caller takes the incremental path unchanged and this function has recorded
+/// nothing.
+///
+/// A no-op needs exactly what the late check needs: every discovered note has
+/// an entry that [`reusable_entry`] accepts (size, mtime, the racily-clean
+/// rule, tokenizer and language), the previous entries are those notes and no
+/// others, the notes the previous build could not parse are still unparsable,
+/// and [`header_still_describes`].
+fn early_no_op(
+    prev: &SnapshotIndex,
+    walked: &Walked<'_>,
+    default_language: Option<&str>,
+) -> Option<NoOp> {
+    let skipped_before: BTreeSet<&str> = prev.skipped().iter().map(String::as_str).collect();
+    let file_count = prev.entries().len();
+    // An added or removed note changes this count: no stat needed to know.
+    if walked.files.len() != file_count + skipped_before.len() {
+        return None;
+    }
+    let reusable = |(full, rel): &(PathBuf, String)| {
+        reusable_entry(prev, full, rel, default_language).is_some()
+    };
+    if !walked
+        .files
+        .par_iter()
+        .all(|f| reusable(f) || skipped_before.contains(f.1.as_str()))
+    {
+        return None;
+    }
+    // The only notes without a reusable entry are the ones the previous build
+    // could not parse; each must still fail to, and no other may.
+    let unparsable: Vec<(PathBuf, String)> = if skipped_before.is_empty() {
+        Vec::new()
+    } else {
+        walked
+            .files
+            .iter()
+            .filter(|f| skipped_before.contains(f.1.as_str()) && !reusable(f))
+            .cloned()
+            .collect()
+    };
+    if unparsable.len() != skipped_before.len() {
+        return None;
+    }
+    let rescan = if unparsable.is_empty() {
+        None
+    } else {
+        let build = ScannedIndex::build(
+            &unparsable,
+            walked.site_prefix,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: true,
+                default_language,
+                frontmatter_link_props: walked.frontmatter_link_props,
+            },
+        )
+        .ok()?;
+        if !build.index.entries().is_empty() {
+            return None;
+        }
+        Some(build)
+    };
+    let rescan_warnings = rescan.as_ref().map_or(&[][..], |b| b.warnings.as_slice());
+    let current_skipped: BTreeSet<&str> = rescan_warnings
+        .iter()
+        .filter(|w| w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE)
+        .map(|w| w.rel_path.as_str())
+        .collect();
+    if !header_still_describes(prev, walked, &current_skipped, file_count) {
+        return None;
+    }
+    // The one integrity check a no-op keeps (DEC-414): the postings are not
+    // decoded, but a section that is not well-formed MessagePack to the end of
+    // the file (a torn copy) still sends the run down the rebuilding path.
+    if !prev.bm25_section_is_well_formed() {
+        return None;
+    }
+    // The late path reports these through `record_skip` before it decides.
+    record_warnings(rescan_warnings);
+    let mut warnings = rescan_warnings.len();
+    for entry in prev.entries() {
+        if hyalo_core::index::reused_entry_is_invalid_utf8(entry, true) {
+            hyalo_core::warn::record_skip(
+                entry.rel_path.as_str(),
+                hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE,
+                hyalo_core::warn::SkipKind::InvalidUtf8,
+            );
+            warnings += 1;
+        }
+    }
+    Some(NoOp {
+        file_count,
+        warnings,
+        skipped: walked.files.len().saturating_sub(file_count),
+        reused: file_count,
+        removed: 0,
+        rebuilt: false,
+    })
+}
+
+/// Record per-file build diagnostics for the end-of-run summary (iter-265,
+/// DEC-278).
+fn record_warnings(warnings: &[hyalo_core::index::IndexWarning]) {
+    for w in warnings {
+        let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
+            hyalo_core::warn::SkipKind::InvalidUtf8
+        } else {
+            hyalo_core::warn::SkipKind::Frontmatter
+        };
+        hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
+    }
 }
 
 /// Patch `bm25` so it holds exactly the tokenized documents of `entries`:

@@ -39,3 +39,9 @@ is not attributed: the sampled stack is dominated by `malloc` under
 `ScannedIndex::build_reusing`, but the release binary is stripped and no single
 cause was confirmed. Candidate fixes: decode the postings only when something was
 re-scanned; move entries out of the previous snapshot instead of cloning them.
+
+**Done for the no-op, 2026-11-08 (iteration 339, DEC-414):** the decision is made before any of
+that work, so a rerun that changed nothing decodes no postings, clones no entry and builds no graph
+(MDN: wall -23% to -28%, user -41%, 526 MB to 226 MB). Most of the system time was the two
+directory walks, which remain (about 80% of what is left). Still open: moving entries out of the
+previous snapshot instead of cloning them, which only matters for a rerun that changed something.

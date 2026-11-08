@@ -26,6 +26,17 @@ and this project adheres to
 
 ### Changed
 
+- Faster, with identical answers: a `create-index` rerun that changed nothing now
+  decides so before it decodes the search postings, clones the entries or resolves the
+  link graph (DEC-414). On MDN's 14,375 notes the no-op takes about 25% less wall time
+  (22.6% and 27.8% in two interleaved sets on a busy machine), 41% less CPU and less
+  than half the memory (526 MB to 226 MB); the result and the untouched snapshot are
+  byte-identical, and a rerun that does change something is level. A no-op no longer
+  re-validates the postings beyond their MessagePack framing, so a torn or truncated
+  snapshot still rebuilds, while a single damaged byte that leaves the framing intact
+  is left alone: the three warnings about an unreadable or invalid BM25 section now end
+  with "`hyalo create-index --force` rebuilds it".
+
 - Faster, with identical answers: the per-file drift check that unscoped or
   graph-reading `--index` reads (`find`, `backlinks`, `summary`) run, drifted or not
   (DEC-302), now calls `stat` once per indexed file instead of twice, about 0.02 s

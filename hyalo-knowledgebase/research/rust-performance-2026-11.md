@@ -4,7 +4,7 @@ type: research
 date: 2026-11-07
 tags: [research, performance, allocations, index, lint]
 status: completed
-related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]", "[[iterations/iteration-335-fast-hasher]]"]
+related: ["[[iterations/iteration-330-remove-repeated-work]]", "[[decision-log]]", "[[iterations/iteration-335-fast-hasher]]", "[[iterations/iteration-339-create-index-early-noop]]"]
 ---
 
 # Rust performance audit, November 2026
@@ -297,6 +297,42 @@ The saving is sys time, about 0.02 s, which matches the order of magnitude of 14
 `stat` calls. Wall falls about 8% on `backlinks` and about 14% on `find`, short of the
 bar, and the `find` command measured here (`--count`) is not iteration 335's. Output was
 byte-identical on both commands.
+
+## Deciding a no-op `create-index` early
+
+Experiment 4, run on 2026-11-08 against criteria fixed beforehand; the full tables and the
+corruption evidence are in [[iterations/iteration-339-create-index-early-noop]] and
+[[decision-log]] DEC-414. Verdict: **kept**, the one experiment of the series that cleared
+its bar. It is also the first one aimed at a write command and not at a read.
+
+- The 2026-11-05 backlog measurement ([[backlog/regression-dogfood-2026-10-05-leftovers]]:
+  0.78 s user, 2.5 s sys, 550 MB for a no-op on MDN) was right about the cause. A no-op
+  decoded the whole postings section, cloned every entry twice and rebuilt the link graph
+  before it found out that nothing had changed. The change asks first: walk, `stat` every
+  note, read the header and entries, compare. Measured, MDN (14,375 notes), interleaved, the
+  order alternating, snapshot inside an APFS clone per binary: wall median -22.6% (5 runs,
+  load 8.5 to 9.1) and -27.8% (7 runs, load 9.2 to 12.1), user -41%, peak resident set
+  525 MB to 226 MB. A rerun after one `touch` (the path that still rewrites the snapshot)
+  is level: wall +0.4%, user +2.0%.
+- Wall time is the noisy column: `sys` swung between 3.3 s and 8.5 s for the same binary
+  on a loaded machine, because a no-op is two directory walks and 14,375 `stat` calls
+  fanned out over rayon. The stable signals are user time and the resident set, which
+  match the allocation work that was removed. Lesson for the series: the same sampled
+  share that did not become wall time in experiments 1 to 3 (teardown, allocator, hasher)
+  did here, because the work removed was a block of the command, not a fraction of every
+  instruction.
+- What remains is mostly the walks: about 80% of the 0.6 to 0.9 s (temporary phase
+  timing: note walk 0.26 to 0.56 s, attachment walk 0.2 s, snapshot load 90 ms, per-note
+  `stat` 14 ms, header and `tree_moved` 17 ms). The next saving, untried, is one walk for
+  notes and attachments, or loading the snapshot on a second thread while the walks run.
+- Correctness was the real cost. The old no-op validated the postings by decoding them, so
+  a damaged section became a rebuild. The early path cannot do that for free (the full
+  decode gives most of the saving back: +0.35 s user, +190 MB). It keeps a MessagePack
+  framing walk, +0.18 s user and no memory, which turned the wall change from -44% to
+  -30% in a five-run side experiment and caught every truncation and every multi-byte
+  damage tried on MDN's snapshot, but not a single flipped byte inside a field name. The
+  three reader warnings now name `create-index --force` as the cure for what the walk
+  cannot see.
 
 ## Method note
 
