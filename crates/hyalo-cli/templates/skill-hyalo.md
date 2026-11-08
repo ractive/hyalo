@@ -623,6 +623,17 @@ Flags that only `--help` mentions, worth knowing:
   candidates" and `links fix`'s `ambiguous_links` name the same files — one computation,
   `--index` and disk alike. Select them with
   `hyalo find --fields links --limit 0 --jq '.results[] as $f | $f.links[] | select(.ambiguous) | "\($f.file):\(.line) \(.target) \(.candidates | join(", "))"'`.
+- **A note can declare the URLs that resolve to it** (DEC-415, iter-340): with
+  `[links] redirect_property = "redirect_from"` (unset by default, no flag) a site-absolute link
+  (`[x](/old/url)`, `[[/old/url]]`) that no file, directory index or stem answers resolves to the
+  note listing that path under the property (a string or a list). The `site_prefix`, trailing `/`,
+  `.md` and a final `/index` are dropped from value and link alike, case folds as `[links]
+  case_insensitive` says, and a value with a `#fragment` is ignored. A real file at the path always
+  wins; a path two notes list is ambiguous (`ambiguous: true`, `candidates`, still broken,
+  HYALO006 "matches N candidates"). The link carries `via: "redirect"` and is a graph edge;
+  `links fix` and `mv` leave it alone, and `--index` builds the map from the properties it holds,
+  so changing the setting needs no rebuild. `hyalo config --jq '.results.links.redirect_property'`
+  reports it.
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the

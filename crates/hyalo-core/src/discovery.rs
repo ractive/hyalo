@@ -345,6 +345,28 @@ pub fn set_link_aliases(enabled: bool) {
     }
 }
 
+/// Process-wide `[links] redirect_property` (DEC-415): the frontmatter property
+/// whose values declare the URL paths that resolve to a note. `None` (the
+/// default) means no note declares anything and the redirect step never runs.
+static LINK_REDIRECT_PROPERTY: OnceLock<Option<String>> = OnceLock::new();
+
+/// Install the effective `[links] redirect_property` for this process.
+///
+/// Idempotent-once, like [`set_link_aliases`]: the CLI calls it once after
+/// config resolution, before any command builds a case index or a link graph.
+pub fn set_link_redirect_property(property: Option<&str>) {
+    if install_once(&LINK_REDIRECT_PROPERTY, property.map(str::to_owned)) {
+        warn_ignored_global("[links] redirect_property");
+    }
+}
+
+/// The frontmatter property that declares redirect URL paths, when the vault
+/// configured one.
+#[must_use]
+pub fn link_redirect_property() -> Option<&'static str> {
+    LINK_REDIRECT_PROPERTY.get().and_then(Option::as_deref)
+}
+
 /// Install `value` in a first-call-wins cell. Returns `true` when the cell
 /// already held a *different* value, which the caller reports (C-11).
 pub(crate) fn install_once<T: PartialEq>(cell: &OnceLock<T>, value: T) -> bool {
@@ -2106,6 +2128,7 @@ pub fn resolve_link_from_source(
             target,
             crate::catalog::ResolutionOptions {
                 aliases: index.aliases_enabled(),
+                redirects: index.redirects_enabled(),
                 site_prefix,
             },
             |candidate| {
@@ -3267,10 +3290,13 @@ fn resolve_target_inner(
     None
 }
 
-/// Visitor that reads a file's frontmatter `aliases:` and stops before the
-/// body — the cheapest scan the scanner offers (iter-272 Part B).
+/// Visitor that reads a file's frontmatter `aliases:` (and, when
+/// `[links] redirect_property` is set, its declared redirect paths) and stops
+/// before the body — the cheapest scan the scanner offers (iter-272 Part B).
 struct AliasVisitor {
     aliases: Vec<String>,
+    redirect_property: Option<&'static str>,
+    redirects: Vec<String>,
 }
 
 impl crate::scanner::FileVisitor for AliasVisitor {
@@ -3279,6 +3305,9 @@ impl crate::scanner::FileVisitor for AliasVisitor {
         props: indexmap::IndexMap<String, serde_json::Value>,
     ) -> crate::scanner::ScanAction {
         self.aliases = crate::filter::extract_aliases(&props);
+        if let Some(property) = self.redirect_property {
+            self.redirects = crate::filter::extract_redirects(&props, property);
+        }
         // Nothing below the frontmatter matters, so the body is never read.
         crate::scanner::ScanAction::Stop
     }
@@ -3290,6 +3319,38 @@ impl crate::scanner::FileVisitor for AliasVisitor {
     }
 }
 
+/// What one note's frontmatter declares as names for itself: its `aliases:`
+/// (DEC-296) and the values of `[links] redirect_property` (DEC-415).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DeclaredNames {
+    /// The note's `aliases:`.
+    pub aliases: Vec<String>,
+    /// The URL paths it declares under the configured redirect property; empty
+    /// when the vault sets none.
+    pub redirects: Vec<String>,
+}
+
+/// Read one file's declared names without reading its body.
+///
+/// Empty for a file with no frontmatter, none of the keys, or unparseable
+/// YAML — the maps are an optimisation of resolution, never a reason to fail a
+/// command.
+#[must_use]
+pub fn read_declared_names(path: &Path) -> DeclaredNames {
+    let mut visitor = AliasVisitor {
+        aliases: Vec::new(),
+        redirect_property: link_redirect_property(),
+        redirects: Vec::new(),
+    };
+    match crate::scanner::scan_file_multi(path, &mut [&mut visitor]) {
+        Ok(()) => DeclaredNames {
+            aliases: visitor.aliases,
+            redirects: visitor.redirects,
+        },
+        Err(_) => DeclaredNames::default(),
+    }
+}
+
 /// Read one file's declared frontmatter `aliases:` without reading its body.
 ///
 /// Returns an empty vec for a file with no frontmatter, no `aliases:` key, or
@@ -3297,17 +3358,12 @@ impl crate::scanner::FileVisitor for AliasVisitor {
 /// reason to fail a command.
 #[must_use]
 pub fn read_aliases(path: &Path) -> Vec<String> {
-    let mut visitor = AliasVisitor {
-        aliases: Vec::new(),
-    };
-    match crate::scanner::scan_file_multi(path, &mut [&mut visitor]) {
-        Ok(()) => visitor.aliases,
-        Err(_) => Vec::new(),
-    }
+    read_declared_names(path).aliases
 }
 
-/// Populate `idx` with every note's declared frontmatter `aliases:` by
-/// scanning the vault's frontmatter (iter-272 Part B, DEC-296).
+/// Populate `idx` with every note's declared frontmatter `aliases:` — and its
+/// `[links] redirect_property` values, when set (DEC-415) — by scanning the
+/// vault's frontmatter (iter-272 Part B, DEC-296).
 ///
 /// Only the frontmatter of each file is read — the visitor stops the scan the
 /// moment the properties are parsed — so the pass costs one `open` + one short
@@ -3327,28 +3383,56 @@ pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
     // the alias map — and therefore every ambiguity verdict — is
     // deterministic.
     #[cfg(not(miri))]
-    let collected: Vec<(String, Vec<String>)> = {
+    let collected: Vec<(String, DeclaredNames)> = {
         use rayon::prelude::*;
         files
             .par_iter()
             .filter_map(|file| {
-                let aliases = read_aliases(file);
-                (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+                let declared = read_declared_names(file);
+                (declared != DeclaredNames::default()).then(|| (relative_path(dir, file), declared))
             })
             .collect()
     };
     #[cfg(miri)]
-    let collected: Vec<(String, Vec<String>)> = files
+    let collected: Vec<(String, DeclaredNames)> = files
         .iter()
         .filter_map(|file| {
-            let aliases = read_aliases(file);
-            (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+            let declared = read_declared_names(file);
+            (declared != DeclaredNames::default()).then(|| (relative_path(dir, file), declared))
         })
         .collect();
 
-    for (rel, aliases) in collected {
-        idx.insert_aliases(&rel, aliases);
+    for (rel, declared) in collected {
+        idx.insert_aliases(&rel, declared.aliases);
+        idx.insert_redirects(&rel, declared.redirects);
     }
+}
+
+/// Whether `target`, written in `source_rel`, resolves only because a note
+/// declares its URL path under `[links] redirect_property` (DEC-415). Labels
+/// the link `via: "redirect"`. `false` when the index holds no redirect, for a
+/// target any earlier step resolves, and for a path two notes claim.
+#[must_use]
+pub fn resolves_via_redirect(
+    source_rel: &str,
+    kind: crate::links::LinkKind,
+    target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> bool {
+    case_index.is_some_and(|index| {
+        crate::catalog::resolves_via_redirect(
+            index,
+            source_rel,
+            kind,
+            target,
+            crate::catalog::ResolutionOptions {
+                aliases: index.aliases_enabled(),
+                redirects: index.redirects_enabled(),
+                site_prefix,
+            },
+        )
+    })
 }
 
 /// Whether `target`, written in `source_rel`, resolves only because some note

@@ -23,6 +23,18 @@ and this project adheres to
   every 200 files and `lint --fix: M/M files, done` at the end, like the other
   bulk write phases; `-q` silences it (DEC-383).
 - `links fix` and `mv` read a link target one way (DEC-384): a path suffix names a note (`[[x/note]]` for `a/x/note.md`; two notes sharing it are ambiguous) and `[[./x]]`/`[[../x]]` are relative to the source folder, so an in-vault `../x` is no longer `out_of_vault`.
+- `[links] redirect_property = "redirect_from"` (unset by default, no flag)
+  resolves a site-absolute link (`[x](/old/url)`, `[[/old/url]]`) to the note
+  that lists that URL path under the property, as a last resort after every
+  file, directory-index, stem and alias match, so a real file always wins. The
+  link carries `via: "redirect"` and is a graph edge; a path two notes list is
+  ambiguous (DEC-374); `links fix` and `mv` leave such a link alone. A value
+  with a `#fragment` or `?query` names part of a page and is ignored. On GitHub
+  Docs it resolves 5,535 of the 6,082 broken markdown links (broken links 7,406
+  to 1,871; 237 of those now report a broken `#anchor`). `--index` builds the
+  map from the properties a snapshot already holds, so changing the setting
+  needs no rebuild and no format bump. `hyalo config` reports
+  `links.redirect_property` (DEC-415).
 
 ### Changed
 
@@ -210,6 +222,12 @@ and this project adheres to
 - `links fix` text names the case-mismatch, relocation and alias fixes plain `--apply` also writes beside `Fixable:`; a markdown link's `suggested_fragment` is the GFM slug; the fuzzy candidacy gate skips pairs an exact character-count bound rules out (DEC-385, DEC-386).
 - Move to serde-saphyr 2.1.1; main moves off the yanked 2.1.0 (published releases were never affected). Parsed frontmatter and the write path are byte-identical to 2.1.0 on every corpus and edge case checked, so the snapshot format is unchanged. `cargo deny` now fails on a yanked crate.
 - Faster, with identical answers: `--index` resolves the link graph on first read instead of twice per load, and a named read (`backlinks`, `read`, `find --file`, `lint FILE`) leaves the entry, the graph and the search postings alone when the note has not changed (`tags --index` on MDN 3.11M to 0.95M allocations, `backlinks --index` 6.81M to 2.02M, DEC-406). `lint` parses markdown once per note for the 26 stock rules that cannot tell the difference, and hands MD034 only the lines that hold a URL scheme (MDN 331.89M to 34.40M allocations with the default rules, 483.5M to 84.4M with every stock rule on, DEC-407); every other rule runs as before, and an unranked `find --index` no longer resolves the graph (`find --file`, 6.74M to 0.86M). The alias pre-pass no longer reads note bodies, and `create-index` and disk search allocate 2.3M fewer terms. No format change.
+- `hyalo-core` public API: `catalog::ResolutionOptions` gains a `redirects:
+  bool` field (a writer sets it to `false`), `CaseInsensitiveIndex` gains
+  `insert_redirects`, `lookup_redirect`, `redirect_ambiguity` and
+  `redirects_enabled`, and `discovery` gains `set_link_redirect_property`,
+  `link_redirect_property`, `read_declared_names`/`DeclaredNames` and
+  `resolves_via_redirect` (DEC-415).
 
 ### Fixed
 

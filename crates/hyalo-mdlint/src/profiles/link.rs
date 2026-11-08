@@ -234,9 +234,16 @@ pub fn check_broken_links(
             // `find`'s `ambiguous`/`candidates` link fields and `mv`'s
             // `skipped_ambiguous`. Only a wikilink can be a bare-stem
             // reference; a markdown destination is a path.
+            //
+            // DEC-415: a site-absolute target of either kind is ambiguous when
+            // two notes declare its URL path under `[links] redirect_property`.
             let candidates = (link.kind == LinkKind::Wikilink)
                 .then(|| ctx.case_index.ambiguous_candidates(&link.target))
-                .flatten();
+                .flatten()
+                .or_else(|| {
+                    ctx.case_index
+                        .redirect_ambiguity(&link.target, ctx.site_prefix.as_deref())
+                });
             let message = match candidates {
                 None => format!(
                     "broken {kind}: `{}` does not resolve to a vault file",

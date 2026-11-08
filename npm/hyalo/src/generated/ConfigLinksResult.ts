@@ -17,6 +17,10 @@ frontmatter_properties: Array<string> | null,
  */
 aliases: boolean,
 /**
+ * Frontmatter property declaring URL paths that resolve to a note, or null.
+ */
+redirect_property: string | null,
+/**
  * Effective case resolution mode.
  */
 case_insensitive: string, };

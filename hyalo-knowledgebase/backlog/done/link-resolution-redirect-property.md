@@ -2,7 +2,7 @@
 type: backlog
 title: "[links] redirect_property for GitHub-Docs-style redirect_from resolution"
 date: 2026-09-05
-status: planned
+status: completed
 priority: low
 origin: "iter-272 (PR #320) carry-over sweep, 2026-09-05, DEC-300"
 ---
@@ -48,16 +48,16 @@ shape. Whoever picks this up should:
 
 ## Acceptance criteria
 
-- [ ] A DEC records the path-keyed map's precedence rules against directory-index resolution
+- [x] A DEC records the path-keyed map's precedence rules against directory-index resolution
       and against a real file at the same path, before any code is written.
-- [ ] `[links] redirect_property = "<name>"` (opt-in, off by default) resolves a link whose
+- [x] `[links] redirect_property = "<name>"` (opt-in, off by default) resolves a link whose
       target matches a declared value of that property in some file's frontmatter, the same way
       an alias does; `via: "redirect"` (or the chosen name) on the resolved `LinkInfo`.
-- [ ] `links fix` does not propose a rewrite for a target that resolves via redirect.
-- [ ] Measured on the GitHub Docs corpus that motivated this: the 1569/1624 figure drops to
+- [x] `links fix` does not propose a rewrite for a target that resolves via redirect.
+- [x] Measured on the GitHub Docs corpus that motivated this: the 1569/1624 figure drops to
       (near) zero for links whose only defect was pointing at a declared `redirect_from:` value.
-- [ ] If staying backlog (won't-do): a DEC amendment records why, with the property name
-      confirmed or ruled out.
+- [x] If staying backlog (won't-do): a DEC amendment records why, with the property name
+      confirmed or ruled out. (Not applicable: implemented in iteration 340, see below.)
 
 ## Plan reconciliation — iteration 287 (2026-09-07)
 
@@ -69,3 +69,13 @@ configuration and link output in the same-binary API fixtures, rebuild and sync
 the Pi companions, and run both freshness gates. This adds contract maintenance
 to the proposed implementation; precedence decisions and corpus measurement
 remain required before this item can be completed.
+
+## Resolution — iteration 340 (2026-11-08)
+
+Implemented, opt-in: [[decision-log]] DEC-415, [[iterations/iteration-340-links-redirect-property]].
+The last criterion does not apply (the item did not stay in the backlog). On GitHub Docs the
+markdown-broken count falls from 6 082 to 547: 5 535 of the 5 536 links that equal a declared
+value resolve, one is ambiguous, and no previously resolved link changes. The property name
+`redirect_from` is confirmed against the corpus (about 9 700 values in 2 541 of 3 710 notes);
+MDN and the Obsidian Hub do not use it. The typed contracts (`LinkInfo.via`, `config().links`)
+were regenerated and the Pi companions synced.

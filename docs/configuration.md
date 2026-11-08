@@ -15,6 +15,7 @@ frontmatter = true                                    # every frontmatter [[wiki
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
 aliases = false                                       # opt in to resolving frontmatter `aliases:` as link targets
+redirect_property = "redirect_from"                       # frontmatter property whose values are URL paths that resolve to the note (default: unset)
 fuzzy_min_confidence = 0.8                            # confidence floor for links fix --apply-fuzzy (default: 0.8)
 
 [links.auto]
@@ -217,6 +218,45 @@ With `[links] aliases = true`, `[[Leah]]` written anywhere in the vault resolves
 
 The default is `aliases = false`: alias-written links remain unresolved and link repair can propose an explicit filename/title target without silently repointing them. Set `aliases = true` only for a workflow whose link resolver treats frontmatter aliases as targets.
 `hyalo config --jq '.results.links.aliases'` reports the effective value.
+
+### `[links] redirect_property` — URL paths that resolve to a note
+
+Static-site corpora such as GitHub Docs list every URL a page used to live at in its
+frontmatter, and links elsewhere still use those URLs:
+
+```yaml
+---
+title: Workflow syntax
+redirect_from:
+  - /actions/reference/workflow-syntax
+---
+```
+
+With `[links] redirect_property = "redirect_from"`, `[old](/actions/reference/workflow-syntax)`
+resolves to that note. Unset by default, so nothing changes until a vault names the property. The
+rules (DEC-415):
+
+- The property holds a string or a list of strings. A value is read like a **site-absolute** link
+  target: it starts with `/`, the `site_prefix` is stripped when it leads, trailing `/`, a `.md`
+  suffix and a final `/index` segment are dropped, and case folds as `[links] case_insensitive`
+  says. A value with a `#fragment` or `?query` names part of a page and is ignored.
+- Only a **site-absolute** target (`/old/url`, markdown or `[[/old/url]]`) asks the map; a relative
+  link or a bare `[[stem]]` names a file.
+- **A real file always wins.** The map is the last resort, after the path, `.md`, directory-index,
+  stem and alias steps, so a claim never repoints an existing link.
+- A path declared by **two** notes is ambiguous (`ambiguous: true`, sorted `candidates`, `path: null`,
+  still counted broken, HYALO006 "matches 2 candidates"). One note listing a path twice is not two
+  claimants.
+- A link resolved this way reports `via: "redirect"` and keeps its `kind`. It is a graph edge, so
+  `backlinks`, `--orphan`, `--dead-end`, `summary.links` and HYALO006 agree with
+  `find --fields links`; its `#fragment` is checked against the declaring note's headings.
+- `links fix` proposes nothing for it, and `mv` neither rewrites a link that names a redirect value
+  nor touches the moved note's own `redirect_from`; the declaration travels with the note, so the
+  link keeps resolving at the new path.
+- A snapshot (`--index`) builds the map from the properties it already stores, so it needs no
+  rebuild when the setting changes.
+
+`hyalo config --jq '.results.links.redirect_property'` reports the effective value.
 
 Under `"auto"`, hyalo detects case behaviour with **stat calls only**: it looks
 up an existing vault entry (or the vault directory itself) under a

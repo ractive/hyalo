@@ -79,6 +79,15 @@ pub struct CaseInsensitiveIndex {
     /// lookups have failed, so a real filename always wins, and an alias
     /// claimed by two notes is ambiguous rather than resolved.
     alias_map: HashMap<String, Vec<String>>,
+    /// Map from the folded, prefix-unstripped form of a declared redirect value
+    /// (`[links] redirect_property`, DEC-415) → the notes claiming it.
+    ///
+    /// Keyed by the form a value has *before* the site prefix is stripped, so
+    /// building it needs no prefix; [`Self::lookup_redirect`] applies the
+    /// prefix to the link it is asked about. Empty unless the vault sets the
+    /// property, and consulted last, only for a site-absolute target nothing
+    /// else resolved.
+    redirect_map: HashMap<String, Vec<RedirectClaim>>,
     /// Whether this index holds the complete discovered inventory (notes and
     /// attachments). Hidden paths may still be omitted by discovery; explicit
     /// hidden-path existence is checked separately without expanding the index.
@@ -95,6 +104,16 @@ pub struct CaseInsensitiveIndex {
     /// Invocation-local explicit hidden-path probes, separate from discovery
     /// maps so omitted files never become stems, aliases, or fuzzy candidates.
     explicit_paths: Arc<Mutex<ExplicitPathCache>>,
+}
+
+/// One note's claim on a URL path (DEC-415).
+#[derive(Debug, Clone)]
+struct RedirectClaim {
+    /// The value's reduced form as declared (no leading `/`, site prefix not
+    /// stripped), kept to check an exact match when case folding is off.
+    form: String,
+    /// The declaring note.
+    path: String,
 }
 
 type ExplicitPathCache = HashMap<(PathBuf, String, bool), Option<String>>;
@@ -143,6 +162,7 @@ impl CaseInsensitiveIndex {
             tail_map: HashMap::new(),
             case_insensitive_paths: false,
             alias_map: HashMap::new(),
+            redirect_map: HashMap::new(),
             complete: false,
             aliases_enabled: false,
             explicit_paths: Arc::default(),
@@ -169,6 +189,19 @@ impl CaseInsensitiveIndex {
             for path in paths {
                 projected.insert_aliases(destination_for(path).unwrap_or(path), [alias]);
             }
+        }
+        for (key, claims) in &self.redirect_map {
+            let moved = claims.iter().map(|claim| RedirectClaim {
+                form: claim.form.clone(),
+                path: destination_for(&claim.path)
+                    .unwrap_or(&claim.path)
+                    .to_owned(),
+            });
+            projected
+                .redirect_map
+                .entry(key.clone())
+                .or_default()
+                .extend(moved);
         }
         projected
     }
@@ -431,6 +464,120 @@ impl CaseInsensitiveIndex {
         !self.lookup_alias_all(alias).is_empty()
     }
 
+    /// Record the URL paths a note declares under `[links] redirect_property`
+    /// (DEC-415). `rel_path` is the declaring note, vault-relative with forward
+    /// slashes.
+    ///
+    /// A value is read like the target of a site-absolute link: it must start
+    /// with `/`, and is trimmed, percent-decoded, stripped of trailing `/`, of
+    /// a `.md` suffix and of a final `/index` segment. A value carrying a
+    /// `#fragment` or `?query` names a part of a page, not a page, and a value
+    /// with a `..` segment or nothing left is not a path: all of these are
+    /// ignored. The site prefix is *not* applied here; see
+    /// [`Self::lookup_redirect`].
+    pub fn insert_redirects<I, S>(&mut self, rel_path: &str, values: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for value in values {
+            let Some(form) = redirect_form(value.as_ref()) else {
+                continue;
+            };
+            let claims = self
+                .redirect_map
+                .entry(fold_key(&form).into_owned())
+                .or_default();
+            if claims
+                .iter()
+                .any(|claim| claim.path == rel_path && claim.form == form)
+            {
+                continue;
+            }
+            claims.push(RedirectClaim {
+                form,
+                path: rel_path.to_owned(),
+            });
+        }
+    }
+
+    /// Whether any note declares a redirect value, i.e. the vault set
+    /// `[links] redirect_property` and a note used it.
+    #[must_use]
+    pub fn redirects_enabled(&self) -> bool {
+        !self.redirect_map.is_empty()
+    }
+
+    /// The notes declaring the URL path a site-absolute link names, sorted and
+    /// without repeats (DEC-415). `raw` is the link's path portion as the
+    /// reader resolves it ([`crate::link_target::resolution_path`]); anything
+    /// that does not start with `/` names a file, not a URL, and finds none.
+    ///
+    /// A value and a link meet when they are the same URL path once the
+    /// `site_prefix` is stripped from each: the link's own stripped form, and
+    /// the stored values that carry the prefix themselves. Case folds exactly
+    /// when path lookups do ([`Self::set_case_insensitive_paths`]).
+    #[must_use]
+    pub fn lookup_redirect(&self, raw: &str, site_prefix: Option<&str>) -> Vec<&str> {
+        if self.redirect_map.is_empty() || !raw.starts_with('/') {
+            return Vec::new();
+        }
+        let site_prefix = site_prefix.filter(|prefix| !prefix.is_empty());
+        let Some(wanted) =
+            reduce_url_path(crate::link_graph::strip_site_prefix_ref(raw, site_prefix))
+        else {
+            return Vec::new();
+        };
+        let wanted_key = fold_key(wanted);
+        // The stored values that strip to `wanted`: itself, unless it begins
+        // with the prefix (which would strip further), and `wanted` with the
+        // prefix put back in front.
+        let mut buckets: Vec<String> = Vec::with_capacity(2);
+        if crate::link_graph::matching_site_prefix(wanted, site_prefix).is_none() {
+            buckets.push(wanted_key.as_ref().to_owned());
+        }
+        if let Some(prefix) = site_prefix {
+            buckets.push(fold_key(&format!("{prefix}/{wanted}")).into_owned());
+        }
+        let mut found: Vec<&str> = Vec::new();
+        for bucket in &buckets {
+            for claim in self.redirect_map.get(bucket).into_iter().flatten() {
+                let stripped = crate::link_graph::matching_site_prefix(&claim.form, site_prefix)
+                    .map_or(claim.form.as_str(), |head| &claim.form[head.len() + 1..]);
+                let same = if self.case_insensitive_paths {
+                    fold_key(stripped) == wanted_key
+                } else {
+                    stripped == wanted
+                };
+                if same {
+                    found.push(claim.path.as_str());
+                }
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    /// The notes a site-absolute link `target` is ambiguous between because
+    /// two or more declare its URL path (DEC-415, DEC-374), sorted and
+    /// vault-relative, or `None`. Like every ambiguity verdict it is asked only
+    /// of a link that resolved to nothing: a real file at the path outranks
+    /// the claims before this is asked.
+    #[must_use]
+    pub fn redirect_ambiguity(
+        &self,
+        target: &str,
+        site_prefix: Option<&str>,
+    ) -> Option<Vec<String>> {
+        if self.redirect_map.is_empty() {
+            return None;
+        }
+        let raw = crate::link_target::TargetParts::split(target).resolution_path();
+        let found = self.lookup_redirect(&raw, site_prefix);
+        (found.len() > 1).then(|| found.into_iter().map(str::to_owned).collect())
+    }
+
     /// The notes whose path ends in `/<target>.md` — a partially qualified
     /// wikilink target such as `x/note` for `a/x/note.md` (iter-322, C-1).
     /// `target` is path-form: it must contain a `/`, and a `.md` suffix is
@@ -619,6 +766,38 @@ impl CaseInsensitiveIndex {
     pub fn len(&self) -> usize {
         self.map.len()
     }
+}
+
+/// The form of a declared redirect value that is stored and compared
+/// (DEC-415): no leading `/`, reduced by [`reduce_url_path`]. `None` when the
+/// value is not a site-absolute URL path.
+fn redirect_form(value: &str) -> Option<String> {
+    let parts = crate::link_target::TargetParts::split(value.trim());
+    if !parts.query.is_empty() || !parts.fragment.is_empty() {
+        return None;
+    }
+    let path = parts.resolution_path();
+    let rest = path.strip_prefix('/')?;
+    reduce_url_path(rest).map(str::to_owned)
+}
+
+/// A URL path (leading `/` and site prefix already dropped) reduced to the page
+/// it names: trailing `/` dropped, then a `.md` suffix, then a final `/index`
+/// segment. `None` when nothing is left or a `..` segment would leave the site.
+fn reduce_url_path(path: &str) -> Option<&str> {
+    let mut path = path.trim_end_matches('/');
+    if path
+        .get(path.len().saturating_sub(3)..)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(".md"))
+    {
+        path = &path[..path.len() - 3];
+    }
+    path = path.trim_end_matches('/');
+    if path == "index" {
+        return None;
+    }
+    path = path.strip_suffix("/index").unwrap_or(path);
+    (!path.is_empty() && !path.split('/').any(|segment| segment == "..")).then_some(path)
 }
 
 /// The bare stem an authored link `target` names: trimmed, stripped of its
@@ -1887,5 +2066,141 @@ mod tests {
                 "aliases={enabled}"
             );
         }
+    }
+
+    // DEC-415: the redirect map.
+
+    fn redirects(
+        prefix: Option<&str>,
+        fold: bool,
+        declared: &[(&str, &[&str])],
+        link: &str,
+    ) -> Vec<String> {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(fold);
+        for (note, values) in declared {
+            idx.insert_redirects(note, *values);
+        }
+        idx.lookup_redirect(link, prefix)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn a_value_is_read_as_a_site_absolute_url_path() {
+        let declared: &[(&str, &[&str])] = &[(
+            "p.md",
+            &[
+                "/a/b",
+                "/c/d/",
+                "/e/f.md",
+                "/g/index",
+                "/h/%20x",
+                "relative/path",
+                "/section#frag",
+                "/query?x=1",
+                "/../escape",
+                "/",
+                "/index",
+                "  ",
+            ],
+        )];
+        for hit in [
+            "/a/b", "/a/b/", "/a/b.md", "/c/d", "/e/f", "/g", "/g/", "/h/ x",
+        ] {
+            assert_eq!(redirects(None, true, declared, hit), ["p.md"], "{hit}");
+        }
+        for miss in [
+            "a/b",
+            "relative/path",
+            "/relative/path",
+            "/section",
+            "/query",
+            "/../escape",
+            "/",
+            "/index",
+            "/nope",
+        ] {
+            assert_eq!(
+                redirects(None, true, declared, miss),
+                Vec::<String>::new(),
+                "{miss}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_site_prefix_is_stripped_from_the_link_and_from_the_value() {
+        let declared: &[(&str, &[&str])] = &[("one.md", &["/x/y"]), ("two.md", &["/Docs/p/q"])];
+        for link in ["/x/y", "/docs/x/y"] {
+            assert_eq!(
+                redirects(Some("docs"), true, declared, link),
+                ["one.md"],
+                "{link}"
+            );
+        }
+        for link in ["/p/q", "/docs/p/q"] {
+            assert_eq!(
+                redirects(Some("docs"), true, declared, link),
+                ["two.md"],
+                "{link}"
+            );
+        }
+        // Without a prefix the value is the whole URL.
+        assert_eq!(
+            redirects(None, true, declared, "/p/q"),
+            Vec::<String>::new()
+        );
+        assert_eq!(redirects(None, true, declared, "/docs/p/q"), ["two.md"]);
+    }
+
+    #[test]
+    fn case_folds_exactly_when_path_lookups_do() {
+        let declared: &[(&str, &[&str])] = &[("p.md", &["/Old/Page"]), ("q.md", &["/Docs/Other"])];
+        assert_eq!(redirects(None, true, declared, "/old/PAGE"), ["p.md"]);
+        assert_eq!(
+            redirects(None, false, declared, "/old/PAGE"),
+            Vec::<String>::new()
+        );
+        assert_eq!(redirects(None, false, declared, "/Old/Page"), ["p.md"]);
+        // Exact bytes also hold for a value written with the prefix.
+        assert_eq!(redirects(Some("docs"), false, declared, "/Other"), ["q.md"]);
+        assert_eq!(
+            redirects(Some("docs"), false, declared, "/other"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn claimants_are_sorted_distinct_and_two_make_an_ambiguity() {
+        let declared: &[(&str, &[&str])] = &[
+            ("z.md", &["/dup", "/DUP/"]),
+            ("a.md", &["/dup"]),
+            ("solo.md", &["/solo", "/Solo"]),
+        ];
+        assert_eq!(redirects(None, true, declared, "/dup"), ["a.md", "z.md"]);
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for (note, values) in declared {
+            idx.insert_redirects(note, *values);
+        }
+        assert_eq!(
+            idx.redirect_ambiguity("/dup#h", None),
+            Some(vec!["a.md".to_owned(), "z.md".to_owned()])
+        );
+        assert_eq!(idx.redirect_ambiguity("/solo", None), None);
+        assert_eq!(idx.redirect_ambiguity("dup", None), None);
+    }
+
+    #[test]
+    fn a_projected_move_carries_the_claims_to_the_new_path() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.insert("old/p.md");
+        idx.insert_redirects("old/p.md", ["/url"]);
+        let moved = idx.project_renames(&[("old/p.md".to_owned(), "new/p.md".to_owned())]);
+        assert_eq!(moved.lookup_redirect("/url", None), ["new/p.md"]);
+        assert!(moved.redirects_enabled());
     }
 }

@@ -600,6 +600,7 @@ pub fn detect_broken_links_from_index(
                 &link.target,
                 crate::catalog::ResolutionOptions {
                     aliases: idx.aliases_enabled(),
+                    redirects: idx.redirects_enabled(),
                     site_prefix,
                 },
             )
@@ -732,6 +733,20 @@ pub fn detect_broken_links_from_index(
                 // reader finds; the classifier's literal probes did not.
                 LinkResolution::Broken if reader_resolves(&entry.rel_path, link) => {}
                 LinkResolution::Broken => {
+                    // DEC-415: a site-absolute target two notes declare as
+                    // their redirect path is ambiguous, not missing — the
+                    // remedy is to point the link at one of them.
+                    if let Some(candidates) =
+                        case_index.and_then(|idx| idx.redirect_ambiguity(&link.target, site_prefix))
+                    {
+                        ambiguous.push(BrokenLinkInfo {
+                            source: entry.rel_path.clone(),
+                            line: *line,
+                            target: link.target.clone(),
+                            candidates,
+                        });
+                        continue;
+                    }
                     // ALIAS-2 (iter-275, DEC-308): a bare target exactly one
                     // note declares as an alias is broken *and* exactly
                     // fixable. Planned here, before the fuzzy matcher ever
@@ -2205,6 +2220,7 @@ fn build_replacements_for_file(
                             &emitted,
                             crate::catalog::ResolutionOptions {
                                 aliases: false,
+                                redirects: false,
                                 site_prefix,
                             },
                         )
@@ -4948,6 +4964,7 @@ See [broken](old-name.md) here.
                         &span.link.target,
                         crate::catalog::ResolutionOptions {
                             aliases: false,
+                            redirects: false,
                             site_prefix: None
                         }
                     )

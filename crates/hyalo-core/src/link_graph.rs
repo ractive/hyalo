@@ -144,9 +144,14 @@ impl LinkGraph {
             let rel_fwd =
                 crate::discovery::native_separator_to_forward_slash(&rel.to_string_lossy())
                     .into_owned();
-            let declared = crate::discovery::read_aliases(full_path);
-            if !declared.is_empty() {
-                case_index.insert_aliases(&rel_fwd, declared);
+            let declared = crate::discovery::read_declared_names(full_path);
+            if !declared.aliases.is_empty() {
+                case_index.insert_aliases(&rel_fwd, declared.aliases);
+            }
+            // DEC-415: the same pass reads the redirect declarations, for the
+            // same reason; empty unless `[links] redirect_property` is set.
+            if !declared.redirects.is_empty() {
+                case_index.insert_redirects(&rel_fwd, declared.redirects);
             }
             case_index.insert(&rel_fwd);
         }
@@ -195,15 +200,15 @@ impl LinkGraph {
     pub(crate) fn from_file_links(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
-        aliases: &[(String, Vec<String>)],
+        declared: &[(String, discovery::DeclaredNames)],
     ) -> LinkGraphBuild {
-        Self::from_file_links_with_case_policy(file_links, site_prefix, aliases, true)
+        Self::from_file_links_with_case_policy(file_links, site_prefix, declared, true)
     }
 
     pub(crate) fn from_file_links_with_case_policy(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
-        aliases: &[(String, Vec<String>)],
+        declared: &[(String, discovery::DeclaredNames)],
         case_insensitive: bool,
     ) -> LinkGraphBuild {
         let mut index: HashMap<String, Vec<BacklinkEntry>> =
@@ -220,8 +225,9 @@ impl LinkGraph {
         // iter-272 Part B: the caller already parsed every file's frontmatter
         // during its own scan, so the alias map costs one pass over data in
         // hand — no second read of any file.
-        for (rel_path, declared) in aliases {
-            case_index.insert_aliases(rel_path, declared);
+        for (rel_path, names) in declared {
+            case_index.insert_aliases(rel_path, &names.aliases);
+            case_index.insert_redirects(rel_path, &names.redirects);
         }
         for fl in file_links {
             insert_file_links(&mut index, fl, site_prefix, &case_index);
@@ -611,6 +617,7 @@ fn insert_file_links(
         case_index,
         crate::catalog::ResolutionOptions {
             aliases: case_index.aliases_enabled(),
+            redirects: case_index.redirects_enabled(),
             site_prefix,
         },
     );

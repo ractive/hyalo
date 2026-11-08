@@ -54,7 +54,20 @@ pub const ALIASES_PROPERTY: &str = "aliases";
 /// alias sources.
 #[must_use]
 pub fn extract_aliases(props: &IndexMap<String, Value>) -> Vec<String> {
-    match props.get(ALIASES_PROPERTY) {
+    extract_declared_strings(props, ALIASES_PROPERTY)
+}
+
+/// Extract the URL paths a note declares under the configured
+/// `[links] redirect_property` (DEC-415): a list of strings or a bare string,
+/// with the same skipping rules as [`extract_aliases`]. Whether a value is a
+/// usable path is the case index's call; this only reads the property.
+#[must_use]
+pub fn extract_redirects(props: &IndexMap<String, Value>, property: &str) -> Vec<String> {
+    extract_declared_strings(props, property)
+}
+
+fn extract_declared_strings(props: &IndexMap<String, Value>, key: &str) -> Vec<String> {
+    match props.get(key) {
         Some(Value::Array(seq)) => seq
             .iter()
             .filter_map(|v| match v {

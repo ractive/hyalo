@@ -1529,9 +1529,25 @@ pub(crate) fn find_prepared(
                         // `links fix`'s `alias_fixes` bucket. Text mode prints
                         // `(unresolved) (via alias)`, which `find --help` has
                         // promised since iteration 272 and never delivered.
-                        let via = (!link.external
-                            && discovery::resolves_via_alias(&link.target, case_index))
-                        .then(|| hyalo_core::types::LINK_VIA_ALIAS.to_owned());
+                        let via = if link.external {
+                            None
+                        } else if discovery::resolves_via_alias(&link.target, case_index) {
+                            Some(hyalo_core::types::LINK_VIA_ALIAS.to_owned())
+                        } else if path.is_some()
+                            && discovery::resolves_via_redirect(
+                                &entry.rel_path,
+                                link.kind,
+                                &link.target,
+                                site_prefix,
+                                case_index,
+                            )
+                        {
+                            // DEC-415: the target is a URL path some note
+                            // declares under `[links] redirect_property`.
+                            Some(hyalo_core::types::LINK_VIA_REDIRECT.to_owned())
+                        } else {
+                            None
+                        };
                         // iter-319 (DEC-374): a bare wikilink that resolved to
                         // nothing may be *ambiguous* rather than missing. The
                         // verdict is `CaseInsensitiveIndex::ambiguous_candidates`
@@ -1539,12 +1555,20 @@ pub(crate) fn find_prepared(
                         // HYALO006 make — and it is only asked of the links
                         // that failed to resolve, so the common resolved link
                         // pays nothing.
-                        let candidates = if path.is_none()
-                            && !link.external
-                            && link.kind == hyalo_core::links::LinkKind::Wikilink
-                        {
+                        //
+                        // DEC-415: a site-absolute target (either kind) that
+                        // two notes declare as their redirect path is
+                        // ambiguous the same way.
+                        let candidates = if path.is_none() && !link.external {
                             case_index
-                                .and_then(|idx| idx.ambiguous_candidates(&link.target))
+                                .and_then(|idx| {
+                                    (link.kind == hyalo_core::links::LinkKind::Wikilink)
+                                        .then(|| idx.ambiguous_candidates(&link.target))
+                                        .flatten()
+                                        .or_else(|| {
+                                            idx.redirect_ambiguity(&link.target, site_prefix)
+                                        })
+                                })
                                 .unwrap_or_default()
                         } else {
                             Vec::new()

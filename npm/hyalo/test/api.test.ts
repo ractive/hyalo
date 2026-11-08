@@ -551,6 +551,61 @@ describe("link ambiguity (DEC-374)", () => {
   });
 });
 
+describe("link redirects (DEC-415)", () => {
+  let redirects = "";
+  beforeAll(async () => {
+    redirects = path.join(scratch, "redirect vault");
+    await mkdir(path.join(redirects, "docs"), { recursive: true });
+    await writeFile(path.join(redirects, ".hyalo.toml"), '[links]\nredirect_property = "redirect_from"\n');
+    await writeFile(
+      path.join(redirects, "docs/page.md"),
+      "---\nredirect_from:\n  - /old/page\n---\n# Page\n",
+    );
+    await writeFile(path.join(redirects, "one.md"), "---\nredirect_from: /dup\n---\n# One\n");
+    await writeFile(path.join(redirects, "two.md"), "---\nredirect_from: /dup\n---\n# Two\n");
+    await writeFile(
+      path.join(redirects, "src.md"),
+      "# Src\n\n[old](/old/page) [dup](/dup) [real](docs/page.md) [gone](/gone)\n",
+    );
+  });
+  const inRedirects = () => ({ binaryPath: binary, cwd: redirects }) as const;
+  const linksOf = async (extra: { index?: boolean } = {}): Promise<LinkInfo[]> => {
+    const response = await find({ file: ["src.md"], fields: ["links"], ...extra, ...inRedirects() });
+    const links = response.results[0]?.links;
+    if (!links) throw new Error("find returned no links");
+    return links;
+  };
+
+  it("reports the setting in config and via: redirect only on a link the map resolved", async () => {
+    expectTypeOf<ConfigResult["links"]["redirect_property"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<LinkInfo["via"]>().toEqualTypeOf<string | undefined>();
+    const current = await config(inRedirects());
+    expect(current.results.links.redirect_property).toBe("redirect_from");
+    expect((await config(real())).results.links.redirect_property).toBeNull();
+
+    const links = await linksOf();
+    const old = links.find((link) => link.target === "/old/page");
+    expect(old).toMatchObject({ path: "docs/page.md", via: "redirect", kind: "markdown" });
+    const dup = links.find((link) => link.target === "/dup");
+    expect(dup).toMatchObject({ path: null, ambiguous: true, candidates: ["one.md", "two.md"] });
+    expect("via" in (dup ?? {})).toBe(false);
+    // Omission, not null: a path or filename match and a miss keep their shape.
+    for (const target of ["docs/page.md", "/gone"]) {
+      const link = links.find((candidate) => candidate.target === target);
+      expect(link, target).toBeDefined();
+      expect("via" in (link ?? {}), target).toBe(false);
+    }
+    expect(links.find((link) => link.target === "docs/page.md")?.path).toBe("docs/page.md");
+    expect(links.find((link) => link.target === "/gone")?.path).toBeNull();
+  });
+
+  it("reports the same links from a snapshot index as from a disk scan", async () => {
+    const disk = await linksOf();
+    await raw(["create-index", "--format=json", "--no-hints"], inRedirects());
+    expect(await linksOf({ index: true })).toEqual(disk);
+  });
+});
+
 describe("terms, tags and backlinks", () => {
   let graph = "";
   beforeAll(async () => {

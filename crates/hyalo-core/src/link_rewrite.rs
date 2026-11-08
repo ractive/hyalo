@@ -435,6 +435,9 @@ fn validate_move_link_identity<'a>(
     }
     let options = crate::catalog::ResolutionOptions {
         aliases: before.aliases_enabled(),
+        // DEC-415: a move never attributes a link to a note through the
+        // redirect map, so it never rewrites one.
+        redirects: false,
         site_prefix,
     };
     for plan in plans {
@@ -658,6 +661,7 @@ fn relative_wikilink_target_after_move(
         target_path,
         crate::catalog::ResolutionOptions {
             aliases: false,
+            redirects: false,
             site_prefix: None,
         },
     );
@@ -1315,6 +1319,7 @@ fn plan_inbound_rewrites(
                                 &span.link.target,
                                 crate::catalog::ResolutionOptions {
                                     aliases: false,
+                                    redirects: false,
                                     site_prefix,
                                 },
                             ) {
@@ -1463,6 +1468,7 @@ fn resolve_outbound_target(
         &span.link.target,
         crate::catalog::ResolutionOptions {
             aliases: case_index.aliases_enabled(),
+            redirects: false,
             site_prefix,
         },
     );
@@ -2406,6 +2412,7 @@ fn plan_frontmatter_wikilink_rewrites(
                 parts.path,
                 crate::catalog::ResolutionOptions {
                     aliases: false,
+                    redirects: false,
                     site_prefix: None,
                 },
             )

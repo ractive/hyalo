@@ -3564,6 +3564,7 @@ mod tests {
                     &spans[0].link.target,
                     crate::catalog::ResolutionOptions {
                         aliases: false,
+                        redirects: false,
                         site_prefix: None
                     }
                 )
