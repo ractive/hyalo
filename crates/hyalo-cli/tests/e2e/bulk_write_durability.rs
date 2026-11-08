@@ -210,15 +210,10 @@ mod signals {
                 "{:?}",
                 leftovers(tmp.path())
             );
-            // The copies of the notes the workers took are removed too.
-            // Best effort (DEC-409): a worker that is creating its copy as the
-            // signal arrives may leave it, at most one per worker thread.
+            // The copies of the notes the workers took are removed too, the
+            // ones a receipt still holds included (DEC-409).
             let copies = std::fs::read_dir(scratch.path()).unwrap().count();
-            let workers = std::thread::available_parallelism().map_or(64, usize::from);
-            assert!(
-                copies <= workers,
-                "signal {signal}: {copies} copies left in $TMPDIR"
-            );
+            assert_eq!(copies, 0, "signal {signal}: copies left in $TMPDIR");
             assert_whole(tmp.path());
         }
     }
