@@ -33,10 +33,12 @@ there is no literal-backslash resolution (Obsidian refuses `\` in a file name); 
 
 ## Audit of every reader of a graph key
 
-Done before the change. The change is a single arm of one function; nothing needed the raw key.
+Done before the change. The key change is a single arm of one function, but the audit missed one reader: a named note
+that an ignore file excludes (first row), found in the PR #420 review.
 
 | Reader | Where | Effect |
 | --- | --- | --- |
+| `backlinks FILE` for a note `.gitignore`, `.ignore` or global excludes keep out of discovery (DEC-342) | `commands/backlinks.rs` `run`, `prepared.rs` `refresh_index` | **Needed the raw key.** Its inbound links resolve to nothing in a whole-vault catalog and were listed only because the raw key equalled its path; without the key `backlinks` returned 0 while `find --file F --fields backlinks` returned 2. Fixed by folding the named note into the scan (disk) or the snapshot (`--index`) exactly as `find --file` does; pinned by `named_ignored_note_keeps_its_backlinks` |
 | `backlinks` | `commands/backlinks.rs:93,95` | Stops listing an unresolved link (the fix) |
 | `find --fields backlinks`, `--orphan`, `--dead-end` | `commands/find/mod.rs:1692` | Same; agrees with `backlinks` |
 | `find --sort backlinks_count` | `commands/find/sort.rs:94,98,173,174` | Counts only resolved links |
@@ -52,6 +54,12 @@ Done before the change. The change is a single arm of one function; nothing need
 
 `mv` was measured, not argued: `mv --dry-run` of `back\slash.md` and `my%20file.md`, single and `--glob` batch, is
 byte-identical on 85260414 and on this change (only `[[back%5Cslash]]` is rewritten).
+
+The other readers of a single named, ignore-excluded note, measured against 85260414 for `.gitignore` and `.ignore`,
+on disk and under `--index`: `find --file F` with `--fields backlinks`, `--orphan` and `--dead-end` is identical,
+`summary` is identical, `mv --dry-run` of the note updates 0 links on both (its inbound links were never resolvable by
+`mv`'s catalog), and `find --files-from` returns the note on disk and not under `--index` on both (DEC-301's batch
+semantics). No other reader had the gap.
 A snapshot written by one binary and read by the other answers as its reader does (checked both ways).
 
 Tests that relied on the raw key, all graph-level: 15 unit tests in `link_graph.rs` and one in `commands/journal.rs`
@@ -66,6 +74,8 @@ spellings, and now links `[[notes/back%5Cslash]]`.
 - [x] `missing_key` in `link_graph.rs`; the Missing arm files under it
 - [x] Core unit test `unresolved_link_is_not_a_backlink_of_the_note_it_spells`
 - [x] E2E `iteration338_unresolved_backlinks.rs`: `[[back\slash]]` (unix), `[y](back\slash.md)` (unix), `[p](my%20file.md)`; `backlinks` and `find --fields backlinks` agree, on disk and under `--index`; `summary.orphans` follows; resolving links (`[[back%5Cslash]]`, `[[note]]`) still list
+- [x] PR #420 review, finding 1: `backlinks` for a note that `.gitignore`/`.ignore` excludes resolves like `find --file --fields backlinks` (disk and `--index`); e2e `named_ignored_note_keeps_its_backlinks`; mutation-checked (named file not folded into the scan: fails on disk; not inserted into the snapshot: fails on the stderr note); the other named-file readers measured against main
+- [x] PR #420 review, finding 2: DEC-413 and the audit table name the reader the audit missed
 - [x] Mutation check: with `missing_key` returning the raw spelling, the unit test and all four new e2e tests fail
 - [x] Fix the 16 existing tests that relied on a dangling target being a backlink
 - [x] Corpus check (read-only `summary` and per-note backlinks): Obsidian Hub, GitHub Docs, MDN `files/en-us`
@@ -77,6 +87,6 @@ spellings, and now links `[[notes/back%5Cslash]]`.
 ## Results
 
 - Mutation check: with the keying reverted the unit test and all four new e2e tests fail (the "resolving links still list" test on its `back\slash` leg, which also holds an unresolved `[[back\slash]]`); the five `backslash_filename` tests still pass, because their link now resolves.
-- `cargo test --workspace`: 6 039 passed, 0 failed (1 145 CLI unit, 2 713 e2e, 1 817 core unit, 363 in the other targets), `cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- Corpora (85260414 against this change, `summary --format json`, no `--index`): Obsidian Hub 6 519 notes, GitHub Docs 3 710, MDN 14 375: `summary` JSON byte-identical (`links.broken` 162 / 7 406 / 522, orphans 0 / 843 / 3 428, dead ends 191 / 369 / 851), and every note's backlinks (source and line) identical. No real corpus has a note named by an unresolved spelling.
+- `cargo test --workspace`: 6 040 passed, 0 failed (1 145 CLI unit, 2 714 e2e, 1 817 core unit, 363 in the other targets), `cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- Corpora (85260414 against this change, `summary --format json`, no `--index`): Obsidian Hub 6 519 notes, GitHub Docs 3 710, MDN 14 375: `summary` JSON byte-identical (`links.broken` 162 / 7 406 / 522, orphans 0 / 843 / 3 428, dead ends 191 / 369 / 851), every note's backlinks (source and line) identical, and `backlinks` JSON byte-identical for the five most-linked notes of each (re-run after the PR #420 fix). No real corpus has a note named by an unresolved spelling.
 - Repro vault: `backlinks 'back\slash.md'` 3 links before, 1 after (`[[back%5Cslash]]`); `backlinks 'my%20file.md'` 1 before, 0 after; `summary` orphans 0 before, 1 after.

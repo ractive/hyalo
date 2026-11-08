@@ -787,12 +787,18 @@ impl PreparedInvocation {
         let tokens_matter = !read_fallback
             || matches!(&self.command, PreparedCommand::Find(query) if query.pattern.is_some());
         let (selection, repairs, insert) = match &self.command {
-            PreparedCommand::Read { target, .. }
-            | PreparedCommand::Backlinks { target, .. }
-            | PreparedCommand::TaskRead { target, .. } => (
+            PreparedCommand::Read { target, .. } | PreparedCommand::TaskRead { target, .. } => (
                 PreparedSelection::resolved(std::slice::from_ref(&target.file.1))?,
                 false,
                 false,
+            ),
+            // The named note is the catalog member its inbound links resolve
+            // to (DEC-413): one the snapshot lacks (a `.gitignore`d note) is
+            // folded in for this run, as `find --file` does.
+            PreparedCommand::Backlinks { target, .. } => (
+                PreparedSelection::resolved(std::slice::from_ref(&target.file.1))?,
+                false,
+                true,
             ),
             PreparedCommand::TaskMutation { .. } => {
                 (PreparedSelection::resolved(&[])?, true, false)

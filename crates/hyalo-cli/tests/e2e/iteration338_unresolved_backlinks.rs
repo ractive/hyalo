@@ -158,3 +158,47 @@ fn resolving_links_still_list_on_disk_and_indexed() {
         );
     }
 }
+
+/// DEC-342's worked example, through `backlinks` itself: a note that `.gitignore`
+/// or `.ignore` keeps out of discovery is still the note the caller named, so its
+/// own backlinks list every file that links to it, and `backlinks` agrees with
+/// `find --file … --fields backlinks`. The note is not in the catalog a
+/// whole-vault walk builds, so its inbound links resolve only because the named
+/// path joins the scanned set (on disk) or the snapshot (under `--index`) the
+/// way `find --file` does it. Filing an unresolved link under its raw spelling
+/// used to hide that (DEC-413).
+#[test]
+fn named_ignored_note_keeps_its_backlinks() {
+    for ignore_file in [".gitignore", ".ignore"] {
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path();
+        if ignore_file == ".gitignore" {
+            // `.gitignore` counts only inside a git repository.
+            std::fs::create_dir_all(d.join(".git")).unwrap();
+        }
+        std::fs::write(d.join(ignore_file), "drafts/\n").unwrap();
+        write_md(d, "drafts/secret.md", "# Secret\n");
+        write_md(d, "src.md", "[[drafts/secret]] and [d](drafts/secret.md)\n");
+        write_md(d, "plain.md", "# Plain\n");
+        run(d, &["create-index"]);
+        for indexed in [false, true] {
+            assert_eq!(
+                backlink_sources(d, "drafts/secret.md", indexed),
+                vec!["src.md", "src.md"],
+                "{ignore_file} (indexed: {indexed})"
+            );
+        }
+        // Under `--index` the snapshot is used and the note folded into it for
+        // this run, as `find --file` does; it is not dropped for a disk rescan.
+        let out = hyalo_no_hints()
+            .current_dir(d)
+            .args(["--dir", ".", "backlinks", "drafts/secret.md", "--index"])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("absent from the snapshot index"),
+            "{ignore_file}: {err}"
+        );
+    }
+}

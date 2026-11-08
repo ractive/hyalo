@@ -156,14 +156,21 @@ pub(crate) fn run(
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
     let snapshot_index = &mut *ctx.snapshot_index;
-    use crate::commands::{IndexResolution, resolve_index};
+    use crate::commands::{IndexResolution, NamedFilePolicy, resolve_index_prepared};
     use crate::dispatch::resolve_limit;
     use hyalo_core::index::ScanOptions;
     let (_, file) = target.into_file();
-    match resolve_index(
+    // The named note joins the scanned set exactly as it does for
+    // `find --file F --fields backlinks` (DEC-301, DEC-342): a note that
+    // `.gitignore`/`.ignore` keeps out of discovery is still the one the
+    // caller asked about, and a link to it resolves only when the note is in
+    // the catalog the graph resolves against (DEC-413). Under `--index` the
+    // same fold-in happens in `PreparedInvocation::refresh_index`.
+    let selection = crate::prepared::PreparedSelection::resolved(std::slice::from_ref(&file))?;
+    match resolve_index_prepared(
         snapshot_index.as_ref(),
         dir,
-        &[],
+        &selection,
         &[],
         effective_format,
         site_prefix,
@@ -174,6 +181,7 @@ pub(crate) fn run(
             default_language: None,
             frontmatter_link_props: ctx.frontmatter_link_props,
         },
+        NamedFilePolicy::Skip,
         hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
     )? {
         IndexResolution::Resolved(resolved) => backlinks(
