@@ -17,8 +17,10 @@ related:
 An audit found that the per-file drift check (DEC-302) called `stat` twice on each
 indexed file. `snapshot_drift` in `crates/hyalo-core/src/index.rs` called
 `std::fs::metadata` to compare the size, then `entry_is_stale_on_disk` called it again
-to compare the mtime. On MDN that is 14,375 extra `stat` calls on every `--index` read
-that repairs drift. The staleness rules (DEC-302, DEC-339, DEC-368, DEC-389) are
+to compare the mtime. On MDN that is 14,375 extra `stat` calls on every unscoped or
+graph-reading `--index` read (`find`, `backlinks`, `summary`; called from
+`repair_stale_in_memory`), whether or not anything drifted. A scoped `read --index` or
+`find --index --file F` skips it. The staleness rules (DEC-302, DEC-339, DEC-368, DEC-389) are
 unchanged: the mtime comparison moved into `entry_is_stale_given`, which takes the
 `Metadata` the caller already holds. `files_modified_since_snapshot` and
 `first_file_modified_since_snapshot` stat once per entry already and keep

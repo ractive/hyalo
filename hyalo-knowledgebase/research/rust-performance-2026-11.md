@@ -264,17 +264,25 @@ remaining candidates, are **skipped on a measured bound, not run**:
 - 20% of wall needs user time to fall about 33% on `backlinks --index` (0.05 s of
   0.15 s). On `find --index` it needs about 47%, from iteration 335's clean run: 0.19 s
   wall, 0.08 s user (0.038 s of 0.08 s).
-- PGO and interning only reduce user-space work. PGO typically gives 10 to 15%, and
-  `mimalloc`, which attacks the same allocation cost interning would, saved about 20% of
-  user time and still missed. Neither can reach the bar.
+- PGO reduces user-space work only. The Rust Performance Book quotes "10% or more", and
+  a 33 to 47% cut in user time would be far beyond published PGO results for comparable
+  workloads. Interning attacks the allocation cost that `mimalloc` already attacked: it
+  saved about 20% of user time and still missed, and the audit estimated interning at
+  about 20 ms. Interning would also shrink the heap, and so part of the page reclaims
+  behind the sys share, but the sys-side effect is expected to be small: `mimalloc`
+  lowered peak RSS by only 4 to 6%, and the 141 MB snapshot dominates what is loaded.
+  Neither candidate is expected to reach the bar. This is a bound from those
+  measurements, not a measurement of PGO or interning.
 - About 40% of the read is sys time (0.10 s of 0.25 s, about 15,800 page reclaims,
   255 MB maximum RSS in the recheck), consistent with loading the 141 MB snapshot. Any
-  further gain has to come from reading less of the snapshot, not from faster user code.
+  further gain has to come mainly from reading less of the snapshot, not from faster
+  user code.
 
 ### The one saving that was left: a second `stat` per file
 
 Not an experiment against the bar, a plain fix ([[iterations/iteration-336-snapshot-drift-single-stat]]).
-`snapshot_drift`, the per-file drift check run by every `--index` read (DEC-302, DEC-339),
+`snapshot_drift`, the per-file drift check (DEC-302, DEC-339), run by unscoped or graph-reading `--index`
+reads (`find`, `backlinks`, `summary`) whether or not anything drifted,
 called `std::fs::metadata` on each indexed file to compare the size and then again,
 inside `entry_is_stale_on_disk`, to compare the mtime: 14,375 extra `stat` calls on MDN.
 It now reuses the first `Metadata`. Interleaved, median of 5, snapshot outside the vault,
