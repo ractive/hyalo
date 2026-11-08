@@ -206,6 +206,19 @@ pub struct ScannedIndex {
     frontmatter_link_props: Option<Vec<String>>,
 }
 
+/// Whether a reused entry stands for a file that is excluded from full-text
+/// search because its bytes are not valid UTF-8 (BUG-19, iter-314).
+///
+/// A reused entry has no fresh scan to ask, so the signal is the one a scan of
+/// an invalid file leaves behind: a BM25 build that produced no tokens and no
+/// tokenizer version. Shared by [`ScannedIndex::build_reusing`] and
+/// `create-index`'s early no-op (DEC-414), which must report the same warning
+/// count without building anything.
+#[must_use]
+pub fn reused_entry_is_invalid_utf8(entry: &IndexEntry, bm25_tokenize: bool) -> bool {
+    bm25_tokenize && entry.bm25_tokens.is_none() && entry.bm25_tokenizer_version.is_none()
+}
+
 /// Warning produced during index build (e.g. malformed YAML frontmatter).
 pub struct IndexWarning {
     /// Vault-relative path of the file that was skipped.
@@ -340,11 +353,7 @@ impl ScannedIndex {
                     // original BM25-only signal.
                     let invalid_utf8 = match valid_utf8 {
                         Some(valid) => !valid,
-                        None => {
-                            options.bm25_tokenize
-                                && entry.bm25_tokens.is_none()
-                                && entry.bm25_tokenizer_version.is_none()
-                        }
+                        None => reused_entry_is_invalid_utf8(&entry, options.bm25_tokenize),
                     };
                     if invalid_utf8 {
                         warnings.push(IndexWarning {
@@ -1168,7 +1177,7 @@ fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
     if posting_count > MAX_BM25_POSTINGS {
         if warn {
             eprintln!(
-                "warning: index file contains too many BM25 postings ({posting_count}); ignoring the BM25 section"
+                "warning: index file contains too many BM25 postings ({posting_count}); ignoring the BM25 section (`hyalo create-index --force` rebuilds it)"
             );
         }
         return false;
@@ -1176,7 +1185,7 @@ fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
     if !bm25.validate_doc_ids() {
         if warn {
             eprintln!(
-                "warning: index file contains invalid BM25 scoring structure (document IDs, lengths, postings or positions); ignoring the BM25 section"
+                "warning: index file contains invalid BM25 scoring structure (document IDs, lengths, postings or positions); ignoring the BM25 section (`hyalo create-index --force` rebuilds it)"
             );
         }
         return false;
@@ -1257,7 +1266,7 @@ impl Bm25Section {
                         Err(e) => {
                             if *warn {
                                 eprintln!(
-                                    "warning: index file has an unreadable BM25 section ({e}); ignoring it"
+                                    "warning: index file has an unreadable BM25 section ({e}); ignoring it (`hyalo create-index --force` rebuilds it)"
                                 );
                             }
                             None
@@ -1290,6 +1299,38 @@ impl Bm25Section {
     /// incrementally re-scanned entry must be re-tokenized).
     fn is_present(&self) -> bool {
         !matches!(self, Self::Absent)
+    }
+
+    /// Whether the section is well-formed MessagePack, walked in place without
+    /// building anything and without consuming the buffer a later
+    /// [`Bm25Section::get`] still needs.
+    fn is_well_formed(&self) -> bool {
+        match self {
+            Self::Absent | Self::Refused => false,
+            Self::Loaded(_) => true,
+            Self::Deferred {
+                raw,
+                offset,
+                decoded,
+                ..
+            } => {
+                // Already decoded: the answer is whether that decode held.
+                if let Some(done) = decoded.get() {
+                    return done.is_some();
+                }
+                let guard = match raw.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                guard
+                    .as_deref()
+                    .and_then(|buf| buf.get(*offset..))
+                    .is_some_and(|bytes| {
+                        let mut de = rmp_serde::Deserializer::from_read_ref(bytes);
+                        <serde::de::IgnoredAny as serde::Deserialize>::deserialize(&mut de).is_ok()
+                    })
+            }
+        }
     }
 
     /// Whether the section is still undecoded — the state the whole iteration
@@ -2522,6 +2563,23 @@ impl SnapshotIndex {
         attachments: &[String],
     ) -> Result<SnapshotWriteOutcome> {
         write_snapshot(index, path, vault_dir, site_prefix, bm25_index, attachments)
+    }
+
+    /// Whether the BM25 section is well-formed MessagePack to the end of the
+    /// file, checked without building the postings (DEC-414).
+    ///
+    /// `create-index`'s early no-op does not decode the section, so this is
+    /// the one integrity check it keeps. It sees what a torn or truncated copy
+    /// does to the tail of the file and any damage that breaks the MessagePack
+    /// framing. It sees framing only: damage that keeps the framing intact
+    /// passes, whether the section then fails to deserialize (a flipped byte
+    /// in a field name) or deserializes and fails [`validate_bm25`] (a
+    /// document id out of range, a length that disagrees with its postings);
+    /// a reader reports either at first use, and `--force` rebuilds it.
+    /// `false` for a snapshot without a BM25 section.
+    #[must_use]
+    pub fn bm25_section_is_well_formed(&self) -> bool {
+        self.bm25.is_well_formed()
     }
 
     /// Return the persisted BM25 inverted index, if present.
@@ -5056,6 +5114,64 @@ Content.
         );
 
         assert_bm25_section_refused(&bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
+    }
+
+    /// DEC-414: the one integrity check `create-index`'s early no-op keeps. It
+    /// walks the undecoded section, so it must (a) see a torn tail, (b) not see
+    /// a value that is well-formed but wrong, which is the documented limit and
+    /// the reason the reader's warning names `create-index --force`, and (c)
+    /// leave the section deferred, with its buffer, for the decode that
+    /// follows when the run is not a no-op after all.
+    #[test]
+    fn bm25_section_is_well_formed_sees_a_torn_tail_and_leaves_the_section_deferred() {
+        let entries = [test_entry("doc.md")];
+
+        let sound =
+            SnapshotIndex::load_inner(snapshot_bytes(&entries, Some(&sample_bm25())), false)
+                .expect("loads");
+        assert!(sound.bm25_is_deferred());
+        assert!(sound.bm25_section_is_well_formed());
+        assert!(
+            sound.bm25_is_deferred(),
+            "the check must not decode the section it walks"
+        );
+        assert!(
+            sound.bm25_index().is_some(),
+            "the check must not consume the buffer the decode needs"
+        );
+        assert!(
+            sound.bm25_section_is_well_formed(),
+            "and again once decoded"
+        );
+
+        let mut torn_bytes = snapshot_bytes(&entries, Some(&sample_bm25()));
+        torn_bytes.truncate(torn_bytes.len() - 7);
+        let torn = SnapshotIndex::load_inner(torn_bytes, false)
+            .expect("a torn tail does not stop the entries from loading");
+        assert!(!torn.bm25_section_is_well_formed(), "a torn tail");
+        assert!(torn.bm25_index().is_none());
+        assert!(
+            !torn.bm25_section_is_well_formed(),
+            "and after the decode failed"
+        );
+
+        // Well-formed MessagePack that decodes to a structure a reader refuses.
+        let wrong = Bm25InvertedIndex::new_for_test(
+            std::collections::HashMap::new(),
+            vec![5, 10],
+            vec!["doc.md".to_owned()],
+            7.5,
+        );
+        let wrong = SnapshotIndex::load_inner(snapshot_bytes(&entries, Some(&wrong)), false)
+            .expect("loads");
+        assert!(
+            wrong.bm25_section_is_well_formed(),
+            "framing is all the check sees"
+        );
+        assert!(wrong.bm25_index().is_none(), "the reader still refuses it");
+
+        let none = SnapshotIndex::load_inner(snapshot_bytes(&entries, None), false).expect("loads");
+        assert!(!none.bm25_section_is_well_formed());
     }
 
     #[test]
