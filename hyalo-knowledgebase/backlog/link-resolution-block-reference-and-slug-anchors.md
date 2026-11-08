@@ -2,7 +2,7 @@
 type: backlog
 title: Block references and slug anchors are never reported broken
 date: 2026-09-05
-status: planned
+status: wont-do
 priority: low
 origin: "iter-272 (PR #320) carry-over sweep, 2026-09-05, DEC-299"
 ---
@@ -50,11 +50,26 @@ shape. Whoever picks this up should:
 
 ## Acceptance criteria
 
-- [ ] Confirm and record whether the rendered-slug half of DEC-299's title is already closed by
+- [x] Confirm and record whether the rendered-slug half of DEC-299's title is already closed by
       DEC-268; if so, retitle this item to cover block references only.
-- [ ] If implementing block-id checking: a block-id scan populates an indexed field; a broken
+- [x] Not applicable (not implemented, DEC-410). If implementing block-id checking: a block-id scan populates an indexed field; a broken
       `[[Target#^nope]]` is reported the same way a broken heading anchor is
       (`broken_anchor: true`, distinct from a broken target); `--index` and disk-scan parity
       holds; an older snapshot without the field falls back to disk scan rather than erroring.
-- [ ] If staying backlog (won't-do or deferred again): a DEC amendment records why, with
+- [x] If staying backlog (won't-do or deferred again): a DEC amendment records why, with
       whatever new information the confirmation step surfaced.
+
+## Outcome (iteration 337)
+
+Closed `wont-do`; DEC-410 amends DEC-299. Measured with a release build of `main` (`85260414`); nothing was written
+to any corpus.
+
+- **The slug half is already closed.** `[[Target#section-one]]` against `## Section One` resolves, and
+  `[[Target#nope]]` carries `broken_anchor` and is reported by HYALO008. The item's title is therefore about block
+  references only.
+- **Block references are inventoried and never checked** (`anchor.rs:72` `is_block_ref`, returned early at
+  `anchor.rs:500-503`).
+- **No finding to show for it.** The Obsidian Hub (`a56b648b`) has 6 block-reference links: 1 has a target file that
+  does not exist, the other 5 point at ids that exist, so 0 are genuinely broken. The hyalo knowledgebase has 0. A
+  block-id index (a new snapshot field) is not worth its cost. `protected.rs:1150` `trailing_block_id` already parses
+  the markers if this is ever revisited.

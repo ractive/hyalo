@@ -648,7 +648,8 @@ Flags that only `--help` mentions, worth knowing:
   `[[note#Heading One#Sub Two]]` resolves by walking the outline (DEC-311) — the second segment
   must sit under the first, so a heading that exists elsewhere is still a broken anchor.
 - **Wikilink targets are trimmed, and `./` is canonical** (DEC-310): `[[ a ]]`, `[[a ]]`,
-  `[[a #Heading]]` and `[[./a]]` all report `path: "a.md"`; `target` keeps the written text.
+  `[[a #Heading]]` and `[[./a]]` all report `path: "a.md"`; `target` keeps the written text, except that a wikilink drops an authored
+  `.md` (`[[sub/note.md]]` reports `target: "sub/note"`, DEC-411).
 - **`links fix` reports the string it will write** (iter-272): every plan carries
   `emitted_target` beside the vault-relative `new_target`, filled by the same planning pass in
   `--dry-run` and `--apply`, so a preview is byte-accurate about what lands on disk. Since

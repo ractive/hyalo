@@ -805,11 +805,19 @@ impl HyaloLintEngine {
                     continue;
                 };
                 let pruned;
-                let rule_doc = if *rule_id == "MD034" {
-                    pruned = md034_view(&doc);
-                    &pruned
-                } else {
-                    &doc
+                let rule_doc = match *rule_id {
+                    "MD034" => {
+                        pruned = md034_view(&doc);
+                        &pruned
+                    }
+                    "MD007" => match md007_view(&doc) {
+                        Some(view) => {
+                            pruned = view;
+                            &pruned
+                        }
+                        None => &doc,
+                    },
+                    _ => &doc,
                 };
                 let violations = rule
                     .check_with_ast(
@@ -1303,6 +1311,67 @@ fn md034_view(doc: &Document) -> Document {
             .collect(),
         book_src_dir: doc.book_src_dir.clone(),
     }
+}
+
+/// Whether `line` is an unordered list item whose leading whitespace holds a
+/// tab: the one shape on which upstream MD007 measures in columns and then
+/// slices in bytes.
+///
+/// Mirrors the unordered branch of upstream `parse_list_item`: any run of
+/// spaces and tabs, then a `*`, `+` or `-` followed by whitespace. An ordered
+/// item and a line that is not a list item never reach the slice, so they are
+/// left alone.
+fn is_tab_indented_bullet(line: &str) -> bool {
+    let rest = line.trim_start_matches([' ', '\t']);
+    let indent = &line[..line.len() - rest.len()];
+    let mut chars = rest.chars();
+    indent.contains('\t')
+        && matches!(chars.next(), Some('*' | '+' | '-'))
+        && chars.next().is_some_and(char::is_whitespace)
+}
+
+/// `doc` with every tab-indented bullet emptied, or `None` when it has none.
+///
+/// Upstream MD007 (`mdbook-lint-rulesets` 0.16.2, `md007.rs`) counts a leading
+/// tab as four columns, then cuts the fix text with `&line[indent..]`, using
+/// that column count as a byte offset. A tab is one byte, so the cut lands in
+/// the middle of the text: a multibyte character there panics (`panic =
+/// "abort"` makes that exit 134 and takes every other note's findings with it),
+/// and ASCII text silently loses its first characters in the fix. Spaces are
+/// one byte and one column, so only a tab can open the gap. 0.16.2 is the
+/// latest release.
+///
+/// MD007 reads `Document::content`, not `lines`, and skips an empty line
+/// without touching its list stack, so the view keeps every line number and
+/// terminator and blanks only the text of those lines. MD010 still reports the
+/// tab, and once it is spaces MD007 judges the item. A line that is not a
+/// tab-indented bullet is byte-identical, so the rule's findings elsewhere do
+/// not move.
+fn md007_view(doc: &Document) -> Option<Document> {
+    if !doc.content.lines().any(is_tab_indented_bullet) {
+        return None;
+    }
+    let mut content = String::with_capacity(doc.content.len());
+    for piece in doc.content.split_inclusive('\n') {
+        let (text, terminator) = match piece.strip_suffix("\r\n") {
+            Some(text) => (text, "\r\n"),
+            None => match piece.strip_suffix('\n') {
+                Some(text) => (text, "\n"),
+                None => (piece, ""),
+            },
+        };
+        if !is_tab_indented_bullet(text) {
+            content.push_str(text);
+        }
+        content.push_str(terminator);
+    }
+    let lines = content.lines().map(str::to_owned).collect();
+    Some(Document {
+        content,
+        path: doc.path.clone(),
+        lines,
+        book_src_dir: doc.book_src_dir.clone(),
+    })
 }
 
 /// Convert a rule's 1-based **byte** column to a 1-based Unicode-scalar
@@ -2694,6 +2763,87 @@ mod tests {
                 "{body:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_md007_guard_matches_the_shape_upstream_slices_on() {
+        for (line, expected) in [
+            ("\t- x", true),
+            (" \t* x", true),
+            ("\t\t+ \u{26a0} x", true),
+            ("\t- ", true),
+            ("\t1. x", false),
+            ("\tplain", false),
+            ("\t-x", false),
+            ("\t-", false),
+            ("  - x", false),
+            ("- x", false),
+            ("", false),
+        ] {
+            assert_eq!(is_tab_indented_bullet(line), expected, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn md007_view_blanks_only_tab_indented_bullets_and_keeps_each_terminator() {
+        let doc = Document::new(
+            "- a\r\n\t- \u{26a0} b\r\n  - c\n\tplain\n\t1. n\n\t- last".to_owned(),
+            PathBuf::from("t.md"),
+        )
+        .unwrap();
+        let view = md007_view(&doc).expect("two tab-indented bullets");
+        assert_eq!(view.content, "- a\r\n\r\n  - c\n\tplain\n\t1. n\n");
+        // The emptied line keeps its number, so the ones after it do not move.
+        assert_eq!(view.lines[..5], ["- a", "", "  - c", "\tplain", "\t1. n"]);
+        // No other body in the table changes: MD007 sees the same document.
+        for body in SHARED_AST_BODIES {
+            let doc = Document::new((*body).to_owned(), PathBuf::from("t.md")).unwrap();
+            assert!(md007_view(&doc).is_none(), "{body:?}");
+        }
+    }
+
+    /// `body` through `lint_body` with MD007 (opt-in) as the only rule.
+    fn lint_md007(body: &str) -> Vec<Diagnostic> {
+        use crate::config::RuleOverride;
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("MD007".to_owned(), RuleOverride::Enabled(true));
+        HyaloLintEngine::create()
+            .unwrap()
+            .lint_body(body, "t.md", None, false, &config, &["MD007".to_owned()])
+            .unwrap()
+    }
+
+    /// Upstream cuts a tab-indented bullet at byte 4 (four columns for a one-byte
+    /// tab): inside `\u{26a0}` here, which panics, and `abort`s the release build.
+    #[test]
+    fn md007_survives_a_tab_indented_bullet_with_multibyte_text() {
+        for body in [
+            "- a\n\t- \u{26a0} b\n",
+            "- a\n \t* \u{e9}\u{e9}\n",
+            "- a\r\n\t\t+ \u{4e2d}\u{6587}\r\n",
+        ] {
+            let found = lint_md007(body);
+            assert!(found.is_empty(), "{body:?}: {found:?}");
+        }
+    }
+
+    /// With ASCII text the same slice does not panic: it writes a fix that
+    /// drops the first characters of the item.
+    #[test]
+    fn md007_offers_no_fix_that_drops_characters_from_a_tab_indented_bullet() {
+        let found = lint_md007("- a\n\t- keep every character\n");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn md007_still_judges_space_indented_bullets_beside_a_tab_indented_one() {
+        let found = lint_md007("- a\n   - b\n\t- \u{26a0} c\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].line, 2);
+        let fix = found[0].fix.as_ref().expect("a space-indented fix");
+        assert_eq!(fix.replacement, "  - b");
     }
 
     #[test]

@@ -3,7 +3,7 @@ title: "Iteration 330: remove repeated work"
 type: iteration
 date: 2026-11-07
 tags: [iteration, performance, index, lint]
-status: in-progress
+status: completed
 branch: iter-330/remove-repeated-work
 priority: 1
 related: ["[[decision-log]]", "[[research/rust-performance-2026-11]]"]
@@ -51,4 +51,4 @@ contents changed. Numbers and the audit's ranking are in
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` (5,987 passed, 0 failed suites)
 - [x] Every xtask gate, `generate-npm-packages --check`, `cargo deny check`
 - [x] npm gate (34 tests); case-sensitive volume gate (2,699 passed, only `wikilink_resolution_folds_unicode_normalization` failed, as expected); `hyalo lint --strict` on the changed files
-- [ ] PR opened against `main`
+- [x] PR opened against `main`

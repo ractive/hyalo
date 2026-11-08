@@ -4,7 +4,7 @@ title: >-
   Hub's ambiguous short-form links and case-mismatch links are untouched by
   iter-272
 date: 2026-09-05
-status: planned
+status: wont-do
 priority: low
 origin: "iter-272 (PR #320) carry-over sweep, 2026-09-05"
 ---
@@ -47,9 +47,24 @@ Whoever picks this up should:
 
 ## Acceptance criteria
 
-- [ ] The 100 ambiguous / 48 case-mismatch figures are re-confirmed or updated on a current
+- [x] The 100 ambiguous / 48 case-mismatch figures are re-confirmed or updated on a current
       Hub checkout.
-- [ ] A sample of the ambiguous entries is reviewed and characterized (unrelated notes vs.
+- [x] A sample of the ambiguous entries is reviewed and characterized (unrelated notes vs.
       systematic pattern).
-- [ ] Either: closed `wont-do` with the sample findings recorded, or a new iteration plan is
+- [x] Either: closed `wont-do` with the sample findings recorded, or a new iteration plan is
       filed for whatever systematic gap the sample revealed.
+
+## Outcome (iteration 337)
+
+Closed `wont-do`: reported correctly, no tooling gap. Measured with a release build of `main` (`85260414`) on the
+Obsidian Hub checkout `a56b648b`; nothing was written to the corpus.
+
+- **Ambiguous: 100 links, 32 distinct stems, none with more than 2 candidates.** `links fix`'s `ambiguous_links` and
+  `find --fields links` with `ambiguous == true` agree. By folder pair: People + Plugins 68, Plugins + Themes 18,
+  People + Themes 7, Concepts + Themes 6, People + People 1 (the alias `Boninall`, claimed by two notes).
+- **One systematic cause.** The Hub's generator writes a People page and a Plugin or Theme page under the same name
+  (sampled lines such as `Developed by: [[remotely-save]]`). In 44 of the 100 the source note is itself one of the
+  candidates. hyalo reports this correctly, and only the vault can fix it, by writing `[[sub/stem]]`. No resolver
+  tie-break: a same-folder rule would pick the source note itself in those 44.
+- **Case mismatches: 48, all `LinkCaseMismatch` at confidence 1.0** (37 in `Plugins/`). Plain `links fix --apply`
+  already fixes them; there is no tooling gap.

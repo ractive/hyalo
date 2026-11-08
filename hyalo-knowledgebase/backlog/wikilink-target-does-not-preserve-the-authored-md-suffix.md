@@ -2,7 +2,7 @@
 type: backlog
 title: A wikilink target does not preserve the authored .md suffix
 date: 2026-10-05
-status: planned
+status: wont-do
 priority: low
 origin: "iter-311 BUG-17, PR #377 review, 2026-10-05"
 ---
@@ -133,3 +133,11 @@ locates spans exactly as today; pin `mv`/`links fix --apply` byte output on
 a fixture before touching anything. Tests: `[[sub/note.md]]`,
 `[[sub/Note.MD]]`, `[[note.md#H]]`, `[[note.md|label]]`, `![[note.md]]`,
 frontmatter `related: "[[note.md]]"`, disk and `--index` identical.
+
+## Outcome (iteration 337)
+
+Closed `wont-do`; DEC-411 amends DEC-310. The rule is now: a wikilink's reported `target` drops an authored `.md`
+suffix, and `links fix` writes the suffix-less form. The audit above puts the fix at about ten user-visible sites plus
+a snapshot format bump, and the gain is a display field only, since resolution is unaffected. The acceptance criteria
+above are therefore not met by design. `.claude/CLAUDE.md` and the rule template (which said `target` "still carries
+what the author wrote") state the rule.

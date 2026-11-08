@@ -389,7 +389,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   is still a broken anchor when `Elsewhere` lives under a different heading.
 - **A wikilink target is trimmed, and `.` segments are dropped** (DEC-310, iter-275):
   `[[ a ]]`, `[[a ]]`, `[[a #Heading]]` and `[[./a]]` all resolve to `a.md` and report
-  `path: "a.md"`. `target` still carries what the author wrote; `mv` rewrites the trimmed form.
+  `path: "a.md"`. `target` still carries what the author wrote, except that a wikilink drops an
+  authored `.md` (`[[sub/note.md]]` reports `target: "sub/note"`, and `links fix` writes the
+  suffix-less form, DEC-411); `mv` rewrites the trimmed form.
 - **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --limit 0 --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)#\(.fragment // "")"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: `hyalo lint --rule HYALO008 --strict` checks heading fragments on resolved targets, including same-file and configured frontmatter links. HYALO008 is enabled as a warning by default; rule configuration and explicit severity overrides apply. HYALO006 remains target-only. Scoped lint keeps vault-wide target context. `hyalo find --broken-links --strict` remains a combined target/anchor gate. Summary counts broken targets and broken anchors separately, including when both occur in the vault.
 - **Review numbered-heading repairs**: `hyalo links fix --dry-run` proposes `#success-metrics` → `#6-success-metrics` only when removing a leading decimal section number identifies one eligible heading. The preview includes source line, fragments, and heading; ambiguous or unsupported cases carry a deferral reason. Ordinary `links fix --apply` writes safe target and anchor repairs together. `--apply-fuzzy` additionally enables eligible fuzzy file-target repairs; broader fuzzy anchor guesses remain advisory. Broken counts describe the pre-apply scan; anchor plans and apply outcomes are separate from file-target repairs. Source spans and target headings are revalidated before writing.
@@ -497,14 +499,14 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **A bulk write stages, flushes once, then renames** (DEC-408, iter-331; amends DEC-317, DEC-404):
   `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
   `tags rename`, `task` over several files and `types set --default` write every replacement to a
-  hidden sibling temp file (`.tmpXXXXXX`), flush them all with one barrier per device (macOS: `fsync`
+  hidden sibling temp file (`.hyalo-tmp-*`), flush them all with one barrier per device (macOS: `fsync`
   per file plus one `F_FULLFSYNC` per device; Linux and Windows: `fsync`/`FlushFileBuffers` per file), and
   only then rename them and fence the directories. After power loss every note is whole, old or
   new, never empty; a phase may end as a mix. A note edited since it was read, or whose rename
   failed, stays as it was and is reported; a full disk renames nothing. The phase needs room for
   every rewritten note at once, and Ctrl-C and SIGTERM remove the unrenamed temp files and then die by that
-  signal (so a calling script stops), while a kill leaves them beside the notes,
-  named `.hyalo-tmp-*`. The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
+  signal (so a calling script stops), while a kill leaves them beside the notes.
+  The Obsidian Hub's `lint --fix` takes about 4 s (39 s with a full flush per file). A phase
   past a few hundred files reports progress on stderr; `-q` silences it. A single-file mutation
   keeps the per-file path.
 - **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and

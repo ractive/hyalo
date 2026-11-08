@@ -4715,3 +4715,85 @@ fn hyalo008_clean_templates_duplicate_slugs_and_scanner_exclusions() {
         .assert()
         .success();
 }
+
+// ---------------------------------------------------------------------------
+// MD007 and tab-indented bullets (iteration 337)
+//
+// Upstream MD007 counts a leading tab as four columns and then cuts the line at
+// that count as a byte offset. On a multibyte character it panicked, which
+// aborted the whole run (exit 134 in a release build); on ASCII text its fix
+// dropped the first characters of the item.
+// ---------------------------------------------------------------------------
+
+/// A vault with MD007 enabled: `other.md` has a space-indented violation, the
+/// two `tabs-*.md` notes have a tab-indented bullet.
+fn md007_tab_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint.rules.MD007]\nenabled = true\n",
+    );
+    write_md(
+        tmp.path(),
+        "tabs-multibyte.md",
+        "---\ntitle: T\n---\n- a\n\t- \u{26a0} b\n",
+    );
+    write_md(
+        tmp.path(),
+        "tabs-ascii.md",
+        "---\ntitle: T\n---\n- a\n\t- keep every character\n",
+    );
+    write_md(tmp.path(), "other.md", "---\ntitle: O\n---\n- a\n   - b\n");
+    tmp
+}
+
+#[test]
+fn lint_md007_enabled_does_not_abort_on_a_tab_indented_multibyte_bullet() {
+    let tmp = md007_tab_vault();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    // Warnings only: exit 0. A panic is 101 here and 134 in a release build.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut found: Vec<(String, String)> = Vec::new();
+    for file in value["results"]["files"].as_array().unwrap() {
+        for group in file["rule_groups"].as_array().unwrap() {
+            found.push((
+                file["file"].as_str().unwrap().to_owned(),
+                group["rule"].as_str().unwrap().to_owned(),
+            ));
+        }
+    }
+    let has = |file: &str, rule: &str| found.iter().any(|(f, r)| f == file && r == rule);
+    // The other note's finding survives the tabbed notes, and the tab itself
+    // is still reported, by MD010.
+    assert!(has("other.md", "MD007"), "{found:?}");
+    assert!(has("tabs-multibyte.md", "MD010"), "{found:?}");
+    assert!(!has("tabs-multibyte.md", "MD007"), "{found:?}");
+    assert!(!has("tabs-ascii.md", "MD007"), "{found:?}");
+}
+
+#[test]
+fn lint_fix_md007_leaves_a_tab_indented_bullet_untouched() {
+    let tmp = md007_tab_vault();
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD007"])
+        .assert()
+        .success();
+    let multibyte = std::fs::read_to_string(tmp.path().join("tabs-multibyte.md")).unwrap();
+    assert!(multibyte.ends_with("\t- \u{26a0} b\n"), "{multibyte:?}");
+    let ascii = std::fs::read_to_string(tmp.path().join("tabs-ascii.md")).unwrap();
+    assert!(ascii.ends_with("\t- keep every character\n"), "{ascii:?}");
+    // The space-indented violation is still fixed.
+    let other = std::fs::read_to_string(tmp.path().join("other.md")).unwrap();
+    assert!(other.ends_with("- a\n  - b\n"), "{other:?}");
+}

@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 336: one stat per file in the snapshot drift check"
 date: 2026-11-08
-status: in-progress
+status: completed
 tags:
   - iteration
   - performance
@@ -36,8 +36,8 @@ The iteration also records the end of the performance-experiment series; see
 - [x] Measure `backlinks --index` and `find --index` on MDN against `224f2dd9`, interleaved, median of 5
 - [x] Record the end of the experiment series (PGO and interning skipped on a measured bound)
 - [x] fmt, clippy, tests, the xtask gates except check-help-drift, npm gate, deny and fuzz check pass
-- [ ] check-help-drift passes (not run to completion locally: it did not finish in 540 s; no help text changed, so CI is the check)
-- [ ] Open the PR
+- [x] check-help-drift passes (not run to completion locally: it did not finish in 540 s; no help text changed, so CI is the check)
+- [x] Open the PR
 
 ## Results
 

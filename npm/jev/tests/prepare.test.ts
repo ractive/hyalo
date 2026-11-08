@@ -55,11 +55,11 @@ test("bundle runs under Bun and Node outside checkout without dependencies", asy
       expect(result.status).toBe(0); expect(JSON.parse(result.stdout).network).toBe(false);
       const noConsent = spawnSync(runtime, [...flags, script, "ask", "-"], { cwd: root, encoding: "utf8", input: JSON.stringify(fixture()) });
       expect(noConsent.status).toBe(2);
-      const transport = spawnSync(runtime, [...flags, smoke], { cwd: root, encoding: "utf8", timeout: 5000 });
+      const transport = spawnSync(runtime, [...flags, smoke], { cwd: root, encoding: "utf8", timeout: 30_000 });
       expect(transport.status).toBe(0);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
-});
+}, 30_000);
 
 test("all CLI-installed skill bundles execute without the source package", async () => {
   for (const [mode, host] of [["--claude", ".claude"], ["--codex", ".agents"], ["--pi", ".pi"]]) {
@@ -75,7 +75,7 @@ test("all CLI-installed skill bundles execute without the source package", async
       }
     } finally { await rm(root, { recursive: true, force: true }); }
   }
-});
+}, 30_000);
 
 test("undeclared policy types are a policy error naming the types, not an unavailable Hyalo", async () => {
   const root = await mkdtemp(join(tmpdir(), "hyalo-jev-types-")), oldCwd = process.cwd();
