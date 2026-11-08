@@ -11,11 +11,14 @@ origin: regression dogfood 2026-10-05 (three explorers), deferred from iteration
 
 Everything else on this list was closed by
 [[iterations/iteration-320-dogfood-leftovers]] (fixed, already fixed, or decided
-against in DEC-376 to DEC-380). Two items remain.
+against in DEC-376 to DEC-380). The two items that remained are addressed:
+backslash links by iteration 338, the no-op `create-index` by iteration 339. What
+is left of the second, the cost of a rerun that changed something and of the
+directory walks, is tracked in [[backlog/create-index-changed-rerun-and-walk-costs]].
 
 ## Backslash links
 
-`backlinks` and `find` disagree on a literal `\` in a link target. Reproduced
+*Superseded diagnosis; see the Done note below the paragraph.* `backlinks` and `find` disagree on a literal `\` in a link target. Reproduced
 2026-11-05 on macOS with a file named `back\slash.md` and `[[back\slash]]`:
 `backlinks 'back\slash.md'` lists the link, `find --fields links` reports it
 unresolved (`path: null`), because resolution replaces `\` with `/` in a link
@@ -32,7 +35,9 @@ did not resolve whenever its raw spelling equalled the queried path, and that he
 for `my%20file.md` too, with no backslash involved. An unresolved link now goes
 under a key no note path can equal, so `backlinks` never lists one. Resolution is
 unchanged and a literal `\` in a link target is still read as `/`, because Obsidian
-refuses `\` in file names. The `%5C` forms already resolved. The Obsidian Hub,
+refuses `\` in file names. A `%5C` link resolves to a note whose file name contains
+`\` (`[[back%5Cslash]]` to `back\slash.md`) and misses when no such file exists
+(`[[sub%5Ct]]` above). The Obsidian Hub,
 GitHub Docs and MDN gave byte-identical `summary` and per-note backlinks.
 
 ## No-op `create-index` on MDN
@@ -51,6 +56,7 @@ re-scanned; move entries out of the previous snapshot instead of cloning them.
 
 **Done for the no-op, 2026-11-08 (iteration 339, DEC-414):** the decision is made before any of
 that work, so a rerun that changed nothing decodes no postings, clones no entry and builds no graph
-(MDN: wall -23% to -28%, user -41%, 526 MB to 226 MB). Most of the system time was the two
-directory walks, which remain (about 80% of what is left). Still open: moving entries out of the
-previous snapshot instead of cloning them, which only matters for a rerun that changed something.
+(MDN: wall -23% to -28%, user -41%, 526 MB to 226 MB). About 80% of the remaining wall time
+(0.6 to 0.9 s) is the two directory walks. Moving entries out of the previous snapshot instead of
+cloning them only matters for a rerun that changed something. Both are tracked in
+[[backlog/create-index-changed-rerun-and-walk-costs]].
