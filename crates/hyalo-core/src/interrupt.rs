@@ -35,6 +35,8 @@ static POLLED: AtomicBool = AtomicBool::new(false);
 /// A signal is about to end the process: `main` must not return first.
 static DYING: AtomicBool = AtomicBool::new(false);
 static GLOBAL: Registry = Registry::new();
+/// The longest a signal waits for workers that are creating a temp file.
+const IN_FLIGHT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Serialises hooking against unhooking.
 static HOOKS: Mutex<()> = Mutex::new(());
 
@@ -387,8 +389,12 @@ impl Registry {
             return None;
         }
         // A worker between creating a file and registering it removes it at
-        // registration now; give it a moment to get there.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        // registration now; wait for it to get there. It does one file
+        // creation, which on a loaded disk (a CI runner) can take well over
+        // half a second: a shorter wait let the process die first and left the
+        // copy behind (DEC-409). Workers that have not started park in
+        // `flight`, so the count only falls.
+        let deadline = std::time::Instant::now() + IN_FLIGHT_WAIT;
         while self.in_flight.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
             std::thread::yield_now();
         }
@@ -547,5 +553,26 @@ mod tests {
         std::fs::write(&late, b"x").unwrap();
         registry.register_scratch(&late);
         assert!(!late.exists());
+    }
+
+    /// A worker that is slow to create its copy (a loaded disk) is still waited
+    /// for: the copy must not survive the signal.
+    #[test]
+    fn a_signal_waits_for_a_worker_that_is_slow_to_register_its_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Registry::new();
+        let copy = dir.path().join("copy");
+        std::fs::write(&copy, b"x").unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _flight = registry.flight();
+                // Slower than the old half-second wait.
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                registry.register_scratch(&copy);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert_eq!(registry.interrupt(true), None);
+            assert!(!copy.exists(), "the copy survived the signal");
+        });
     }
 }

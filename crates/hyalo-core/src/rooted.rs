@@ -658,12 +658,15 @@ impl OwnedPublication {
             && captured.exact_identity == staged.identity
             && Fingerprint::of(captured.reader()?)? == staged.base
         {
+            let flight = crate::interrupt::flight();
             let mut staged_bytes = NamedTempFile::new()?;
+            let scratch = crate::interrupt::Scratch::new(staged_bytes.path());
+            drop(flight);
             staged_bytes.write_all(&expected)?;
             captured.size = expected.len() as u64;
             captured.base = Some(staged.base);
             captured.original = Some(Arc::new(staged_bytes.into_temp_path()));
-            captured.scratch = None;
+            captured.scratch = Some(scratch);
             return Ok(captured);
         }
         bail!(SourceConflict(
