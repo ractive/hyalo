@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-09
+
 ### Added
 
 - `find --fields links` tells an ambiguous link from a missing one. A bare
@@ -3638,7 +3640,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.25.1...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/ractive/hyalo/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/ractive/hyalo/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/ractive/hyalo/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/ractive/hyalo/compare/v0.24.0...v0.24.1
