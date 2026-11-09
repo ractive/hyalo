@@ -133,7 +133,7 @@ tests every target, including the musl tests that run through cross's
 `/qemu-runner` and that PR CI never runs, and only dry-runs publishing
 (`dry-run-summary`). Create the release only after it is green. On 0.26.0 a
 published release failed in the musl build (five tests took the runner for
-hyalo, fixed in PR #426), was left as an assetless "Latest" that the
+hyalo; PR #426 runs the binary directly), was left as an assetless "Latest" that the
 `setup-hyalo` CI step installs, and had to be deleted and re-cut.
 
 ## 5. Create the release (curated notes + auto-notes)
