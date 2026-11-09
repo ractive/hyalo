@@ -121,6 +121,21 @@ gh repo sync ractive/winget-pkgs
 A stale fork makes the pipeline's winget submission fail with a misleading
 `CreateRef` error — sync every time, before the release exists.
 
+## 4b. Dry-run the release pipeline
+
+```bash
+gh workflow run release.yml --ref main
+gh run list --workflow release.yml --limit 1   # then: gh run watch <id>
+```
+
+With every input left at its default, a `workflow_dispatch` run builds and
+tests every target, including the musl tests that run through cross's
+`/qemu-runner` and that PR CI never runs, and only dry-runs publishing
+(`dry-run-summary`). Create the release only after it is green. On 0.26.0 a
+published release failed in the musl build (five tests took the runner for
+hyalo; PR #426 runs the binary directly), was left as an assetless "Latest" that the
+`setup-hyalo` CI step installs, and had to be deleted and re-cut.
+
 ## 5. Create the release (curated notes + auto-notes)
 
 Extract the freshly rotated section as the human-curated top of the release

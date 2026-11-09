@@ -24,6 +24,18 @@ fn leftovers(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     found
 }
 
+/// The `hyalo` binary itself. `hyalo_no_hints().get_program()` is not: under
+/// a Cargo target runner (`CARGO_TARGET_<triple>_RUNNER`, such as cross's
+/// `/qemu-runner` on the x86_64 musl release build) assert_cmd makes the
+/// runner the program and the binary its first argument, and the tests that
+/// use this exec, limit or signal the hyalo process itself. The suite already
+/// runs the binary directly elsewhere (`jq.rs`, `concurrent_writes.rs`), and
+/// those tests pass under that runner.
+#[cfg(unix)]
+fn hyalo_binary() -> &'static std::ffi::OsStr {
+    std::ffi::OsStr::new(env!("CARGO_BIN_EXE_hyalo"))
+}
+
 fn vault_of(count: usize) -> TempDir {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
@@ -43,8 +55,8 @@ fn vault_of(count: usize) -> TempDir {
 #[test]
 fn a_phase_larger_than_the_open_file_limit_writes_every_note() {
     const NOTES: usize = 400;
+    let program = hyalo_binary();
     let tmp = vault_of(NOTES);
-    let program = hyalo_no_hints().get_program().to_owned();
     // 64 descriptors is far fewer than 400 notes, and still enough for the
     // process itself (rayon workers, the vault walk, one temp file).
     for args in [
@@ -55,7 +67,7 @@ fn a_phase_larger_than_the_open_file_limit_writes_every_note() {
             .current_dir(tmp.path())
             .arg("-c")
             .arg("ulimit -n 64 && exec \"$0\" --no-hints \"$@\"")
-            .arg(&program)
+            .arg(program)
             .args(args)
             .output()
             .unwrap();
@@ -103,7 +115,8 @@ fn a_multi_note_write_leaves_no_temporary_file() {
 
 #[cfg(unix)]
 mod signals {
-    use super::{hyalo_no_hints, leftovers, vault_of};
+    use super::{hyalo_binary, leftovers, vault_of};
+    use std::ffi::OsStr;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
@@ -111,11 +124,11 @@ mod signals {
     const NOTES: usize = 6000;
 
     fn lint_fix(
+        program: &OsStr,
         dir: &std::path::Path,
         tmpdir: &std::path::Path,
         pre_exec: impl Fn() + Send + Sync + 'static,
     ) -> Child {
-        let program = hyalo_no_hints().get_program().to_owned();
         let mut command = Command::new(program);
         command
             .current_dir(dir)
@@ -184,10 +197,11 @@ mod signals {
     /// by that signal, so a calling shell script stops.
     #[test]
     fn a_signal_mid_phase_cleans_up_and_dies_by_that_signal() {
+        let program = hyalo_binary();
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
             let tmp = vault_of(NOTES);
             let scratch = tempfile::tempdir().unwrap();
-            let mut child = lint_fix(tmp.path(), scratch.path(), || {
+            let mut child = lint_fix(program, tmp.path(), scratch.path(), || {
                 // SAFETY: as above.
                 unsafe { libc::signal(libc::SIGHUP, libc::SIG_DFL) };
             });
@@ -223,9 +237,9 @@ mod signals {
     /// signal; a child that exits 130 lets the loop go on.
     #[test]
     fn ctrl_c_on_a_script_calling_a_bulk_write_stops_the_script() {
+        let program = hyalo_binary();
         let tmp = vault_of(NOTES);
         let log = tmp.path().join("log.txt");
-        let program = hyalo_no_hints().get_program().to_owned();
         let script = format!(
             "for i in 1 2 3; do \"{}\" --no-hints lint --fix --rule MD047 >/dev/null 2>&1; \
              echo \"iter $i rc=$?\" >> \"{}\"; done; echo finished >> \"{}\"",
@@ -263,10 +277,11 @@ mod signals {
     /// ignored signal stays ignored and the run completes.
     #[test]
     fn an_ignored_signal_mid_phase_changes_nothing() {
+        let program = hyalo_binary();
         for signal in [libc::SIGHUP, libc::SIGINT] {
             let tmp = vault_of(NOTES);
             let scratch = tempfile::tempdir().unwrap();
-            let mut child = lint_fix(tmp.path(), scratch.path(), move || {
+            let mut child = lint_fix(program, tmp.path(), scratch.path(), move || {
                 // SAFETY: as above.
                 unsafe { libc::signal(signal, libc::SIG_IGN) };
             });
@@ -289,8 +304,8 @@ mod signals {
     /// waits in its output write.
     #[test]
     fn a_signal_after_the_phase_takes_the_default_action() {
+        let program = hyalo_binary();
         let tmp = vault_of(NOTES);
-        let program = hyalo_no_hints().get_program().to_owned();
         let mut command = Command::new(program);
         command
             .current_dir(tmp.path())
