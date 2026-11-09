@@ -124,8 +124,37 @@ noise-bound and only the allocation counts carry the claim.
 | ranked `find` (disk) | 30.28M | 27.95M | 429 MiB | 429 MiB |
 
 Wall time, same runs, indicative only: `tags --index` 0.35 s to 0.20 s,
-`backlinks --index` 0.78 s to 0.28 s, `lint` 162 s (load 167) to 8.2 s (load 31),
-`create-index` 12.3 s to 10.1 s, disk `summary` 2.83 s to 2.71 s.
+`backlinks --index` 0.78 s to 0.28 s, `create-index` 12.3 s to 10.1 s, disk `summary`
+2.83 s to 2.71 s. The `lint` pair recorded here, 162 s (load 167) to 8.2 s (load 31),
+compared two different loads and overstated the gain; see "Lint wall time, remeasured"
+below for the interleaved measurement (-35% on MDN).
+
+### Lint wall time, remeasured (2026-11-09)
+
+Measured: `lint` with the default rules, read-only, four binaries run in alternating
+order in each of 3 rounds so every binary saw the same load (4 to 8; 18 at the very
+end of the MDN set). No snapshot was inside either corpus. `5e2512ed` is the commit
+iteration 330 was built on, so it against main isolates iteration 330 and what
+followed. Wall time in seconds, all three runs; CPU is user time, median.
+
+| Binary | MDN wall | MDN CPU | Obsidian Hub wall | Hub CPU |
+|---|---|---|---|---|
+| Homebrew 0.25.0 (`30536b8e`, 2026-10-05) | 4.62, 4.92, 5.60 | 19.4 | 1.17, 1.17, 1.33 | 4.4 |
+| `d1801b5a` (2026-11-05) | 4.78, 4.98, 5.15 | 19.1 | 1.18, 1.27, 1.32 | 4.4 |
+| `5e2512ed` (iteration 330's base) | 4.66, 4.97, 5.00 | 20.0 | 1.19, 1.22, 1.74 | 4.6 |
+| main `7c30d34b` (`cargo install`) | 3.16, 3.24, 3.28 | 5.9 | 1.10, 1.15, 1.15 | 1.86 |
+
+- MDN (14,375 notes): wall median 4.97 s to 3.24 s, **-35%**, with no overlap
+  between the ranges; CPU 20.0 s to 5.9 s, -71%. The audit put MD034 at about 10 of
+  19.6 s of user CPU, which fits.
+- Obsidian Hub (6,520 small notes): CPU -60%, wall about 1.2 s to 1.15 s. The run is
+  parallel over every core and bound by reading the files, so the CPU saved does not
+  shorten it.
+- Findings are identical between `5e2512ed` and main on both corpora (MDN 0 errors,
+  3,701 warnings; Hub 22 errors, 24,197 warnings). The two older binaries differ
+  (MDN 1 error, 3,874 warnings; Hub 24,245 warnings) through lint changes made
+  before iteration 330, which is why `5e2512ed` and not the Homebrew release is the
+  baseline for the claim.
 
 ### What each result says
 
