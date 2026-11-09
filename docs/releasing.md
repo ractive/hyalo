@@ -29,6 +29,7 @@ xtask gates in CI fail until these all carry the Cargo workspace version
 | `npm/platforms/*/package.json` (seven platform manifests) | `generate-npm-packages --check` |
 | `npm/hyalo/package-lock.json` (root `version`, the seven `optionalDependencies` pins, each platform entry's `version` and `resolved` URL) | `generate-npm-packages --check` |
 | `Cargo.lock` (the `hyalo-*` workspace packages) | `cargo` rewrites it on the next build |
+| `fuzz/Cargo.lock` (the `hyalo-core` entry; `fuzz/` is its own workspace) | `fuzz-compile` in CI runs `cargo check --locked`; refresh it with `cargo update -p hyalo-core --offline --manifest-path fuzz/Cargo.toml` |
 | `.github/workflows/npm-registry.yml` (default `version` input) | none — bump it by hand |
 
 `cargo xtask generate-npm-packages --generate` (run it as
@@ -42,8 +43,8 @@ from `npm/hyalo/package-lock.json` and run `npm install --package-lock-only` in
 entries first keeps them hash-less: npm does not refetch an entry it already
 has. Checked on npm 11.17: 147 hashes before, 154 after the delete-then-install.)
 
-A full version bump therefore touches 16 files: `Cargo.toml`, `Cargo.lock`,
-`package.json`, `pi-package/package.json`,
+A full version bump therefore touches 17 files: `Cargo.toml`, `Cargo.lock`,
+`fuzz/Cargo.lock`, `package.json`, `pi-package/package.json`,
 `crates/hyalo-cli/templates/pi/package.json`,
 `plugins/hyalo/.codex-plugin/plugin.json`, `npm/hyalo/package.json`,
 `npm/hyalo/package-lock.json`, the seven `npm/platforms/*/package.json`, and

@@ -15,9 +15,11 @@ after everything on main is final.
 - NEVER create git tags manually. `gh release create` makes the tag.
 - CI enforces tag == workspace `Cargo.toml` version; mismatch fails the
   pipeline after the tag exists — check the version BEFORE releasing.
-- Everything lands on `main` before the release is created. The mechanical
-  release commits (version bump, changelog rotation) go directly on main —
-  a release is a synchronous maintainer act; don't spin up a PR for them.
+- Everything lands on `main` before the release is created. `main` is
+  protected (a direct push is declined, seen on 0.26.0), so the mechanical
+  release commits (version bump, changelog rotation) go on a
+  `release/vX.Y.Z` branch and merge through one PR with green CI. Create the
+  release only after that PR is merged.
 - Every `hyalo` invocation below means `target/release/hyalo` (build it
   first if stale). The bare `hyalo` on PATH is the previously *installed*
   release — it predates the version being cut and will reject new config
@@ -71,7 +73,10 @@ must all match the target:
 - `hyalo-mdlint = { path = ..., version = "X.Y.Z" }`
 
 Every other file that carries the version must match too — the xtask gates
-fail otherwise. The full set is **16 files**: `Cargo.toml`, `Cargo.lock`, root
+fail otherwise. The full set is **17 files**: `Cargo.toml`, `Cargo.lock`,
+`fuzz/Cargo.lock` (its own workspace; CI's `fuzz-compile` runs `cargo check
+--locked`, so refresh it with `cargo update -p hyalo-core --offline
+--manifest-path fuzz/Cargo.toml`; missed on 0.26.0 and caught in review), root
 `package.json`, `pi-package/package.json`, the vendored
 `crates/hyalo-cli/templates/pi/package.json`,
 `plugins/hyalo/.codex-plugin/plugin.json`, `npm/hyalo/package.json`,
@@ -90,7 +95,7 @@ in the changelog-conversion PR long before release day) — then just verify.
 If a bump is needed: edit the three fields, run `cargo build --release`
 (refreshes `Cargo.lock` — commit it too), run the full gates
 (`cargo fmt` → `cargo clippy --workspace --all-targets -- -D warnings` →
-`cargo test --workspace -q`), commit on main:
+`cargo test --workspace -q`), commit on the `release/vX.Y.Z` branch:
 `chore(release): bump version to X.Y.Z`.
 
 ## 3. Rotate the changelog (dogfood it)
@@ -101,8 +106,11 @@ target/release/hyalo lint --dir . CHANGELOG.md --profile changelog   # root file
 ```
 
 This moves `[Unreleased]` into a dated `## [X.Y.Z]` section and rewrites the
-footer compare-links. Lint must report 0 errors. Commit + push on main:
-`docs(changelog): release X.Y.Z`.
+footer compare-links. Lint must report 0 errors. Commit on the release branch:
+`docs(changelog): release X.Y.Z`. Push the branch, open the PR
+(`chore(release): X.Y.Z`), and merge it with
+`gh pr merge N --merge --delete-branch --match-head-commit <sha>` once CI is
+green. Then pull `main` before the steps below.
 
 ## 4. Sync the winget fork
 
