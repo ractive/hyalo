@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-11-11
+
+### Changed
+
+- Release packaging moves to ractive/release-workflows v0.4.0: Linux `aarch64` `.deb` and `.rpm` packages are now built and published to the Cloudsmith apt/yum repositories alongside `x86_64`, and the cross-compiled target archives carry build-provenance attestations. The binaries are unchanged from 0.26.0.
+
 ## [0.26.0] - 2026-11-09
 
 ### Added
@@ -3640,7 +3646,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.26.1...HEAD
+[0.26.1]: https://github.com/ractive/hyalo/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/ractive/hyalo/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/ractive/hyalo/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/ractive/hyalo/compare/v0.24.1...v0.25.0

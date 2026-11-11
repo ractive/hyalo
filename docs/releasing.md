@@ -75,8 +75,9 @@ a local `npm` job. From a single tag, it:
   | `x86_64-pc-windows-msvc` | Windows | yes |
   | `aarch64-pc-windows-msvc` | Windows | build only |
 
-- packages versioned archives, plus `.deb`/`.rpm` packages, and publishes them
-  to the hosted apt/yum repos at Cloudsmith;
+- packages versioned archives, plus `.deb`/`.rpm` packages for `x86_64` and
+  `aarch64` Linux (release-workflows v0.4.0), and publishes them to the hosted
+  apt/yum repos at Cloudsmith;
 - publishes the crates to crates.io (with retry) and updates the Homebrew tap,
   Scoop bucket, winget manifest and the `hyalo-bin` AUR package (Cloudsmith and
   AUR are non-blocking and need the `CLOUDSMITH_API_KEY` / `AUR_SSH_PRIVATE_KEY`
