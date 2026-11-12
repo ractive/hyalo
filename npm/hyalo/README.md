@@ -185,7 +185,7 @@ new API bytes and must not be used to recreate or upload that immutable
 version.
 
 Bootstrap signing deliberately calls the provenance generator and
-`npm-package-arg` bundled inside the workflow's pinned npm 11.19.1. This is an
+`npm-package-arg` bundled inside the workflow's pinned npm 11.21.2. This is an
 internal npm API, so an npm pin update must review the inline signing script
 against that exact release. Signing creates public Sigstore provenance and a
 transparency-log entry for the prepared tarball; it does not itself upload that
