@@ -34,7 +34,7 @@ pub struct EnvelopeContracts {
 pub fn load_matrix(workspace_root: &Path) -> Result<FeatureMatrix> {
     let matrix_path = workspace_root.join("crates/xtask/feature-matrix.toml");
     let content = std::fs::read_to_string(&matrix_path)
-        .with_context(|| format!("reading feature matrix at {matrix_path:?}"))?;
+        .with_context(|| format!("reading feature matrix at {}", matrix_path.display()))?;
     toml::from_str(&content).context("parsing feature-matrix.toml")
 }
 
@@ -85,8 +85,7 @@ fn descriptor_violations(matrix: &FeatureMatrix) -> Vec<String> {
                 descriptors.insert(label.as_str(), descriptor);
             }
             Err(error) => violations.push(format!(
-                "descriptor {label:?} could not parse {:?}: {error:#}",
-                invocation
+                "descriptor {label:?} could not parse {invocation:?}: {error:#}"
             )),
         }
     }
@@ -207,8 +206,7 @@ fn capability_violations(descriptors: &BTreeMap<&str, serde_json::Value>) -> Vec
             || actual_modes != modes
         {
             violations.push(format!(
-                "capability mismatch for {label:?}: got {}",
-                capabilities
+                "capability mismatch for {label:?}: got {capabilities}"
             ));
         }
     }
@@ -344,7 +342,7 @@ shape = "selector"
     #[test]
     fn real_descriptors_satisfy_a_small_matrix() {
         let matrix: FeatureMatrix = toml::from_str(MATRIX).unwrap();
-        assert!(descriptor_violations(&matrix).is_empty());
+        assert_eq!(descriptor_violations(&matrix), Vec::<String>::new());
     }
 
     #[test]
@@ -352,6 +350,6 @@ shape = "selector"
         let matrix: FeatureMatrix =
             toml::from_str(&MATRIX.replace("--files-from", "--definitely-not-a-real-option"))
                 .unwrap();
-        assert!(!descriptor_violations(&matrix).is_empty());
+        assert_ne!(descriptor_violations(&matrix), Vec::<String>::new());
     }
 }

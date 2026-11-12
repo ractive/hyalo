@@ -26,12 +26,13 @@ pub fn run() -> Result<bool> {
     let root = workspace_root()?;
     let templates_dir = root.join("crates").join("hyalo-cli").join("templates");
     let mut skill_files: Vec<PathBuf> = std::fs::read_dir(&templates_dir)
-        .with_context(|| format!("reading templates dir {templates_dir:?}"))?
+        .with_context(|| format!("reading templates dir {}", templates_dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("skill-") && n.ends_with(".md"))
+                .is_some_and(|n| n.starts_with("skill-"))
+                && p.extension().is_some_and(|e| e == "md")
         })
         .collect();
     // pi-package skills (iter-237): `pi-package/skills/*/SKILL.md` are the
@@ -48,10 +49,11 @@ pub fn run() -> Result<bool> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!(
-                "check-bundled-skills: pi package skills dir not found, skipping: {pi_skills_dir:?}"
+                "check-bundled-skills: pi package skills dir not found, skipping: {}",
+                pi_skills_dir.display()
             );
         }
-        Err(e) => return Err(e).with_context(|| format!("reading {pi_skills_dir:?}")),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", pi_skills_dir.display())),
     }
     let codex_skills = root.join("plugins/hyalo/skills");
     for entry in std::fs::read_dir(&codex_skills).context("reading Codex skills")? {
@@ -63,7 +65,10 @@ pub fn run() -> Result<bool> {
     skill_files.sort();
 
     if skill_files.is_empty() {
-        eprintln!("check-bundled-skills: no skill templates found in {templates_dir:?}");
+        eprintln!(
+            "check-bundled-skills: no skill templates found in {}",
+            templates_dir.display()
+        );
         return Ok(false);
     }
 
@@ -72,9 +77,13 @@ pub fn run() -> Result<bool> {
     let mut checked = 0usize;
     for file in &skill_files {
         let body = std::fs::read_to_string(file)
-            .with_context(|| format!("reading skill template {file:?}"))?;
-        let name = frontmatter_name(&body)
-            .with_context(|| format!("skill template {file:?} has no `name:` frontmatter field"))?;
+            .with_context(|| format!("reading skill template {}", file.display()))?;
+        let name = frontmatter_name(&body).with_context(|| {
+            format!(
+                "skill template {} has no `name:` frontmatter field",
+                file.display()
+            )
+        })?;
 
         let scratch = tempfile::tempdir().context("creating scratch vault")?;
         let vault = scratch.path();
@@ -88,7 +97,7 @@ pub fn run() -> Result<bool> {
         };
         let skill_dir = vault.join(host).join("skills").join(&name);
         std::fs::create_dir_all(&skill_dir)
-            .with_context(|| format!("creating skill dir {skill_dir:?}"))?;
+            .with_context(|| format!("creating skill dir {}", skill_dir.display()))?;
         std::fs::write(skill_dir.join("SKILL.md"), &body)
             .context("writing SKILL.md into scratch vault")?;
 

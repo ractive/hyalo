@@ -88,7 +88,7 @@ fn main() {
         Commands::SyncJevAssets => jev_assets::run(true),
         Commands::CheckPiRuntime => pi_runtime::run(),
         Commands::GenerateNpmPackages(args) => npm_package::run(args),
-        Commands::PlanNpmPublication(args) => npm_package::run_publication_plan(args),
+        Commands::PlanNpmPublication(args) => npm_package::run_publication_plan(&args),
         Commands::CheckTypedOutput => typed_output::run(),
         Commands::CheckTsTypes => ts_types::check(),
         Commands::GenerateTsTypes => ts_types::generate(),

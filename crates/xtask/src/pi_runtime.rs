@@ -137,7 +137,7 @@ mod tests {
             "": {}, "node_modules/a": {"version": "1.0.0"},
             "node_modules/b": {"version": "2.0.0", "optional": true}}});
         let installed = json!({"packages": {"node_modules/a": {"version": "1.0.0"}}});
-        assert!(lock_drift(&lock, &installed).is_empty());
+        assert_eq!(lock_drift(&lock, &installed), Vec::<String>::new());
     }
 
     #[test]

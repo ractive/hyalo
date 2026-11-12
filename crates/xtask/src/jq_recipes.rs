@@ -63,17 +63,15 @@ fn recipe_safety(argv: &[String]) -> Safety {
     }
     let flag = |name: &str| argv.iter().any(|a| a == name);
     let reads = match positional.as_slice() {
-        [
-            "find" | "summary" | "backlinks" | "read" | "config" | "terms",
-            ..,
-        ] => true,
-        ["properties" | "tags"] | ["properties" | "tags", "summary"] => true,
         ["lint"] | ["lint", _] => !flag("--fix"),
-        ["types" | "views" | "lint-rules", "list" | "show" | "run"] => true,
-        ["types" | "views" | "lint-rules", "list" | "show" | "run", _] => true,
-        ["task", "read", ..] => true,
+        ["find" | "summary" | "backlinks" | "read" | "config" | "terms", ..]
+        | ["properties" | "tags"]
+        | ["properties" | "tags", "summary"]
+        | ["types" | "views" | "lint-rules", "list" | "show" | "run"]
+        | ["types" | "views" | "lint-rules", "list" | "show" | "run", _]
+        | ["task", "read", ..]
         // Preview unless `--apply`, which fails the gate outright.
-        ["links", "fix" | "auto"]
+        | ["links", "fix" | "auto"]
         | ["okf", "index"]
         | ["madr", "toc"]
         | ["changelog", "release" | "add"] => true,
@@ -162,13 +160,14 @@ pub fn extract_recipes(body: &str) -> Vec<String> {
         let mut cmd = span.to_owned();
         // Drop a trailing line-continuation backslash.
         if let Some(stripped) = cmd.strip_suffix('\\') {
-            cmd = stripped.trim_end().to_owned();
+            let kept = stripped.trim_end().len();
+            cmd.truncate(kept);
         }
         // Drop a trailing shell comment, but only outside a quoted span — a
         // jq filter can legitimately contain `#`.
         if let Some(pos) = comment_start(&cmd) {
             cmd.truncate(pos);
-            cmd = cmd.trim_end().to_owned();
+            cmd.truncate(cmd.trim_end().len());
         }
         if !cmd.is_empty() {
             out.push(cmd);
@@ -186,10 +185,9 @@ fn comment_start(cmd: &str) -> Option<usize> {
     for (i, c) in cmd.char_indices() {
         match quote {
             Some(q) if c == q => quote = None,
-            Some(_) => {}
             None if c == '\'' || c == '"' => quote = Some(c),
             None if c == '#' && prev_space => return Some(i),
-            None => {}
+            Some(_) | None => {}
         }
         prev_space = c == ' ';
     }
@@ -245,7 +243,6 @@ fn has_unsafe_hyalo_xargs_pipeline(body: &str) -> bool {
         for (offset, ch) in line.char_indices() {
             match quote {
                 Some(current) if ch == current => quote = None,
-                Some(_) => {}
                 None if ch == '\'' || ch == '"' => quote = Some(ch),
                 None if ch == '|' => {
                     let left = &line[..offset];
@@ -257,7 +254,7 @@ fn has_unsafe_hyalo_xargs_pipeline(body: &str) -> bool {
                         return true;
                     }
                 }
-                None => {}
+                Some(_) | None => {}
             }
         }
         false
@@ -351,7 +348,10 @@ pub fn run(args: &ArtifactArgs) -> Result<bool> {
 pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
     let docs = recipe_documents(root);
     if docs.is_empty() {
-        eprintln!("check-jq-recipes: no shipped documents found under {root:?}");
+        eprintln!(
+            "check-jq-recipes: no shipped documents found under {}",
+            root.display()
+        );
         return Ok(false);
     }
 
@@ -360,8 +360,8 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
     let mut checked = 0usize;
 
     for doc in &docs {
-        let body =
-            std::fs::read_to_string(doc).with_context(|| format!("reading recipe doc {doc:?}"))?;
+        let body = std::fs::read_to_string(doc)
+            .with_context(|| format!("reading recipe doc {}", doc.display()))?;
         let label = doc
             .strip_prefix(root)
             .unwrap_or(doc)
@@ -388,7 +388,7 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
                 ));
                 continue;
             }
-            let args: Vec<String> = argv[1..].to_vec();
+            let cli_args: Vec<String> = argv[1..].to_vec();
             if recipe_safety(&argv) == Safety::Unsafe {
                 failures.push(format!(
                     "{label}: a documented recipe is not known to be read-only and has no \
@@ -398,7 +398,7 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
                 ));
                 continue;
             }
-            match run_recipe(executable, root, &args) {
+            match run_recipe(executable, root, &cli_args) {
                 Ok(RecipeOutcome::Ran) => checked += 1,
                 Ok(RecipeOutcome::NotApplicable(why)) => {
                     skipped.push(format!("{recipe} ({why})"));
@@ -505,7 +505,7 @@ fn documentation_contract_failures(root: &Path, executable: &Path) -> Result<Vec
                 // this fixture catch the broadened write through the sentinel.
                 let unfiltered = recipe.replace("--where-property status=planned ", "");
                 let unfiltered_argv = split_argv(&unfiltered);
-                let unfiltered_args: Vec<_> = unfiltered_argv
+                let unfiltered_cli_args: Vec<_> = unfiltered_argv
                     .iter()
                     .skip(1)
                     .map(String::as_str)
@@ -525,7 +525,7 @@ fn documentation_contract_failures(root: &Path, executable: &Path) -> Result<Vec
                     "---\ntitle: Completed\nstatus: completed\n---\nsentinel\n",
                 )?;
                 let negative_before = std::fs::read(&negative_sentinel)?;
-                let broadened = run_hyalo(executable, negative.path(), &unfiltered_args)?;
+                let broadened = run_hyalo(executable, negative.path(), &unfiltered_cli_args)?;
                 if !broadened.status.success()
                     || std::fs::read(&negative_sentinel)? == negative_before
                 {
@@ -794,7 +794,10 @@ mod tests {
 
     #[test]
     fn ignores_commands_without_jq() {
-        assert!(extract_recipes("`hyalo find --property status=planned`").is_empty());
+        assert_eq!(
+            extract_recipes("`hyalo find --property status=planned`"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

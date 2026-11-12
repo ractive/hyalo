@@ -28,7 +28,7 @@ fn find_workspace_root(start: &Path) -> Result<PathBuf> {
             continue;
         }
         let content = std::fs::read_to_string(&candidate)
-            .with_context(|| format!("reading {candidate:?}"))?;
+            .with_context(|| format!("reading {}", candidate.display()))?;
         if has_workspace_table(&content) {
             return Ok(dir.to_path_buf());
         }

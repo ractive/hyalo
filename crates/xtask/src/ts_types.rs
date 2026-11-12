@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -140,7 +141,7 @@ fn write_barrel(generated: &Path) -> Result<()> {
             .file_stem()
             .and_then(OsStr::to_str)
             .context("generated declaration has a non-UTF-8 name")?;
-        source.push_str(&format!("export type {{ {stem} }} from \"./{stem}.js\";\n"));
+        writeln!(source, "export type {{ {stem} }} from \"./{stem}.js\";")?;
     }
     fs::write(generated.join("index.ts"), source).context("writing generated TypeScript barrel")
 }

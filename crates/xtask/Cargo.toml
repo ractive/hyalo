@@ -23,3 +23,6 @@ toml = { workspace = true }
 walkdir = { workspace = true }
 syn = { version = "3", features = ["full", "visit"] }
 proc-macro2 = "1"
+
+[lints]
+workspace = true
