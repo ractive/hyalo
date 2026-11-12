@@ -395,7 +395,7 @@ fn main_manifest(version: &str) -> Value {
             "@types/node": "26.6.6",
             "@typescript/typescript6": "6.0.2",
             "esbuild": "0.28.2",
-            "rollup": "4.67.5",
+            "rollup": "4.68.2",
             "rollup-plugin-dts": "6.5.1",
             "typescript": "7.0.2",
             "vitest": "5.1.0"
