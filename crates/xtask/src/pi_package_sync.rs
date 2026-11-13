@@ -49,9 +49,9 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
     let skills_dir = pi_package.join("skills");
     match std::fs::read_dir(&skills_dir) {
         Ok(entries) => {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let skill_dir = entry.path();
-                for file in skill_files(&skill_dir)? {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                let skill = entry.path();
+                for file in skill_files(&skill)? {
                     if owned_by_jev_assets(file.strip_prefix(&skills_dir)?) {
                         continue;
                     }
@@ -61,16 +61,19 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("check-pi-package-sync: {skills_dir:?} not found, skipping");
+            eprintln!(
+                "check-pi-package-sync: {} not found, skipping",
+                skills_dir.display()
+            );
         }
-        Err(e) => return Err(e).with_context(|| format!("reading {skills_dir:?}")),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", skills_dir.display())),
     }
 
     // extensions/*.ts
     let extensions_dir = pi_package.join("extensions");
     match std::fs::read_dir(&extensions_dir) {
         Ok(entries) => {
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries.filter_map(std::result::Result::ok) {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("ts") {
                     let name = path.file_name().unwrap_or_default();
@@ -79,9 +82,12 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("check-pi-package-sync: {extensions_dir:?} not found, skipping");
+            eprintln!(
+                "check-pi-package-sync: {} not found, skipping",
+                extensions_dir.display()
+            );
         }
-        Err(e) => return Err(e).with_context(|| format!("reading {extensions_dir:?}")),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", extensions_dir.display())),
     }
 
     // lib/*.js: generated helpers imported by extensions, outside Pi's
@@ -89,7 +95,7 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
     let lib_dir = pi_package.join("lib");
     match std::fs::read_dir(&lib_dir) {
         Ok(entries) => {
-            for entry in entries.filter_map(|entry| entry.ok()) {
+            for entry in entries.filter_map(std::result::Result::ok) {
                 let path = entry.path();
                 let name = path
                     .file_name()
@@ -104,9 +110,12 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("check-pi-package-sync: {lib_dir:?} not found, skipping");
+            eprintln!(
+                "check-pi-package-sync: {} not found, skipping",
+                lib_dir.display()
+            );
         }
-        Err(error) => return Err(error).with_context(|| format!("reading {lib_dir:?}")),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", lib_dir.display())),
     }
 
     // package.json
@@ -140,9 +149,10 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
             );
             continue;
         }
-        let source_bytes = std::fs::read(source).with_context(|| format!("reading {source:?}"))?;
-        let vendored_bytes =
-            std::fs::read(vendored_copy).with_context(|| format!("reading {vendored_copy:?}"))?;
+        let source_bytes =
+            std::fs::read(source).with_context(|| format!("reading {}", source.display()))?;
+        let vendored_bytes = std::fs::read(vendored_copy)
+            .with_context(|| format!("reading {}", vendored_copy.display()))?;
         if source_bytes != vendored_bytes {
             all_ok = false;
             eprintln!(
@@ -227,7 +237,7 @@ fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
         match std::fs::read_dir(dir) {
             Ok(entries) => Ok(entries.filter_map(|e| e.ok().map(|e| e.path())).collect()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e).with_context(|| format!("reading {dir:?}")),
+            Err(e) => Err(e).with_context(|| format!("reading {}", dir.display())),
         }
     };
     let skills = vendored.join("skills");
@@ -270,7 +280,7 @@ fn display_rel(root: &Path, path: &Path) -> String {
 /// by `check-jev-assets`: the crate embeds them from `templates/jev/` alone, so
 /// neither mirror carries a copy under `templates/pi/` (DEC-344).
 pub(crate) fn owned_by_jev_assets(relative: &Path) -> bool {
-    let mut components = relative.components().map(|c| c.as_os_str());
+    let mut components = relative.components().map(std::path::Component::as_os_str);
     components.next().is_some_and(|skill| skill == "hyalo-tidy")
         && components
             .next()
@@ -352,7 +362,10 @@ mod tests {
         expected.sort();
         assert_eq!(found, expected);
         // A missing tree is empty, not an error.
-        assert!(vendored_files(&v.join("nope")).expect("walk").is_empty());
+        assert_eq!(
+            vendored_files(&v.join("nope")).expect("walk"),
+            Vec::<std::path::PathBuf>::new()
+        );
     }
 
     #[test]

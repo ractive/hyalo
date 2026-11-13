@@ -462,7 +462,7 @@ COMMAND REFERENCE:
   Config (x):
 ";
         let subs = extract_subcommands(SAMPLE);
-        assert!(missing_entries(&subs, documented).is_empty());
+        assert_eq!(missing_entries(&subs, documented), Vec::<String>::new());
     }
 
     const SUB_HELP: &str = "\
@@ -521,14 +521,17 @@ Options:
     fn undocumented_flags_is_empty_for_a_current_entry() {
         let entry = "    hyalo mv FILE DEST [--on-conflict P] [--allow-ambiguous]\n\
                      hyalo mv --file F --to DEST";
-        assert!(undocumented_flags("mv", SUB_HELP, entry).is_empty());
+        assert_eq!(
+            undocumented_flags("mv", SUB_HELP, entry),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn global_and_exempt_flags_never_count_as_missing() {
         // `--help` is global; `--view` is exempt on `find`.
         let help = "Options:\n  -h, --help\n      --view <NAME>\n";
-        assert!(undocumented_flags("find", help, "").is_empty());
+        assert_eq!(undocumented_flags("find", help, ""), Vec::<String>::new());
         // The same flag on another command is NOT exempt.
         assert_eq!(undocumented_flags("mv", help, ""), vec!["--view"]);
     }

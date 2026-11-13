@@ -131,7 +131,7 @@ pub(crate) fn check_metadata(root: &Path) -> Result<bool> {
     check_metadata_with_version(root, &version)
 }
 
-pub fn run_publication_plan(args: NpmPublishPlanArgs) -> Result<bool> {
+pub fn run_publication_plan(args: &NpmPublishPlanArgs) -> Result<bool> {
     let root = crate::workspace::workspace_root()?;
     let version = workspace_version(&root)?;
     let artifacts = read_pack_artifacts(&args.pack_json)?;
@@ -395,7 +395,7 @@ fn main_manifest(version: &str) -> Value {
             "@types/node": "26.6.6",
             "@typescript/typescript6": "6.0.2",
             "esbuild": "0.28.2",
-            "rollup": "4.67.5",
+            "rollup": "4.68.2",
             "rollup-plugin-dts": "6.5.1",
             "typescript": "7.0.2",
             "vitest": "5.1.0"
@@ -920,6 +920,38 @@ mod tests {
         bootstrap: bool,
         main: bool,
     ) -> bool {
+        fn primary(tokens: &[char], cursor: &mut usize) -> bool {
+            let token = tokens[*cursor];
+            *cursor += 1;
+            match token {
+                '1' => true,
+                '0' => false,
+                '!' => !primary(tokens, cursor),
+                '(' => {
+                    let result = disjunction(tokens, cursor);
+                    assert_eq!(tokens.get(*cursor), Some(&')'));
+                    *cursor += 1;
+                    result
+                }
+                _ => panic!("unsupported workflow expression token {token}"),
+            }
+        }
+        fn conjunction(tokens: &[char], cursor: &mut usize) -> bool {
+            let mut result = primary(tokens, cursor);
+            while tokens.get(*cursor..*cursor + 2) == Some(&['&', '&']) {
+                *cursor += 2;
+                result &= primary(tokens, cursor);
+            }
+            result
+        }
+        fn disjunction(tokens: &[char], cursor: &mut usize) -> bool {
+            let mut result = conjunction(tokens, cursor);
+            while tokens.get(*cursor..*cursor + 2) == Some(&['|', '|']) {
+                *cursor += 2;
+                result |= conjunction(tokens, cursor);
+            }
+            result
+        }
         let mut expression = expression
             .trim()
             .trim_start_matches("${{")
@@ -955,38 +987,6 @@ mod tests {
             expression = expression.replace(atom, if value { "1" } else { "0" });
         }
         let tokens: Vec<_> = expression.chars().filter(|c| !c.is_whitespace()).collect();
-        fn primary(tokens: &[char], cursor: &mut usize) -> bool {
-            let token = tokens[*cursor];
-            *cursor += 1;
-            match token {
-                '1' => true,
-                '0' => false,
-                '!' => !primary(tokens, cursor),
-                '(' => {
-                    let result = disjunction(tokens, cursor);
-                    assert_eq!(tokens.get(*cursor), Some(&')'));
-                    *cursor += 1;
-                    result
-                }
-                _ => panic!("unsupported workflow expression token {token}"),
-            }
-        }
-        fn conjunction(tokens: &[char], cursor: &mut usize) -> bool {
-            let mut result = primary(tokens, cursor);
-            while tokens.get(*cursor..*cursor + 2) == Some(&['&', '&']) {
-                *cursor += 2;
-                result &= primary(tokens, cursor);
-            }
-            result
-        }
-        fn disjunction(tokens: &[char], cursor: &mut usize) -> bool {
-            let mut result = conjunction(tokens, cursor);
-            while tokens.get(*cursor..*cursor + 2) == Some(&['|', '|']) {
-                *cursor += 2;
-                result |= conjunction(tokens, cursor);
-            }
-            result
-        }
         let mut cursor = 0;
         let result = disjunction(&tokens, &mut cursor);
         assert_eq!(cursor, tokens.len(), "unconsumed expression: {expression}");

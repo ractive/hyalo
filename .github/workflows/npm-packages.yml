@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the same-commit CLI
         run: cargo build --release -p hyalo-cli
@@ -41,7 +41,7 @@ jobs:
       # Linux packaging reuses the release binary and API dist built above.
       - name: Pin npm
         if: runner.os == 'Linux'
-        run: npm install --global npm@11.19.1
+        run: npm install --global npm@11.21.2
       # Generator unit tests already run in CI's three-OS workspace suite.
       - name: Check generated package metadata
         if: runner.os == 'Linux'

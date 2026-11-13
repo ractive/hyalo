@@ -192,8 +192,8 @@ pub fn run(args: &ArtifactArgs) -> Result<bool> {
     println!(
         "  {FANOUT_SMALL} backlinks: {mv_small:.2?} — durable per-file path, \
          {:.1} ms/file against {:.2} ms/file at {FANOUT_BACKLINKS}",
-        mv_small.as_secs_f64() * 1000.0 / FANOUT_SMALL as f64,
-        mv_big.as_secs_f64() * 1000.0 / FANOUT_BACKLINKS as f64,
+        (mv_small / u32::try_from(FANOUT_SMALL)?).as_secs_f64() * 1000.0,
+        (mv_big / u32::try_from(FANOUT_BACKLINKS)?).as_secs_f64() * 1000.0,
     );
 
     let bulk = tempfile::tempdir().context("creating bulk-property scale vault")?;

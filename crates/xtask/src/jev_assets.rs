@@ -124,10 +124,9 @@ mod tests {
         let scripts = dir.path().join("scripts");
         fs::create_dir(&scripts).expect("mkdir");
         fs::write(scripts.join("jev.mjs"), "bundle").expect("write");
-        assert!(
-            unexpected_entries(&scripts, &["jev.mjs"])
-                .expect("list")
-                .is_empty()
+        assert_eq!(
+            unexpected_entries(&scripts, &["jev.mjs"]).expect("list"),
+            Vec::<std::path::PathBuf>::new()
         );
         fs::write(scripts.join("extra.mjs"), "stray").expect("write");
         fs::create_dir(scripts.join("nested")).expect("mkdir");
@@ -140,10 +139,9 @@ mod tests {
             3,
             "a directory that must not exist reports everything in it"
         );
-        assert!(
-            unexpected_entries(&dir.path().join("missing"), &[])
-                .expect("list")
-                .is_empty()
+        assert_eq!(
+            unexpected_entries(&dir.path().join("missing"), &[]).expect("list"),
+            Vec::<std::path::PathBuf>::new()
         );
     }
 }

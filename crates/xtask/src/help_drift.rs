@@ -137,7 +137,7 @@ fn load_stale_patterns(workspace_root: &std::path::Path) -> Result<Vec<StalePatt
         .join("xtask")
         .join("stale-help-patterns.toml");
     let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading stale patterns at {path:?}"))?;
+        .with_context(|| format!("reading stale patterns at {}", path.display()))?;
     let file: StalePatternFile =
         toml::from_str(&content).with_context(|| "parsing stale-help-patterns.toml")?;
     Ok(file.patterns)
@@ -153,12 +153,12 @@ fn help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Result<String> 
 }
 
 fn page_text(workspace_root: &std::path::Path, argv: &[&str], flag: &str) -> Result<String> {
-    let mut args = vec!["run", "-q", "-p", "hyalo-cli", "--"];
-    args.extend_from_slice(argv);
-    args.push(flag);
+    let mut cargo_args = vec!["run", "-q", "-p", "hyalo-cli", "--"];
+    cargo_args.extend_from_slice(argv);
+    cargo_args.push(flag);
 
     let out = Command::new("cargo")
-        .args(&args)
+        .args(&cargo_args)
         .current_dir(workspace_root)
         .output()
         .context("running `cargo run -p hyalo-cli`")?;
@@ -1004,11 +1004,11 @@ EXAMPLES:
 
     #[test]
     fn count_examples_dollar_prefix() {
-        let help = r#"
+        let help = r"
 EXAMPLES:
   $ hyalo set note.md --property foo=bar
   $ hyalo remove note.md --property foo
-"#;
+";
         assert_eq!(count_examples(help), 2);
     }
 

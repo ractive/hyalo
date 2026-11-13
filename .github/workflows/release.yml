@@ -120,7 +120,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -136,7 +136,7 @@ jobs:
           REQUESTED_NPM_VERSION: ${{ inputs.npm_version }}
         run: |
           set -euo pipefail
-          npm install --global npm@11.19.1
+          npm install --global npm@11.21.2
           metadata=$(cargo metadata --no-deps --format-version 1)
           version=$(jq -r '.packages[] | select(.name == "hyalo-cli") | .version' \
             <<< "$metadata")
@@ -326,7 +326,7 @@ jobs:
 
           const npmPackagePath = path.join(npmPackageDir, 'package.json')
           const npmManifest = JSON.parse(await readFile(npmPackagePath, 'utf8'))
-          assert.equal(npmManifest.version, '11.19.1')
+          assert.equal(npmManifest.version, '11.21.2')
           const requireFromNpm = createRequire(npmPackagePath)
           const npa = requireFromNpm('npm-package-arg')
           const { generateProvenance } = requireFromNpm(

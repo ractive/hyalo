@@ -210,21 +210,21 @@ mod tests {
     fn excludes_only_test_nodes_and_keeps_later_production() {
         assert_eq!(
             count(
-                r#"
+                r"
             #[cfg(test)] mod tests { fn check() { serde_json::json!({}); } }
             fn production() { serde_json :: json ! ({}); }
-        "#
+        "
             ),
             1
         );
         assert_eq!(
             count(
-                r#"
+                r"
             fn production() {
                 #[cfg(test)] let old = serde_json::json!({});
                 let output = vec![serde_json::json!({})];
             }
-        "#
+        "
             ),
             1
         );
