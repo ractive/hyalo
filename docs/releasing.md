@@ -117,7 +117,7 @@ backfills the Cloudsmith repos.
 Third-party actions are pinned to a full commit SHA with a `# vX.Y.Z` comment;
 Dependabot (`.github/dependabot.yml`) proposes the updates. First-party
 reusable workflows and actions are referenced by tag, not SHA:
-`ractive/release-workflows` callers pin exact tags (`@v0.2.0`, `@v0.2.1`), and
+`ractive/release-workflows` callers pin exact tags (currently `@v0.5.1`), and
 `ractive/setup-hyalo@v1` deliberately floats on its major tag so the `lint-kb`
 jobs dogfood exactly what consumers run (DEC-051). Both repos are owned and
 released together with hyalo, so a tag is a reviewed release of that repo.
